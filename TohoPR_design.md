@@ -1482,6 +1482,17 @@ export function DropZone({ onFile, accept = '.tpr,.zip', disabled, children }: D
 - 拖入时 `onDragOver` 必须 `preventDefault()`，否则 WebView2 会直接用文件打开页面（表现为"应用闪一下白屏"）。
 - 同时提供一个"点击选择文件"的按钮（走 `dialog.open()`），拖拽在触屏/远程桌面下不总是可用。
 
+标签相关的三个组件也在这层（Goal 13）：
+
+| 组件 | 位置 | 职责 |
+|---|---|---|
+| `TagChip` / `tagChipClass` | `packages/ui/src/components/TagChip.tsx` | 纯展示芯片，按 `category` 上色（角色琥珀 / 情节翡翠 / 系列紫 / 其他灰）；**不含链接**，`@tpr/ui` 不依赖路由 |
+| `TagLinks` | `apps/desktop/src/components/TagLinks.tsx` | 芯片 + `<Link to="/search?q=名称">`，超过 `limit` 显示 `+N` |
+| `TagPicker` | `apps/desktop/src/components/TagPicker.tsx` | 编辑器里的标签选择器：过滤已有标签、勾选、输入新名称直接新建 |
+
+- **`TagLinks` 含 `<Link>`，调用方不得把它放进另一个 `<Link>`/`<button>` 里**（HTML 不允许 `<a>` 套 `<a>`，React 会警告且点击行为不可预期）。列表卡片因此改成"封面链接 + 标题链接 + 标签链接"三个并列元素，而不是整卡一个 `<Link>`。
+- `TagPicker` 的「新建」走 `editor.saveTag`：按 `category` + 归一化名称/别名判重，命中已有标签时复用其 id（返回 `created=false`），不会重复建同一个标签。
+
 ### 13.3 路由（D18）
 
 ```tsx
@@ -1490,14 +1501,14 @@ import { createHashRouter } from 'react-router';
 
 export const router = createHashRouter([
   { path: '/',                element: <HomePage /> },
+  { path: '/articles',        element: <ArticlesPage /> },   // Goal 13：全部文章网格
   { path: '/search',          element: <SearchPage /> },
   { path: '/article/:id',     element: <ArticlePage /> },
   { path: '/series/:id',      element: <SeriesPage /> },
-  { path: '/featured/short',  element: <FeaturedShortPage /> },
-  { path: '/featured/series', element: <FeaturedSeriesPage /> },
+  { path: '/featured/short',  element: <FeaturedPage page="short" /> },
+  { path: '/featured/series', element: <FeaturedPage page="series" /> },
   { path: '/favorites',       element: <FavoritesPage /> },
   { path: '/editor',          element: <EditorPage /> },
-  { path: '/editor/export',   element: <ExportPage /> },
   { path: '/import',          element: <ImportPage /> },
   { path: '/merge',           element: <MergePage /> },
   { path: '/credits',         element: <CreditsPage /> },
@@ -1507,7 +1518,8 @@ export const router = createHashRouter([
 ```
 
 - 选 hash（`#/article/a_…`）而不是 history：生产环境页面由 `tauri://localhost` 的自定义协议提供，深链与刷新对未知路径的 fallback 不可靠；hash 完全不依赖服务端。代价是 URL 里多一个 `#`，桌面应用不可见。
-- 路由表与 `/plan` 六、逐行对应；本设计不增不减。
+- 与 `/plan` 六、的差异：**新增 `/articles`**（Goal 13 的"全部文章"网格）；**不单设 `/editor/export`**，导出按钮在编辑器的文章表单与首页；其余逐行对应。
+- 除 `HomePage` / `Layout` / `NotFoundPage` 外全部 `React.lazy` + `<Suspense>`（Goal 12 把入口 chunk 从 639 kB 降到 224 kB）。
 
 ### 13.4 平台注入与图片（D19）
 
@@ -1993,6 +2005,16 @@ Goal 12 追加记录：
 - **验收命令**：`node scripts/check-no-tauri.mjs`（core/ui/schema 无 Tauri API）与 `node scripts/check-boundaries.mjs` 均通过；`corepack pnpm check` = platform 7 + schema 23 + core 76 = 106 个测试。
 - **已知小坑**：release 版与 `tauri dev` 同时启动会因共用 WebView2 用户数据目录报 `HRESULT(0x8007139F)`；验证 release 前先关掉 dev 实例即可。
 
+Goal 13 追加记录（编辑器内新建标签 + 列表标签展示）：
+
+- **`resolveTags(snapshot, ids)`**（`packages/core/src/db/view.ts`）：按传入顺序解析标签 id、去重、跳过悬空 id；`getArticleView` / `getSeriesView` 内部改用它，`featured.ts` / `favorites.ts` 也复用它给卡片补 `tags: TagRef[]`。缩略卡片与详情页因此共用同一套解析，不会出现"详情页有标签、列表没有"。
+- **展示面**：首页最近文章、`/articles` 文章库、搜索结果、系列目录、精选卡片、收藏夹、十连抽卡片都加了标签芯片；芯片按 `TagCategory` 上色（角色琥珀、情节翡翠、系列紫），点击跳 `/search?q=名称`。
+- **新增 `/articles`**：封面卡片网格 + 标题/简介/标签过滤 + 全部/短篇/系列切换，按 `updatedAt` 降序；这是 `/plan` 没有的页面，属于用户显式要求。
+- **编辑器内新建标签**：旧的 `PickerRow`（只读复选）在文章/系列表单里换成 `TagPicker`；输入新名称 → 「+ 新建「名称」」按钮 → `editor.saveTag`（判重复用）→ `refresh()` 刷新快照 → 新标签自动勾进当前表单。此前只有「标签」tab 能新建，表单里必须先切走再回来。
+- **结构约束**：`TagLinks` 含 `<Link>`，所有列表卡片从"整卡一个 `<Link>`"重排为"封面链接 + 标题链接 + 标签链接"；卡片内的 `<button>`（十连抽）同样改为外层 `<div>` + 内层 `<Link>`，避免 `<a>` 嵌 `<a>`。
+- **测试**：新增 `test/tags.test.ts` 5 个用例（去重/悬空、文章视图、精选卡片、收藏条目与失效条目），core 81 passed；`corepack pnpm check` = platform 7 + schema 23 + core 81 = 111 个测试。夹具给两篇系列条目补上标签，真机 CDP 16 项断言全过（含"输入新名称 → 新建 → 自动勾选 → 保存 → 刷新后仍在"完整链路）。
+- 截图：`.tmp/goal13-articles.png`、`.tmp/goal13-editor-tag.png`、`.tmp/goal13-favorites.png`。
+
 ---
 
 ## 附：文档自检
@@ -2006,6 +2028,6 @@ Goal 12 追加记录：
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–10 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
+| Goal 1–13 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
 
 

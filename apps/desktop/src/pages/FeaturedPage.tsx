@@ -1,5 +1,6 @@
 import { type FeaturedPage as FeaturedPageKind, getFeaturedCards } from '@tpr/core';
 import { Link } from 'react-router';
+import { TagLinks } from '../components/TagLinks.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 
@@ -42,28 +43,35 @@ export function FeaturedPage({ page }: { page: FeaturedPageKind }) {
 
       {valid.map((card) => (
         <article key={card.key} className="overflow-hidden rounded-lg border border-border">
-          <Link to={card.to ?? '#'} className="flex gap-4 p-4 hover:bg-accent/40">
-            {card.cover ? (
-              <img
-                src={services.platform.assets.toUrl(card.cover.path)}
-                alt={card.cover.caption ?? card.title}
-                className="h-28 w-20 shrink-0 rounded-md border border-border object-cover"
-                loading="lazy"
-              />
-            ) : (
-              <div className="flex h-28 w-20 shrink-0 items-center justify-center rounded-md border border-dashed border-border text-[10px] text-muted-foreground">
-                无封面
-              </div>
-            )}
+          <div className="flex gap-4 p-4 hover:bg-accent/40">
+            <Link to={card.to ?? '#'} className="shrink-0 rounded-md" aria-label={`打开《${card.title}》`}>
+              {card.cover ? (
+                <img
+                  src={services.platform.assets.toUrl(card.cover.path)}
+                  alt={card.cover.caption ?? card.title}
+                  className="h-28 w-20 rounded-md border border-border object-cover"
+                  loading="lazy"
+                />
+              ) : (
+                <div className="flex h-28 w-20 items-center justify-center rounded-md border border-dashed border-border text-[10px] text-muted-foreground">
+                  无封面
+                </div>
+              )}
+            </Link>
             <div className="flex min-w-0 flex-col gap-1">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 {card.kindLabel ? <span>{card.kindLabel}</span> : null}
                 <span className="ml-auto font-mono text-[10px]">{card.targetId}</span>
               </div>
-              <h3 className="truncate text-base font-medium">{card.title}</h3>
+              <h3 className="truncate text-base font-medium">
+                <Link to={card.to ?? '#'} className="hover:underline">
+                  {card.title}
+                </Link>
+              </h3>
               {card.summary ? <p className="line-clamp-2 text-sm text-muted-foreground">{card.summary}</p> : null}
+              <TagLinks tags={card.tags} limit={4} className="pt-0.5" />
             </div>
-          </Link>
+          </div>
 
           <div className="border-t border-border bg-muted/30 px-4 py-3">
             <h4 className="mb-1.5 text-xs font-medium text-muted-foreground">

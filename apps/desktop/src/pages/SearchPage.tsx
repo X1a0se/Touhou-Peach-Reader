@@ -1,7 +1,9 @@
 import type { FilterKind } from '@tpr/core';
+import { resolveTags } from '@tpr/core';
 import { HighlightedText, cn } from '@tpr/ui';
 import { useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router';
+import { TagLinks } from '../components/TagLinks.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { useSearch } from '../search/useSearch.js';
@@ -31,7 +33,7 @@ const KIND_LABEL: Record<string, string> = {
 
 export function SearchPage() {
   const services = useServices();
-  const { status: libraryStatus } = useLibraryContext();
+  const { status: libraryStatus, snapshot } = useLibraryContext();
   const search = useSearch(services, libraryStatus === 'ready');
   const [params, setParams] = useSearchParams();
   const queryParam = params.get('q') ?? '';
@@ -130,56 +132,63 @@ export function SearchPage() {
                 : item.kind === 'series'
                   ? `/series/${item.id}`
                   : null;
-            const body = (
-              <div className="flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  <span
-                    className={cn(
-                      'rounded px-1.5 py-0.5 text-[10px]',
-                      KIND_STYLE[item.kind] ?? 'bg-muted text-muted-foreground',
-                    )}
-                  >
-                    {KIND_LABEL[item.kind] ?? item.kind}
-                  </span>
-                  {item.badges.map((badge) => (
-                    <span
-                      key={badge}
-                      className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground"
-                    >
-                      {badge}
-                    </span>
-                  ))}
-                  <span className="truncate text-sm font-medium">{item.title}</span>
-                  <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">
-                    {item.id}
-                  </span>
-                </div>
-
-                {item.snippets.length > 0 ? (
-                  <div className="flex flex-col gap-1 text-xs">
-                    {item.snippets.map((parts, index) => (
-                      <HighlightedText
-                        // biome-ignore lint/suspicious/noArrayIndexKey: 片段无语义 id
-                        key={index}
-                        parts={parts}
-                      />
-                    ))}
-                  </div>
-                ) : item.subtitle ? (
-                  <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>
-                ) : null}
-              </div>
-            );
+            const article = item.kind === 'article' ? snapshot?.maps.articles.get(item.id) : undefined;
+            const series = item.kind === 'series' ? snapshot?.maps.series.get(item.id) : undefined;
+            const tags =
+              snapshot && article
+                ? resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds])
+                : snapshot && series
+                  ? resolveTags(snapshot, [...series.characterTagIds, ...series.plotTagIds])
+                  : [];
 
             return (
-              <li key={`${item.kind}:${item.id}`} className="px-4 py-3">
-                {to ? (
-                  <Link to={to} className="block rounded-md hover:bg-accent/60">
-                    {body}
-                  </Link>
-                ) : (
-                  body
-                )}
+              <li key={`${item.kind}:${item.id}`} className="flex flex-col gap-1.5 px-4 py-3">
+                <div className="flex flex-col gap-1">
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={cn(
+                        'rounded px-1.5 py-0.5 text-[10px]',
+                        KIND_STYLE[item.kind] ?? 'bg-muted text-muted-foreground',
+                      )}
+                    >
+                      {KIND_LABEL[item.kind] ?? item.kind}
+                    </span>
+                    {item.badges.map((badge) => (
+                      <span
+                        key={badge}
+                        className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                      >
+                        {badge}
+                      </span>
+                    ))}
+                    {to ? (
+                      <Link to={to} className="truncate text-sm font-medium hover:underline">
+                        {item.title}
+                      </Link>
+                    ) : (
+                      <span className="truncate text-sm font-medium">{item.title}</span>
+                    )}
+                    <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">
+                      {item.id}
+                    </span>
+                  </div>
+
+                  {item.snippets.length > 0 ? (
+                    <div className="flex flex-col gap-1 text-xs">
+                      {item.snippets.map((parts, index) => (
+                        <HighlightedText
+                          // biome-ignore lint/suspicious/noArrayIndexKey: 片段无语义 id
+                          key={index}
+                          parts={parts}
+                        />
+                      ))}
+                    </div>
+                  ) : item.subtitle ? (
+                    <p className="truncate text-xs text-muted-foreground">{item.subtitle}</p>
+                  ) : null}
+                </div>
+
+                <TagLinks tags={tags} limit={6} />
               </li>
             );
           })}

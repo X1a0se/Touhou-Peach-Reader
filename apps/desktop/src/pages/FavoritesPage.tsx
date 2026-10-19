@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
+import { TagLinks } from '../components/TagLinks.js';
 import { useFavorites } from '../favorites/FavoritesProvider.js';
 
 type Tab = 'articles' | 'series';
@@ -68,6 +69,7 @@ export function FavoritesPage() {
                 ) : entry.summary ? (
                   <p className="line-clamp-2 text-xs text-muted-foreground">{entry.summary}</p>
                 ) : null}
+                <TagLinks tags={entry.tags} limit={4} />
               </div>
               <button
                 type="button"

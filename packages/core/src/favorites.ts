@@ -4,6 +4,7 @@
  */
 import type { Platform } from '@tpr/platform';
 import type { DBSnapshot } from './db/snapshot.js';
+import { resolveTags, type TagRef } from './db/view.js';
 import { userPath } from './db/workspace.js';
 
 export type FavoriteKind = 'article' | 'series';
@@ -18,6 +19,8 @@ export interface FavoriteEntry {
   id: string;
   title: string;
   summary: string;
+  /** 角色 + 情节标签；失效条目为空数组 */
+  tags: TagRef[];
   /** 失效条目没有可跳转路由 */
   to: string | null;
   stale: boolean;
@@ -133,6 +136,7 @@ export function createFavorites(platform: Platform, databaseId: () => string | n
             id,
             title: article?.title ?? id,
             summary: article?.summary ?? '',
+            tags: article && snapshot ? resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds]) : [],
             to: article ? `/article/${id}` : null,
             stale: !article,
           };
@@ -143,6 +147,7 @@ export function createFavorites(platform: Platform, databaseId: () => string | n
           id,
           title: series?.title ?? id,
           summary: series?.summary ?? '',
+          tags: series && snapshot ? resolveTags(snapshot, [...series.characterTagIds, ...series.plotTagIds]) : [],
           to: series ? `/series/${id}` : null,
           stale: !series,
         };

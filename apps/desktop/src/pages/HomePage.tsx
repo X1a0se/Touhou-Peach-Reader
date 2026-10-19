@@ -1,7 +1,9 @@
+import { resolveTags } from '@tpr/core';
 import { DropZone, cn } from '@tpr/ui';
 import { useCallback } from 'react';
 import { Link } from 'react-router';
 import { RandomSection } from '../components/RandomSection.js';
+import { TagLinks } from '../components/TagLinks.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { readFileBytes, useNativeDrop } from '../library/useLibrary.js';
 
@@ -93,34 +95,48 @@ export function HomePage() {
           <section className="rounded-lg border border-border p-5">
             <div className="mb-3 flex items-baseline justify-between">
               <h3 className="text-sm font-medium">最近文章</h3>
-              <span className="text-xs text-muted-foreground">
-                {snapshot.manifest.updatedAt.slice(0, 10)} 更新
-              </span>
+              <div className="flex items-baseline gap-3">
+                <span className="text-xs text-muted-foreground">
+                  {snapshot.manifest.updatedAt.slice(0, 10)} 更新
+                </span>
+                <Link to="/articles" className="text-xs underline underline-offset-2 hover:text-foreground">
+                  全部文章 →
+                </Link>
+              </div>
             </div>
             <ul className="flex flex-col divide-y divide-border">
-              {snapshot.articles.slice(0, 5).map((article) => (
-                <li key={article.id}>
-                  <Link
-                    to={`/article/${article.id}`}
-                    className="flex items-center gap-3 rounded-md py-2 text-sm hover:bg-accent/60"
-                  >
-                    <span
-                      className={cn(
-                        'rounded px-1.5 py-0.5 text-[10px]',
-                        article.type === 'short'
-                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200'
-                          : 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200',
-                      )}
+              {snapshot.articles
+                .slice()
+                .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
+                .slice(0, 5)
+                .map((article) => (
+                  <li key={article.id} className="flex flex-col gap-1 py-2">
+                    <Link
+                      to={`/article/${article.id}`}
+                      className="flex items-center gap-3 rounded-md text-sm hover:bg-accent/60"
                     >
-                      {article.type === 'short' ? '短篇' : '系列'}
-                    </span>
-                    <span className="truncate">{article.title}</span>
-                    <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
-                      {article.id}
-                    </span>
-                  </Link>
-                </li>
-              ))}
+                      <span
+                        className={cn(
+                          'rounded px-1.5 py-0.5 text-[10px]',
+                          article.type === 'short'
+                            ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200'
+                            : 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200',
+                        )}
+                      >
+                        {article.type === 'short' ? '短篇' : '系列'}
+                      </span>
+                      <span className="truncate">{article.title}</span>
+                      <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
+                        {article.id}
+                      </span>
+                    </Link>
+                    <TagLinks
+                      tags={resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds])}
+                      limit={4}
+                      className="pl-1"
+                    />
+                  </li>
+                ))}
             </ul>
           </section>
 

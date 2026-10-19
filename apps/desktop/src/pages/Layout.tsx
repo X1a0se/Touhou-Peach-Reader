@@ -5,6 +5,7 @@ import { useServices } from '../context.js';
 
 const NAV = [
   { to: '/', label: '首页' },
+  { to: '/articles', label: '文章库' },
   { to: '/search', label: '搜索' },
   { to: '/featured/short', label: '精选短文' },
   { to: '/featured/series', label: '精选系列' },

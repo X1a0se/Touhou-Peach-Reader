@@ -11,6 +11,7 @@ import { NotFoundPage } from './pages/NotFoundPage.js';
  * 也让「编辑器 / 合并 / 设置」这类重页面只在真正进入时才解析。
  */
 const ArticlePage = lazy(() => import('./pages/ArticlePage.js').then((m) => ({ default: m.ArticlePage })));
+const ArticlesPage = lazy(() => import('./pages/ArticlesPage.js').then((m) => ({ default: m.ArticlesPage })));
 const CreditsPage = lazy(() => import('./pages/CreditsPage.js').then((m) => ({ default: m.CreditsPage })));
 const EditorPage = lazy(() => import('./pages/EditorPage.js').then((m) => ({ default: m.EditorPage })));
 const FavoritesPage = lazy(() => import('./pages/FavoritesPage.js').then((m) => ({ default: m.FavoritesPage })));
@@ -27,6 +28,7 @@ export const router = createHashRouter([
     element: <Layout />,
     children: [
       { index: true, element: <HomePage /> },
+      { path: 'articles', element: <ArticlesPage /> },
       { path: 'search', element: <SearchPage /> },
       { path: 'featured/short', element: <FeaturedPage page="short" /> },
       { path: 'featured/series', element: <FeaturedPage page="series" /> },

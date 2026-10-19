@@ -66,6 +66,20 @@ const tagRef = (snapshot: DBSnapshot, id: string): TagRef | null => {
   return tag ? { id: tag.id, name: tag.name, category: tag.category } : null;
 };
 
+/** 按传入顺序解析标签 id：去重、跳过悬空 id。缩略卡片与详情页共用。 */
+export function resolveTags(snapshot: DBSnapshot, ids: readonly string[] | undefined): TagRef[] {
+  if (!ids) return [];
+  const seen = new Set<string>();
+  const tags: TagRef[] = [];
+  for (const id of ids) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const ref = tagRef(snapshot, id);
+    if (ref) tags.push(ref);
+  }
+  return tags;
+}
+
 export function resolveImageRef(snapshot: DBSnapshot, opts: ViewOptions, id: string): ImageRef | null {
   const image = snapshot.maps.images.get(id);
   if (!image) return null;
@@ -97,8 +111,8 @@ export function getArticleView(snapshot: DBSnapshot, id: string, opts: ViewOptio
     article,
     authors: compact(article.authorIds.map((authorId) => personRef(snapshot, authorId))),
     translators: compact(article.translatorIds.map((authorId) => personRef(snapshot, authorId))),
-    characterTags: compact(article.characterTagIds.map((tagId) => tagRef(snapshot, tagId))),
-    plotTags: compact(article.plotTagIds.map((tagId) => tagRef(snapshot, tagId))),
+    characterTags: resolveTags(snapshot, article.characterTagIds),
+    plotTags: resolveTags(snapshot, article.plotTagIds),
     series: series
       ? { id: series.id, title: series.title, status: series.status, index: position >= 0 ? position + 1 : null }
       : null,
@@ -120,8 +134,8 @@ export function getSeriesView(snapshot: DBSnapshot, id: string, opts: ViewOption
   return {
     series,
     authors: compact(series.authorIds.map((authorId) => personRef(snapshot, authorId))),
-    characterTags: compact(series.characterTagIds.map((tagId) => tagRef(snapshot, tagId))),
-    plotTags: compact(series.plotTagIds.map((tagId) => tagRef(snapshot, tagId))),
+    characterTags: resolveTags(snapshot, series.characterTagIds),
+    plotTags: resolveTags(snapshot, series.plotTagIds),
     cover: series.coverImageId ? resolveImageRef(snapshot, opts, series.coverImageId) : null,
     articles,
     sourceUrl: series.sourceUrl ?? null,

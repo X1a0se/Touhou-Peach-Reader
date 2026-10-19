@@ -14,6 +14,9 @@
   "peerDependencies": {
     "react": "^19.0.0"
   },
+  "dependencies": {
+    "@tpr/schema": "workspace:*"
+  },
   "devDependencies": {
     "@types/react": "19.3.0",
     "react": "19.3.1",

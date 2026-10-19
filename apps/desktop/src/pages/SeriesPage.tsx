@@ -1,6 +1,7 @@
-import { getSeriesView } from '@tpr/core';
+import { getSeriesView, resolveTags } from '@tpr/core';
 import { cn } from '@tpr/ui';
 import { FavoriteButton } from '../components/FavoriteButton.js';
+import { TagLinks } from '../components/TagLinks.js';
 import { Link, useParams } from 'react-router';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
@@ -121,10 +122,10 @@ export function SeriesPage() {
         ) : (
           <ol className="flex flex-col divide-y divide-border rounded-lg border border-border">
             {view.articles.map((article, index) => (
-              <li key={article.id}>
+              <li key={article.id} className="flex flex-col gap-1 px-4 py-3">
                 <Link
                   to={`/article/${article.id}`}
-                  className="flex items-baseline gap-3 px-4 py-3 text-sm hover:bg-accent/60"
+                  className="flex items-baseline gap-3 text-sm hover:underline"
                 >
                   <span className="w-6 shrink-0 text-right font-mono text-xs text-muted-foreground">{index + 1}</span>
                   <span className="truncate font-medium">{article.title}</span>
@@ -132,6 +133,11 @@ export function SeriesPage() {
                     <span className="ml-2 hidden truncate text-xs text-muted-foreground sm:inline">{article.summary}</span>
                   ) : null}
                 </Link>
+                <TagLinks
+                  tags={snapshot ? resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds]) : []}
+                  limit={4}
+                  className="pl-9"
+                />
               </li>
             ))}
           </ol>

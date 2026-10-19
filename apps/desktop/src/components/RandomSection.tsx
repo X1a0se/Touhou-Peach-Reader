@@ -1,7 +1,8 @@
-import { type DBSnapshot, type TenPullResult, randomOne, tenPull } from '@tpr/core';
+import { type DBSnapshot, type TenPullResult, randomOne, resolveTags, tenPull } from '@tpr/core';
 import { useState } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { useServices } from '../context.js';
+import { TagLinks } from './TagLinks.js';
 
 export function RandomSection({ snapshot }: { snapshot: DBSnapshot }) {
   const services = useServices();
@@ -59,29 +60,33 @@ export function RandomSection({ snapshot }: { snapshot: DBSnapshot }) {
               const cover = coverUrl(article.coverImageId);
               const series = article.seriesId ? snapshot.maps.series.get(article.seriesId) : null;
               return (
-                <button
+                <div
                   key={article.id}
-                  type="button"
-                  onClick={() => navigate(`/article/${article.id}`)}
-                  className="group flex flex-col gap-1.5 rounded-md border border-border p-2 text-left transition-colors hover:bg-accent/50"
+                  className="group flex flex-col gap-1.5 rounded-md border border-border p-2 transition-colors hover:bg-accent/50"
                 >
-                  {cover ? (
-                    <img
-                      src={cover}
-                      alt={article.title}
-                      className="aspect-[5/7] w-full rounded object-cover"
-                      loading="lazy"
-                    />
-                  ) : (
-                    <div className="flex aspect-[5/7] w-full items-center justify-center rounded border border-dashed border-border text-[10px] text-muted-foreground">
-                      无封面
-                    </div>
-                  )}
-                  <span className="line-clamp-2 text-xs font-medium group-hover:underline">{article.title}</span>
-                  <span className="truncate text-[10px] text-muted-foreground">
-                    {series ? series.title : article.type === 'short' ? '短篇' : '未归系列'}
-                  </span>
-                </button>
+                  <Link to={`/article/${article.id}`} className="flex flex-col gap-1.5">
+                    {cover ? (
+                      <img
+                        src={cover}
+                        alt={article.title}
+                        className="aspect-[5/7] w-full rounded object-cover"
+                        loading="lazy"
+                      />
+                    ) : (
+                      <div className="flex aspect-[5/7] w-full items-center justify-center rounded border border-dashed border-border text-[10px] text-muted-foreground">
+                        无封面
+                      </div>
+                    )}
+                    <span className="line-clamp-2 text-xs font-medium group-hover:underline">{article.title}</span>
+                    <span className="truncate text-[10px] text-muted-foreground">
+                      {series ? series.title : article.type === 'short' ? '短篇' : '未归系列'}
+                    </span>
+                  </Link>
+                  <TagLinks
+                    tags={resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds])}
+                    limit={2}
+                  />
+                </div>
               );
             })}
           </div>

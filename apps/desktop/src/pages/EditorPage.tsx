@@ -8,7 +8,9 @@ import type {
   Tag,
   TagCategory,
 } from '@tpr/schema';
+import { normalizeName } from '@tpr/schema';
 import { useEffect, useState } from 'react';
+import { TagPicker } from '../components/TagPicker.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 
@@ -308,6 +310,7 @@ function ArticleForm({
   onExport?: (() => void) | undefined;
 }) {
   const services = useServices();
+  const { refresh } = useLibraryContext();
   const [title, setTitle] = useState(initial?.title ?? '');
   const [summary, setSummary] = useState(initial?.summary ?? '');
   const [type, setType] = useState<'short' | 'series-entry'>(initial?.type ?? 'short');
@@ -344,8 +347,19 @@ function ArticleForm({
   }, [initialId, services]);
 
   const authors = snapshot.authors.map((author) => ({ id: author.id, label: author.canonicalName }));
-  const tagsOf = (category: TagCategory) =>
-    snapshot.tags.filter((tag) => tag.category === category).map((tag) => ({ id: tag.id, label: tag.name }));
+
+  /** 表单内新建标签：按名称/别名判重，复用则返回现有 id；创建后刷新快照让列表立即可见。 */
+  const createTag = async (category: TagCategory, name: string): Promise<{ id: string; created: boolean }> => {
+    const key = normalizeName(name);
+    const existed = snapshot.tags.some(
+      (tag) =>
+        tag.category === category &&
+        (normalizeName(tag.name) === key || (tag.aliases ?? []).some((alias) => normalizeName(alias) === key)),
+    );
+    const id = await services.editor.saveTag({ category, name });
+    await refresh();
+    return { id, created: !existed };
+  };
 
   return (
     <form
@@ -423,8 +437,22 @@ function ArticleForm({
 
       <PickerRow title="作者" options={authors} value={authorIds} onChange={setAuthorIds} />
       <PickerRow title="译者" options={authors} value={translatorIds} onChange={setTranslatorIds} />
-      <PickerRow title="角色标签" options={tagsOf('character')} value={characterTagIds} onChange={setCharacterTagIds} />
-      <PickerRow title="情节标签" options={tagsOf('plot')} value={plotTagIds} onChange={setPlotTagIds} />
+      <TagPicker
+        title="角色标签"
+        category="character"
+        options={snapshot.tags.filter((tag) => tag.category === 'character')}
+        value={characterTagIds}
+        onChange={setCharacterTagIds}
+        onCreate={(name) => createTag('character', name)}
+      />
+      <TagPicker
+        title="情节标签"
+        category="plot"
+        options={snapshot.tags.filter((tag) => tag.category === 'plot')}
+        value={plotTagIds}
+        onChange={setPlotTagIds}
+        onCreate={(name) => createTag('plot', name)}
+      />
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="封面">
@@ -555,6 +583,8 @@ function SeriesForm({
   onCancel(): void;
   onDelete?: (() => Promise<void>) | undefined;
 }) {
+  const services = useServices();
+  const { refresh } = useLibraryContext();
   const [title, setTitle] = useState(initial?.title ?? '');
   const [summary, setSummary] = useState(initial?.summary ?? '');
   const [status, setStatus] = useState<'ongoing' | 'completed'>(initial?.status ?? 'ongoing');
@@ -565,6 +595,18 @@ function SeriesForm({
   const [coverImageId, setCoverImageId] = useState(initial?.coverImageId ?? '');
   const [sourceUrl, setSourceUrl] = useState(initial?.sourceUrl ?? '');
   const [busy, setBusy] = useState(false);
+
+  const createTag = async (category: TagCategory, name: string): Promise<{ id: string; created: boolean }> => {
+    const key = normalizeName(name);
+    const existed = snapshot.tags.some(
+      (tag) =>
+        tag.category === category &&
+        (normalizeName(tag.name) === key || (tag.aliases ?? []).some((alias) => normalizeName(alias) === key)),
+    );
+    const id = await services.editor.saveTag({ category, name });
+    await refresh();
+    return { id, created: !existed };
+  };
 
   return (
     <form
@@ -619,17 +661,21 @@ function SeriesForm({
         value={authorIds}
         onChange={setAuthorIds}
       />
-      <PickerRow
+      <TagPicker
         title="角色标签"
-        options={snapshot.tags.filter((tag) => tag.category === 'character').map((tag) => ({ id: tag.id, label: tag.name }))}
+        category="character"
+        options={snapshot.tags.filter((tag) => tag.category === 'character')}
         value={characterTagIds}
         onChange={setCharacterTagIds}
+        onCreate={(name) => createTag('character', name)}
       />
-      <PickerRow
+      <TagPicker
         title="情节标签"
-        options={snapshot.tags.filter((tag) => tag.category === 'plot').map((tag) => ({ id: tag.id, label: tag.name }))}
+        category="plot"
+        options={snapshot.tags.filter((tag) => tag.category === 'plot')}
         value={plotTagIds}
         onChange={setPlotTagIds}
+        onCreate={(name) => createTag('plot', name)}
       />
 
       <div className="grid gap-4 sm:grid-cols-2">

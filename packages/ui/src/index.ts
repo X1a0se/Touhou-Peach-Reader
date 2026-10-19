@@ -8,3 +8,5 @@ export { HighlightedText } from './components/HighlightedText.js';
 export type { HighlightedTextProps } from './components/HighlightedText.js';
 export { Markdown } from './components/Markdown.js';
 export type { MarkdownProps } from './components/Markdown.js';
+export { TagChip, tagChipClass } from './components/TagChip.js';
+export type { TagChipProps } from './components/TagChip.js';
