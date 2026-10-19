@@ -1,26 +1,16 @@
 import { resolveTags } from '@tpr/core';
 import { Button, DropZone, EmptyState, Panel, SectionHeading, StatTile } from '@tpr/ui';
-import { useCallback } from 'react';
 import { Link } from 'react-router';
 import { RandomSection } from '../components/RandomSection.js';
 import { TagLinks } from '../components/TagLinks.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
-import { readFileBytes, useNativeDrop } from '../library/useLibrary.js';
+import { readFileBytes } from '../library/useLibrary.js';
 
 const count = (value: number | undefined): string => (value === undefined ? '—' : String(value));
 
 export function HomePage() {
   const library = useLibraryContext();
-  const { importBytes, importPath, exportAll, pickAndImport, busy, snapshot, status } = library;
-
-  const handlePaths = useCallback(
-    (paths: string[]) => {
-      const first = paths[0];
-      if (first) void importPath(first);
-    },
-    [importPath],
-  );
-  useNativeDrop(handlePaths);
+  const { importBytes, exportAll, pickAndImport, busy, snapshot, status } = library;
 
   return (
     <div className="flex flex-col gap-6">

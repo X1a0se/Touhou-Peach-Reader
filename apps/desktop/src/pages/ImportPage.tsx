@@ -1,13 +1,11 @@
 import type { GitHubError } from '@tpr/core';
 import { Button, DropZone, Panel, SectionHeading } from '@tpr/ui';
-import { useCallback, useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
-import { useNativeDrop } from '../library/useLibrary.js';
 import { pickTprFile, readFileBytes } from '../platform/files.js';
 import { useSettingsContext } from '../settings/SettingsProvider.js';
-
 const describe = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
@@ -28,15 +26,6 @@ export function ImportPage() {
     if (!ready) return;
     setSource((current) => (current.length === 0 ? settings.defaultSource : current));
   }, [ready, settings.defaultSource]);
-
-  const handlePaths = useCallback(
-    (paths: string[]) => {
-      const first = paths[0];
-      if (first) void library.importPath(first);
-    },
-    [library],
-  );
-  useNativeDrop(handlePaths);
 
   const pick = async (): Promise<void> => {
     const path = await pickTprFile();

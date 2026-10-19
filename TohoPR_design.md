@@ -2072,6 +2072,9 @@ Goal 18 追加记录（修复：桌面/对话框路径导入被 app data 限制�
 - **修法**：新增 Rust 命令 `stage_import(source_path) -> String`：校验绝对路径、`.tpr` 后缀、常规文件、≤1 GB，复制到 `$APPDATA/imports/staged-{ms}-{sanitized}.tpr` 并返回该路径。TS 侧 `stageTprFile()`（`apps/desktop/src/platform/files.ts`）调它；`useLibrary.importPath` 与 `MergePage.choose` 改为"先 staging → 再 import/prepare → finally 删除 staged 文件"。解压/合并命令一行未改，安全边界仍是"只碰 app data"。
 - **验证**：真机 CDP 直接拿用户桌面那份 `夹具数据库-20261019-2319.tpr` 调 `stage_import` → 返回 `%APPDATA%\com.touhou.peachreader\imports\staged-….tpr`，`library.importZip(staged)` 导入成功（5 篇文章）、`fs_remove` 清理成功；非 `.tpr` 返回 `EINVAL: 只支持 .tpr 文件`，不存在的路径返回 `ENOENT`。
 - 教训：E2E 应至少有一条"从真实外部路径导入"的用例；只测 `importBytes` 会漏掉平台层的路径边界。
+- 顺手把拖拽做成**全局能力**：`LibraryProvider` 注册一次 `onTauriDrop`（原来只有首页与导入页各注册一次），无论在哪个页面拖入 `.tpr` 都会导入；页面里的 `useNativeDrop` 调用随之删除，避免同一路径被导入两次。
+- 版本号随之升到 **0.1.1**（`apps/desktop/package.json`、`src-tauri/tauri.conf.json`、`Cargo.toml`），安装包改名为 `Touhou Peach Reader_0.1.1_x64-setup.exe`，方便用户分辨是否装上了这次修复。
+- 全局拖拽的验证方式：dev 下用 CDP 调 `plugin:event|emit` 发 `tauri://drag-drop`（payload `{paths:['C:/Users/…/Desktop/….tpr']}`），首页立即出现「已导入「夹具数据库」：5 篇文章、2 个系列」——说明监听已从页面搬到 Provider 且仍能走 `stage_import → importZip` 全链路。
 
 ---
 
