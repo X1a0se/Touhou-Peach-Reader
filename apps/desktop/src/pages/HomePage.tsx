@@ -96,21 +96,26 @@ export function HomePage() {
             </div>
             <ul className="flex flex-col divide-y divide-border">
               {snapshot.articles.slice(0, 5).map((article) => (
-                <li key={article.id} className="flex items-center gap-3 py-2 text-sm">
-                  <span
-                    className={cn(
-                      'rounded px-1.5 py-0.5 text-[10px]',
-                      article.type === 'short'
-                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200'
-                        : 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200',
-                    )}
+                <li key={article.id}>
+                  <Link
+                    to={`/article/${article.id}`}
+                    className="flex items-center gap-3 rounded-md py-2 text-sm hover:bg-accent/60"
                   >
-                    {article.type === 'short' ? '短篇' : '系列'}
-                  </span>
-                  <span className="truncate">{article.title}</span>
-                  <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
-                    {article.id}
-                  </span>
+                    <span
+                      className={cn(
+                        'rounded px-1.5 py-0.5 text-[10px]',
+                        article.type === 'short'
+                          ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200'
+                          : 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200',
+                      )}
+                    >
+                      {article.type === 'short' ? '短篇' : '系列'}
+                    </span>
+                    <span className="truncate">{article.title}</span>
+                    <span className="ml-auto shrink-0 font-mono text-xs text-muted-foreground">
+                      {article.id}
+                    </span>
+                  </Link>
                 </li>
               ))}
             </ul>

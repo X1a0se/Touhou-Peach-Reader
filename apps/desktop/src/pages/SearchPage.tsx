@@ -1,6 +1,7 @@
 import type { FilterKind } from '@tpr/core';
 import { HighlightedText, cn } from '@tpr/ui';
-import { Link } from 'react-router';
+import { useEffect } from 'react';
+import { Link, useSearchParams } from 'react-router';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { useSearch } from '../search/useSearch.js';
@@ -32,6 +33,18 @@ export function SearchPage() {
   const services = useServices();
   const { status: libraryStatus } = useLibraryContext();
   const search = useSearch(services, libraryStatus === 'ready');
+  const [params, setParams] = useSearchParams();
+  const queryParam = params.get('q') ?? '';
+
+  // 详情页的标签/作者链接用 /search?q=名字 跳进来（Goal 5）
+  useEffect(() => {
+    if (queryParam && queryParam !== search.query) search.setQuery(queryParam);
+  }, [queryParam, search.query, search.setQuery]);
+
+  const changeQuery = (value: string) => {
+    search.setQuery(value);
+    setParams(value ? { q: value } : {}, { replace: true });
+  };
 
   return (
     <section className="flex flex-col gap-6">
@@ -41,7 +54,7 @@ export function SearchPage() {
           // biome-ignore lint/a11y/noAutofocus: 搜索页的主输入框
           autoFocus
           value={search.query}
-          onChange={(event) => search.setQuery(event.target.value)}
+          onChange={(event) => changeQuery(event.target.value)}
           placeholder="标题、正文、作者、标签…（支持 #已完结 #短篇文 #标签名）"
           aria-label="搜索关键词"
           className="w-full rounded-md border border-border bg-transparent px-4 py-2.5 text-sm outline-none placeholder:text-muted-foreground focus:border-primary/60"

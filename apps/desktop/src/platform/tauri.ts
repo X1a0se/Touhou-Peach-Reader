@@ -196,7 +196,12 @@ export async function createTauriPlatform(): Promise<Platform> {
         if (!/^https?:\/\//i.test(url)) {
           throw new PlatformError('EINVAL', `只允许打开 http(s) 链接：${url}`);
         }
-        await openUrl(url);
+        try {
+          await openUrl(url);
+        } catch (cause) {
+          // plugin-opener 拒绝时抛的是裸字符串（Not allowed to open url …），统一包成 PlatformError
+          throw mapNativeError(cause, 'EACCES');
+        }
       },
     },
     network,

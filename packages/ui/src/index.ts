@@ -6,3 +6,5 @@ export { DropZone } from './components/DropZone.js';
 export type { DropZoneProps } from './components/DropZone.js';
 export { HighlightedText } from './components/HighlightedText.js';
 export type { HighlightedTextProps } from './components/HighlightedText.js';
+export { Markdown } from './components/Markdown.js';
+export type { MarkdownProps } from './components/Markdown.js';

@@ -1644,7 +1644,10 @@ pnpm tauri init --app-name "Touhou Peach Reader" \
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
+    },
     "dialog:allow-open",
     "dialog:allow-save",
     "dialog:allow-message",
@@ -1653,6 +1656,7 @@ pnpm tauri init --app-name "Touhou Peach Reader" \
 }
 ```
 
+- **`opener:allow-open-url` 必须带 scope**：只写权限标识、不写 `allow` 列表时，`openUrl()` 会以裸字符串 `Not allowed to open url …` 拒绝（Goal 5 实测踩过）。scope 只放 `http/https`，与 §5.5 的 TS 侧白名单同口径。
 - **不使用 `tauri-plugin-fs`**（虽有 2.7.1 可用）：文件读写全部走自研 `#[tauri::command]`，在 Rust 侧统一做"必须位于 app data 目录内"的校验。理由：plugin-fs 的 scope 表达式与自定义命令混用会让"到底谁能读哪里"变成两套规则；自研命令只有一个入口，安全边界可审计。
 - 自定义命令无需在 capabilities 里授权（非插件命令不受 ACL 管辖），但仍受窗口 label 与 IPC 限制保护。若后续要收紧，可在命令内校验 `webview.label() === "main"`。
 - `opener:allow-open-url` 是插件权限；`openUrl` 之前仍在 TS 层做 `http(s)` 白名单（§5.5）。
@@ -1913,6 +1917,14 @@ Goal 4 追加记录：
 - **查询端必须做同样的长词拆分**：索引里没有 3 字以上的 CJK token，查询「魔理沙」要先拆成「魔理/理沙」才能召回（§11.5）。
 - **路由开始落地**：本 Goal 引入 `react-router` 8 的 `createHashRouter`，`/`（库概览，Goal 8 会换成随机页）与 `/search`；`/article/:id`、`/series/:id` 等留给 Goal 5。
 - 真机验收：CDP 驱动真实 Tauri 窗口，导入夹具后搜 `Example`（作者别名）、`#连载中`、`博丽灵梦`（角色），6 个类别筛选与空结果态全部通过，截图 `.tmp/goal4-search.png`。
+
+Goal 5 追加记录：
+
+- **`opener:allow-open-url` 必须写 scope**：Tauri 2 的 opener 插件只给权限标识、不给 `allow` 列表时，`openUrl` 抛的是裸字符串 `Not allowed to open url …`（不是 `Error`），被包成 `PlatformError('EACCES')` 后在页面上显示为横幅。scope 定为 `https://*` / `http://*`，见 §14.3。
+- **`plugin-opener` 的异常不是 Error 实例**：`mapNativeError` 原样吃 `string` 即可；不要写 `catch (e) { e.message }`，否则页面上只剩 `undefined`。
+- **正文渲染不引入 Markdown 依赖**：`@tpr/ui` 里 180 行的 `Markdown` 组件（标题/段落/列表/引用/代码/规则线 + 行内 code/bold/italic/link），不用 `dangerouslySetInnerHTML`，链接统一交给 `IOpener`，避免 WebView 被页面内导航带走。
+- **详情页不额外读库**：`getArticleView` / `getSeriesView` 是 `DBSnapshot` 上的纯函数（§10.3），正文才走 `Library.readContent`；系列目录严格按 `series.articleIds` 顺序，缺 id 跳过。
+- 夹具升级：`packages/platform/scripts/make-fixture.mjs` 现在生成 3 篇文章（短篇 + 系列两篇，`articleIds` 故意倒序）并带 `sourceUrl`，用来同时验证"排序"和"原出处"。真机 17 项断言全过，截图 `.tmp/goal5-article.png` / `.tmp/goal5-series.png`。
 
 ---
 

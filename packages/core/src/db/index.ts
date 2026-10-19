@@ -6,5 +6,6 @@ export * from './library.js';
 export * from './normalize.js';
 export * from './read.js';
 export * from './snapshot.js';
+export * from './view.js';
 export * from './workspace.js';
 export * from './write.js';
