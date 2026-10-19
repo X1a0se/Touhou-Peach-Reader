@@ -108,7 +108,9 @@ export async function buildSearchIndex(
       tokens: {
         title: tokenizeZh(series.title),
         summary: tokenizeZh(series.summary ?? ''),
-        people: tokenizeZh(personNames(series.authorIds).join(' ')),
+        people: tokenizeZh(
+          [...personNames(series.authorIds), ...personNames(series.translatorIds)].join(' '),
+        ),
         tags: tokenizeZh([...tags, ...virtualLabels(virtual)].join(' ')),
       },
     });

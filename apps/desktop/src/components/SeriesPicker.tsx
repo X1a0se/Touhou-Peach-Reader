@@ -45,6 +45,7 @@ export function SeriesPicker({ series, value, onChange }: SeriesPickerProps) {
           status: 'ongoing',
           articleIds: [],
           authorIds: [],
+          translatorIds: [],
           characterTagIds: [],
           plotTagIds: [],
         });

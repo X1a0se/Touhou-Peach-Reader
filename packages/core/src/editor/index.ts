@@ -45,6 +45,7 @@ export interface SeriesDraft {
   status: 'ongoing' | 'completed';
   articleIds: string[];
   authorIds: string[];
+  translatorIds: string[];
   characterTagIds: string[];
   plotTagIds: string[];
   coverImageId?: string | null;
@@ -186,6 +187,7 @@ export function createEditor(platform: Platform, library: Library): Editor {
           status: draft.status,
           articleIds,
           authorIds: clean(draft.authorIds),
+          translatorIds: clean(draft.translatorIds),
           characterTagIds: clean(draft.characterTagIds),
           plotTagIds: clean(draft.plotTagIds),
           ...(draft.coverImageId ? { coverImageId: draft.coverImageId } : {}),

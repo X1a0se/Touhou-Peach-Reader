@@ -114,6 +114,12 @@ export function SeriesPage() {
                   <dd>{view.authors.map((person) => person.name).join('、')}</dd>
                 </>
               ) : null}
+              {view.translators.length > 0 ? (
+                <>
+                  <dt className="text-muted-foreground">译者</dt>
+                  <dd>{view.translators.map((person) => person.name).join('、')}</dd>
+                </>
+              ) : null}
               <dt className="text-muted-foreground">篇数</dt>
               <dd>{view.articles.length}</dd>
               <dt className="text-muted-foreground">更新</dt>

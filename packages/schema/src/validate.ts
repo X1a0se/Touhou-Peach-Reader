@@ -276,6 +276,16 @@ export function validateDatabase(db: RawDatabase): ValidateResult {
         );
       }
     }
+    for (const id of s.translatorIds) {
+      if (!authors.has(id)) {
+        warnings.push(
+          warn('W_DANGLING_AUTHOR', 'series', `译者引用「${id}」不存在`, {
+            entityId: s.id,
+            field: 'translatorIds',
+          }),
+        );
+      }
+    }
     if (s.coverImageId) referencedImages.add(s.coverImageId);
   }
 

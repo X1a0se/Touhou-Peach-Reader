@@ -20,12 +20,14 @@ async function buildFixture() {
   await platform.fs.mkdir(dir);
 
   const author = makeAuthor({ canonicalName: '雾雨魔理沙', aliases: ['魔理沙', 'Marisa'] });
+  const translator = makeAuthor({ canonicalName: '译者乙' });
   const character = makeTag({ category: 'character', name: '雾雨魔理沙', aliases: ['魔理沙'] });
   const plot = makeTag({ category: 'plot', name: '红魔馆' });
   const series = makeSeries({
     title: '红魔馆的日常',
     status: 'completed',
     authorIds: [author.id],
+    translatorIds: [translator.id],
     characterTagIds: [character.id],
   });
   const entry = makeArticle({
@@ -48,7 +50,7 @@ async function buildFixture() {
 
   const raw = makeDatabase(
     {
-      authors: [author],
+      authors: [author, translator],
       tags: [character, plot],
       series: [{ ...series, articleIds: [entry.id] }],
       articles: [entry, short],
@@ -118,6 +120,12 @@ describe('search index', () => {
     const hits = engine.search('Marisa');
     expect(hits.some((hit) => hit.kind === 'author')).toBe(true);
     expect(hits.some((hit) => hit.kind === 'article')).toBe(true);
+  });
+
+  it('系列的译者名能搜到系列', async () => {
+    const { engine } = await buildFixture();
+    const hits = engine.search('译者乙');
+    expect(hits.some((hit) => hit.kind === 'series')).toBe(true);
   });
 
   it('#已完结 命中系列与系列条目', async () => {

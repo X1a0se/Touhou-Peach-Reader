@@ -10,12 +10,15 @@ import type {
   TagCategory,
 } from '@tpr/schema';
 import { normalizeName } from '@tpr/schema';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArticleOrderPicker } from '../components/ArticleOrderPicker.js';
 import { AuthorPicker } from '../components/AuthorPicker.js';
+import { DraftList } from '../components/DraftList.js';
 import { SeriesPicker } from '../components/SeriesPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
 import { useServices } from '../context.js';
+import type { DraftStore } from '../editor/drafts.js';
+import { useDraftAutosave, useDraftBox, useDraftStore } from '../editor/useDraft.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 
 type Tab = 'articles' | 'series' | 'authors' | 'tags' | 'images' | 'featured' | 'credits';
@@ -198,9 +201,36 @@ function PickerRow({
 
 function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
   const library = useLibraryContext();
+  const services = useServices();
+  const databaseId = services.library.current()?.databaseId ?? '';
+  const store = useDraftStore(databaseId);
+  const box = useDraftBox<ArticleDraftPayload>(store, 'article');
   const [editing, setEditing] = useState<ArticleMeta | null>(null);
   const [creating, setCreating] = useState(false);
+  const [draftPayload, setDraftPayload] = useState<ArticleDraftPayload | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const openDraft = (id: string) => {
+    const draft = box.open(id);
+    if (!draft) return;
+    setEditing(null);
+    setCreating(true);
+    setDraftPayload((draft.payload as ArticleDraftPayload | undefined) ?? null);
+  };
+
+  const startNew = () => {
+    box.start();
+    setEditing(null);
+    setCreating(true);
+    setDraftPayload(null);
+  };
+
+  const closeForm = () => {
+    setEditing(null);
+    setCreating(false);
+    setDraftPayload(null);
+    box.close();
+  };
 
   const togglePicked = (id: string) => {
     setPicked((prev) => {
@@ -214,16 +244,22 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
       <div className="flex flex-col gap-3">
-        <button
-          type="button"
-          className={primaryClass}
-          onClick={() => {
-            setEditing(null);
-            setCreating(true);
-          }}
-        >
+        <button type="button" className={primaryClass} onClick={startNew}>
           新建文章
         </button>
+        <DraftList
+          drafts={box.drafts}
+          selectedId={box.draftId}
+          onOpen={(draft) => openDraft(draft.id)}
+          onDelete={(id) => {
+            const wasOpen = box.draftId === id;
+            box.discard(id);
+            if (wasOpen) {
+              setCreating(false);
+              setDraftPayload(null);
+            }
+          }}
+        />
         <details className="rounded-md border border-border px-3 py-2 text-sm">
           <summary className="cursor-pointer select-none text-muted-foreground">
             多选导出（已选 {picked.size}）
@@ -250,6 +286,8 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
           selectedId={editing?.id ?? null}
           onSelect={(article) => {
             setCreating(false);
+            setDraftPayload(null);
+            box.close();
             setEditing(article);
           }}
           render={(article) => {
@@ -268,19 +306,19 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
 
       {creating || editing ? (
         <ArticleForm
-          key={editing?.id ?? 'new'}
+          key={box.draftId ?? editing?.id ?? 'new'}
           snapshot={snapshot}
           initial={editing}
-          onCancel={() => {
-            setEditing(null);
-            setCreating(false);
-          }}
+          draft={draftPayload}
+          draftId={box.draftId}
+          draftStore={store}
+          onCancel={closeForm}
           onSubmit={async (draft) => {
             await run(async () => {
               await editor.saveArticle(draft);
             }, '文章已保存');
-            setEditing(null);
-            setCreating(false);
+            if (box.draftId) box.discard(box.draftId);
+            closeForm();
           }}
           onExport={editing ? () => void library.exportSelection({ articles: [editing.id] }) : undefined}
           onDelete={
@@ -304,9 +342,26 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
   );
 }
 
+export interface ArticleDraftPayload {
+  title: string;
+  summary: string;
+  content: string;
+  authorIds: string[];
+  translatorIds: string[];
+  characterTagIds: string[];
+  plotTagIds: string[];
+  seriesId: string;
+  coverImageId: string;
+  illustrationImageIds: string[];
+  sourceUrl: string;
+}
+
 function ArticleForm({
   snapshot,
   initial,
+  draft,
+  draftId,
+  draftStore,
   onSubmit,
   onCancel,
   onDelete,
@@ -314,6 +369,9 @@ function ArticleForm({
 }: {
   snapshot: DBSnapshot;
   initial: ArticleMeta | null;
+  draft?: ArticleDraftPayload | null;
+  draftId?: string | null;
+  draftStore?: DraftStore | null;
   onSubmit(draft: Parameters<Editor['saveArticle']>[0]): Promise<void>;
   onCancel(): void;
   onDelete?: (() => Promise<void>) | undefined;
@@ -321,21 +379,72 @@ function ArticleForm({
 }) {
   const services = useServices();
   const { refresh } = useLibraryContext();
-  const [title, setTitle] = useState(initial?.title ?? '');
-  const [summary, setSummary] = useState(initial?.summary ?? '');
-  const [content, setContent] = useState<string | null>(initial ? null : '');
-  const [authorIds, setAuthorIds] = useState<string[]>(initial?.authorIds ?? []);
-  const [translatorIds, setTranslatorIds] = useState<string[]>(initial?.translatorIds ?? []);
-  const [characterTagIds, setCharacterTagIds] = useState<string[]>(initial?.characterTagIds ?? []);
-  const [plotTagIds, setPlotTagIds] = useState<string[]>(initial?.plotTagIds ?? []);
-  const [seriesId, setSeriesId] = useState(initial?.seriesId ?? '');
-  const [coverImageId, setCoverImageId] = useState(initial?.coverImageId ?? '');
-  const [illustrationImageIds, setIllustrationImageIds] = useState<string[]>(initial?.illustrationImageIds ?? []);
-  const [sourceUrl, setSourceUrl] = useState(initial?.sourceUrl ?? '');
+  const [title, setTitle] = useState(draft?.title ?? initial?.title ?? '');
+  const [summary, setSummary] = useState(draft?.summary ?? initial?.summary ?? '');
+  const [content, setContent] = useState<string | null>(
+    draft ? draft.content : initial ? null : '',
+  );
+  const [authorIds, setAuthorIds] = useState<string[]>(draft?.authorIds ?? initial?.authorIds ?? []);
+  const [translatorIds, setTranslatorIds] = useState<string[]>(
+    draft?.translatorIds ?? initial?.translatorIds ?? [],
+  );
+  const [characterTagIds, setCharacterTagIds] = useState<string[]>(
+    draft?.characterTagIds ?? initial?.characterTagIds ?? [],
+  );
+  const [plotTagIds, setPlotTagIds] = useState<string[]>(draft?.plotTagIds ?? initial?.plotTagIds ?? []);
+  const [seriesId, setSeriesId] = useState(draft?.seriesId ?? initial?.seriesId ?? '');
+  const [coverImageId, setCoverImageId] = useState(draft?.coverImageId ?? initial?.coverImageId ?? '');
+  const [illustrationImageIds, setIllustrationImageIds] = useState<string[]>(
+    draft?.illustrationImageIds ?? initial?.illustrationImageIds ?? [],
+  );
+  const [sourceUrl, setSourceUrl] = useState(draft?.sourceUrl ?? initial?.sourceUrl ?? '');
   const [busy, setBusy] = useState(false);
 
+  const draftPayload = useMemo<ArticleDraftPayload | null>(
+    () =>
+      content === null
+        ? null
+        : {
+            title,
+            summary,
+            content,
+            authorIds,
+            translatorIds,
+            characterTagIds,
+            plotTagIds,
+            seriesId,
+            coverImageId,
+            illustrationImageIds,
+            sourceUrl,
+          },
+    [
+      content,
+      title,
+      summary,
+      authorIds,
+      translatorIds,
+      characterTagIds,
+      plotTagIds,
+      seriesId,
+      coverImageId,
+      illustrationImageIds,
+      sourceUrl,
+    ],
+  );
+  const { error: draftError } = useDraftAutosave({
+    store: draftStore ?? null,
+    draftId: draftId ?? null,
+    kind: 'article',
+    label: title.trim() || '未命名文章',
+    payload: draftPayload,
+    enabled: !initial && Boolean(draftId && draftStore),
+  });
+
   const initialId = initial?.id ?? null;
+  const hasDraft = Boolean(draft);
   useEffect(() => {
+    // 草稿里的正文以草稿为准，不能被「新建 = 空正文」的初始化覆盖
+    if (hasDraft) return;
     if (!initialId) {
       setContent('');
       return;
@@ -353,7 +462,7 @@ function ArticleForm({
     return () => {
       cancelled = true;
     };
-  }, [initialId, services]);
+  }, [hasDraft, initialId, services]);
 
   const authors = snapshot.authors;
 
@@ -397,6 +506,11 @@ function ArticleForm({
         }).finally(() => setBusy(false));
       }}
     >
+      {draftError ? (
+        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          草稿未保存：{draftError}
+        </p>
+      ) : null}
       <Field label="标题">
         <input className={inputClass} value={title} onChange={(event) => setTitle(event.target.value)} required />
       </Field>
@@ -502,9 +616,42 @@ function ArticleForm({
   );
 }
 
+export interface SeriesDraftPayload {
+  title: string;
+  summary: string;
+  status: 'ongoing' | 'completed';
+  articleIds: string[];
+  authorIds: string[];
+  translatorIds: string[];
+  characterTagIds: string[];
+  plotTagIds: string[];
+  coverImageId: string;
+  sourceUrl: string;
+}
+
 function SeriesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+  const services = useServices();
+  const databaseId = services.library.current()?.databaseId ?? '';
+  const store = useDraftStore(databaseId);
+  const box = useDraftBox<SeriesDraftPayload>(store, 'series');
   const [editing, setEditing] = useState<Series | null>(null);
   const [creating, setCreating] = useState(false);
+  const [draftPayload, setDraftPayload] = useState<SeriesDraftPayload | null>(null);
+
+  const openDraft = (id: string) => {
+    const draft = box.open(id);
+    if (!draft) return;
+    setEditing(null);
+    setCreating(true);
+    setDraftPayload((draft.payload as SeriesDraftPayload | undefined) ?? null);
+  };
+
+  const closeForm = () => {
+    setEditing(null);
+    setCreating(false);
+    setDraftPayload(null);
+    box.close();
+  };
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
@@ -513,17 +660,34 @@ function SeriesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
           type="button"
           className={primaryClass}
           onClick={() => {
+            box.start();
             setEditing(null);
             setCreating(true);
+            setDraftPayload(null);
           }}
         >
           新建系列
         </button>
+        <DraftList
+          drafts={box.drafts}
+          selectedId={box.draftId}
+          onOpen={(draft) => openDraft(draft.id)}
+          onDelete={(id) => {
+            const wasOpen = box.draftId === id;
+            box.discard(id);
+            if (wasOpen) {
+              setCreating(false);
+              setDraftPayload(null);
+            }
+          }}
+        />
         <PanelList
           items={snapshot.series}
           selectedId={editing?.id ?? null}
           onSelect={(series) => {
             setCreating(false);
+            setDraftPayload(null);
+            box.close();
             setEditing(series);
           }}
           render={(series) => (
@@ -537,19 +701,19 @@ function SeriesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
 
       {creating || editing ? (
         <SeriesForm
-          key={editing?.id ?? 'new'}
+          key={box.draftId ?? editing?.id ?? 'new'}
           snapshot={snapshot}
           initial={editing}
-          onCancel={() => {
-            setEditing(null);
-            setCreating(false);
-          }}
+          draft={draftPayload}
+          draftId={box.draftId}
+          draftStore={store}
+          onCancel={closeForm}
           onSubmit={async (draft) => {
             await run(async () => {
               await editor.saveSeries(draft);
             }, '系列已保存');
-            setEditing(null);
-            setCreating(false);
+            if (box.draftId) box.discard(box.draftId);
+            closeForm();
           }}
           onDelete={
             editing
@@ -575,28 +739,74 @@ function SeriesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
 function SeriesForm({
   snapshot,
   initial,
+  draft,
+  draftId,
+  draftStore,
   onSubmit,
   onCancel,
   onDelete,
 }: {
   snapshot: DBSnapshot;
   initial: Series | null;
+  draft?: SeriesDraftPayload | null;
+  draftId?: string | null;
+  draftStore?: DraftStore | null;
   onSubmit(draft: Parameters<Editor['saveSeries']>[0]): Promise<void>;
   onCancel(): void;
   onDelete?: (() => Promise<void>) | undefined;
 }) {
   const services = useServices();
   const { refresh } = useLibraryContext();
-  const [title, setTitle] = useState(initial?.title ?? '');
-  const [summary, setSummary] = useState(initial?.summary ?? '');
-  const [status, setStatus] = useState<'ongoing' | 'completed'>(initial?.status ?? 'ongoing');
-  const [articleIds, setArticleIds] = useState<string[]>(initial?.articleIds ?? []);
-  const [authorIds, setAuthorIds] = useState<string[]>(initial?.authorIds ?? []);
-  const [characterTagIds, setCharacterTagIds] = useState<string[]>(initial?.characterTagIds ?? []);
-  const [plotTagIds, setPlotTagIds] = useState<string[]>(initial?.plotTagIds ?? []);
-  const [coverImageId, setCoverImageId] = useState(initial?.coverImageId ?? '');
-  const [sourceUrl, setSourceUrl] = useState(initial?.sourceUrl ?? '');
+  const [title, setTitle] = useState(draft?.title ?? initial?.title ?? '');
+  const [summary, setSummary] = useState(draft?.summary ?? initial?.summary ?? '');
+  const [status, setStatus] = useState<'ongoing' | 'completed'>(draft?.status ?? initial?.status ?? 'ongoing');
+  const [articleIds, setArticleIds] = useState<string[]>(draft?.articleIds ?? initial?.articleIds ?? []);
+  const [authorIds, setAuthorIds] = useState<string[]>(draft?.authorIds ?? initial?.authorIds ?? []);
+  const [translatorIds, setTranslatorIds] = useState<string[]>(
+    draft?.translatorIds ?? initial?.translatorIds ?? [],
+  );
+  const [characterTagIds, setCharacterTagIds] = useState<string[]>(
+    draft?.characterTagIds ?? initial?.characterTagIds ?? [],
+  );
+  const [plotTagIds, setPlotTagIds] = useState<string[]>(draft?.plotTagIds ?? initial?.plotTagIds ?? []);
+  const [coverImageId, setCoverImageId] = useState(draft?.coverImageId ?? initial?.coverImageId ?? '');
+  const [sourceUrl, setSourceUrl] = useState(draft?.sourceUrl ?? initial?.sourceUrl ?? '');
   const [busy, setBusy] = useState(false);
+
+  const draftPayload = useMemo<SeriesDraftPayload>(
+    () => ({
+      title,
+      summary,
+      status,
+      articleIds,
+      authorIds,
+      translatorIds,
+      characterTagIds,
+      plotTagIds,
+      coverImageId,
+      sourceUrl,
+    }),
+    [
+      title,
+      summary,
+      status,
+      articleIds,
+      authorIds,
+      translatorIds,
+      characterTagIds,
+      plotTagIds,
+      coverImageId,
+      sourceUrl,
+    ],
+  );
+  const { error: draftError } = useDraftAutosave({
+    store: draftStore ?? null,
+    draftId: draftId ?? null,
+    kind: 'series',
+    label: title.trim() || '未命名系列',
+    payload: draftPayload,
+    enabled: !initial && Boolean(draftId && draftStore),
+  });
 
   const createTag = async (category: TagCategory, name: string): Promise<{ id: string; created: boolean }> => {
     const key = normalizeName(name);
@@ -623,6 +833,7 @@ function SeriesForm({
           status,
           articleIds,
           authorIds,
+          translatorIds,
           characterTagIds,
           plotTagIds,
           ...(coverImageId ? { coverImageId } : {}),
@@ -630,6 +841,11 @@ function SeriesForm({
         }).finally(() => setBusy(false));
       }}
     >
+      {draftError ? (
+        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          草稿未保存：{draftError}
+        </p>
+      ) : null}
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="标题">
           <input className={inputClass} value={title} onChange={(event) => setTitle(event.target.value)} required />
@@ -652,12 +868,8 @@ function SeriesForm({
 
       <ArticleOrderPicker articles={snapshot.articles} value={articleIds} onChange={setArticleIds} />
 
-      <PickerRow
-        title="作者"
-        options={snapshot.authors.map((author) => ({ id: author.id, label: author.canonicalName }))}
-        value={authorIds}
-        onChange={setAuthorIds}
-      />
+      <AuthorPicker title="作者" authors={snapshot.authors} value={authorIds} onChange={setAuthorIds} />
+      <AuthorPicker title="译者" authors={snapshot.authors} value={translatorIds} onChange={setTranslatorIds} />
       <TagPicker
         title="角色标签"
         category="character"
@@ -712,15 +924,41 @@ function SeriesForm({
   );
 }
 
+export interface AuthorDraftPayload {
+  canonicalName: string;
+  aliases: string;
+  notes: string;
+  sourceUrl: string;
+}
+
 function AuthorsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+  const services = useServices();
+  const databaseId = services.library.current()?.databaseId ?? '';
+  const store = useDraftStore(databaseId);
+  const box = useDraftBox<AuthorDraftPayload>(store, 'author');
   const [editing, setEditing] = useState<{ id?: string; canonicalName: string; aliases: string; notes: string; sourceUrl: string } | null>(
     null,
   );
 
-  const startNew = () => setEditing({ canonicalName: '', aliases: '', notes: '', sourceUrl: '' });
+  const startNew = () => {
+    box.start();
+    setEditing({ canonicalName: '', aliases: '', notes: '', sourceUrl: '' });
+  };
+  const openDraft = (id: string) => {
+    const draft = box.open(id);
+    if (!draft) return;
+    const payload = (draft.payload as AuthorDraftPayload | undefined) ?? {
+      canonicalName: '',
+      aliases: '',
+      notes: '',
+      sourceUrl: '',
+    };
+    setEditing({ ...payload });
+  };
   const startEdit = (id: string) => {
     const author = snapshot.authors.find((item) => item.id === id);
     if (!author) return;
+    box.close();
     setEditing({
       id: author.id,
       canonicalName: author.canonicalName,
@@ -730,12 +968,43 @@ function AuthorsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
     });
   };
 
+  const draftPayload = useMemo<AuthorDraftPayload | null>(
+    () =>
+      editing && !editing.id
+        ? {
+            canonicalName: editing.canonicalName,
+            aliases: editing.aliases,
+            notes: editing.notes,
+            sourceUrl: editing.sourceUrl,
+          }
+        : null,
+    [editing],
+  );
+  const { error: draftError } = useDraftAutosave({
+    store,
+    draftId: box.draftId,
+    kind: 'author',
+    label: editing?.canonicalName.trim() || '未命名作者',
+    payload: draftPayload,
+    enabled: Boolean(draftPayload) && editing?.id === undefined,
+  });
+
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
       <div className="flex flex-col gap-3">
         <button type="button" className={primaryClass} onClick={startNew}>
           新建作者
         </button>
+        <DraftList
+          drafts={box.drafts}
+          selectedId={box.draftId}
+          onOpen={(draft) => openDraft(draft.id)}
+          onDelete={(id) => {
+            const wasOpen = box.draftId === id;
+            box.discard(id);
+            if (wasOpen) setEditing(null);
+          }}
+        />
         <PanelList
           items={snapshot.authors}
           selectedId={editing?.id ?? null}
@@ -763,9 +1032,15 @@ function AuthorsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
                 sourceUrl: editing.sourceUrl,
               });
             }, '作者已保存');
+            if (box.draftId) box.discard(box.draftId);
             setEditing(null);
           }}
         >
+          {draftError ? (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              草稿未保存：{draftError}
+            </p>
+          ) : null}
           <Field label="常用名">
             <input
               className={inputClass}
@@ -830,21 +1105,64 @@ function AuthorsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
   );
 }
 
+export interface TagDraftPayload {
+  category: TagCategory;
+  name: string;
+  aliases: string;
+}
+
 function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+  const services = useServices();
+  const databaseId = services.library.current()?.databaseId ?? '';
+  const store = useDraftStore(databaseId);
+  const box = useDraftBox<TagDraftPayload>(store, 'tag');
   const [editing, setEditing] = useState<{ id?: string; category: TagCategory; name: string; aliases: string } | null>(null);
   const [filter, setFilter] = useState<'all' | TagCategory>('all');
   const list = snapshot.tags.filter((tag) => filter === 'all' || tag.category === filter);
 
+  const startNew = () => {
+    box.start();
+    setEditing({ category: 'character', name: '', aliases: '' });
+  };
+  const openDraft = (id: string) => {
+    const draft = box.open(id);
+    if (!draft) return;
+    const payload = (draft.payload as TagDraftPayload | undefined) ?? { category: 'character', name: '', aliases: '' };
+    setEditing({ category: payload.category, name: payload.name, aliases: payload.aliases });
+  };
+
+  const draftPayload = useMemo<TagDraftPayload | null>(
+    () =>
+      editing && !editing.id
+        ? { category: editing.category, name: editing.name, aliases: editing.aliases }
+        : null,
+    [editing],
+  );
+  const { error: draftError } = useDraftAutosave({
+    store,
+    draftId: box.draftId,
+    kind: 'tag',
+    label: editing?.name.trim() || '未命名标签',
+    payload: draftPayload,
+    enabled: Boolean(draftPayload) && editing?.id === undefined,
+  });
+
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
       <div className="flex flex-col gap-3">
-        <button
-          type="button"
-          className={primaryClass}
-          onClick={() => setEditing({ category: 'character', name: '', aliases: '' })}
-        >
+        <button type="button" className={primaryClass} onClick={startNew}>
           新建标签
         </button>
+        <DraftList
+          drafts={box.drafts}
+          selectedId={box.draftId}
+          onOpen={(draft) => openDraft(draft.id)}
+          onDelete={(id) => {
+            const wasOpen = box.draftId === id;
+            box.discard(id);
+            if (wasOpen) setEditing(null);
+          }}
+        />
         <select className={inputClass} value={filter} onChange={(event) => setFilter(event.target.value as 'all' | TagCategory)}>
           <option value="all">全部类别</option>
           <option value="character">角色</option>
@@ -878,9 +1196,15 @@ function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; 
                 aliases: editing.aliases.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean),
               });
             }, '标签已保存');
+            if (box.draftId) box.discard(box.draftId);
             setEditing(null);
           }}
         >
+          {draftError ? (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              草稿未保存：{draftError}
+            </p>
+          ) : null}
           <Field label="类别">
             <select
               className={inputClass}
@@ -1053,7 +1377,17 @@ function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
   );
 }
 
+export interface FeaturedDraftPayload {
+  targetType: 'article' | 'series';
+  targetId: string;
+  rows: Recommendation[];
+}
+
 function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+  const services = useServices();
+  const databaseId = services.library.current()?.databaseId ?? '';
+  const store = useDraftStore(databaseId);
+  const box = useDraftBox<FeaturedDraftPayload>(store, 'featured');
   const [targetType, setTargetType] = useState<'article' | 'series'>('article');
   const [targetId, setTargetId] = useState('');
   const [rows, setRows] = useState<Recommendation[]>([{ author: '', text: '' }]);
@@ -1070,8 +1404,61 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
     setRows(entry && entry.recommendations.length > 0 ? entry.recommendations : [{ author: '', text: '' }]);
   };
 
+  const startDraft = () => {
+    box.start();
+    setTargetId('');
+    setRows([{ author: '', text: '' }]);
+  };
+  const openDraft = (id: string) => {
+    const draft = box.open(id);
+    if (!draft) return;
+    const payload = draft.payload as FeaturedDraftPayload | undefined;
+    if (!payload) return;
+    setTargetType(payload.targetType);
+    setTargetId(payload.targetId);
+    setRows(payload.rows.length > 0 ? payload.rows : [{ author: '', text: '' }]);
+  };
+
+  const draftPayload = useMemo<FeaturedDraftPayload>(
+    () => ({ targetType, targetId, rows }),
+    [targetType, targetId, rows],
+  );
+  const { error: draftError } = useDraftAutosave({
+    store,
+    draftId: box.draftId,
+    kind: 'featured',
+    label: targetId ? `推荐语 ${targetId}` : '未选目标的推荐语',
+    payload: draftPayload,
+    enabled: Boolean(box.draftId),
+  });
+
   return (
     <div className="flex flex-col gap-5">
+      <div className="flex flex-wrap items-center gap-2">
+        <button type="button" className={buttonClass} onClick={startDraft}>
+          新建推荐语草稿
+        </button>
+        {box.drafts.map((draft) => (
+          <span
+            key={draft.id}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+              box.draftId === draft.id ? 'border-accent bg-accent-soft text-accent' : 'border-border'
+            }`}
+          >
+            <button type="button" onClick={() => openDraft(draft.id)}>
+              草稿：{draft.label}
+            </button>
+            <button type="button" aria-label={`删除草稿 ${draft.label}`} onClick={() => box.discard(draft.id)}>
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      {draftError ? (
+        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          草稿未保存：{draftError}
+        </p>
+      ) : null}
       <ul className="flex flex-col divide-y divide-border rounded-xl border border-border bg-surface/60">
         {snapshot.featured.length === 0 ? (
           <li className="px-4 py-8 text-center text-sm text-muted-foreground">还没有推荐语。</li>
@@ -1120,6 +1507,7 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
           void run(async () => {
             await editor.saveFeatured(targetType, targetId, cleaned);
           }, '推荐语已保存');
+          if (box.draftId) box.discard(box.draftId);
         }}
       >
         <div className="grid gap-3 sm:grid-cols-2">
@@ -1189,7 +1577,15 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
   );
 }
 
+export interface CreditsDraftPayload {
+  rows: CreditsEntry[];
+}
+
 function CreditsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+  const services = useServices();
+  const databaseId = services.library.current()?.databaseId ?? '';
+  const store = useDraftStore(databaseId);
+  const box = useDraftBox<CreditsDraftPayload>(store, 'credits');
   const [rows, setRows] = useState<CreditsEntry[]>(() => snapshot.credits.map((entry) => ({ ...entry })));
 
   const move = (index: number, delta: number) => {
@@ -1199,6 +1595,23 @@ function CreditsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
     next.splice(Math.max(0, Math.min(next.length, index + delta)), 0, item);
     setRows(next);
   };
+
+  const openDraft = (id: string) => {
+    const draft = box.open(id);
+    if (!draft) return;
+    const payload = draft.payload as CreditsDraftPayload | undefined;
+    setRows(payload?.rows.length ? payload.rows : [{ name: '' }]);
+  };
+
+  const draftPayload = useMemo<CreditsDraftPayload>(() => ({ rows }), [rows]);
+  const { error: draftError } = useDraftAutosave({
+    store,
+    draftId: box.draftId,
+    kind: 'credits',
+    label: '鸣谢草稿',
+    payload: draftPayload,
+    enabled: Boolean(box.draftId),
+  });
 
   return (
     <form
@@ -1216,8 +1629,41 @@ function CreditsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
         void run(async () => {
           await editor.saveCredits(cleaned);
         }, '鸣谢已保存');
+        if (box.draftId) box.discard(box.draftId);
       }}
     >
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className={buttonClass}
+          onClick={() => {
+            box.start();
+            setRows([{ name: '' }]);
+          }}
+        >
+          新建鸣谢草稿
+        </button>
+        {box.drafts.map((draft) => (
+          <span
+            key={draft.id}
+            className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+              box.draftId === draft.id ? 'border-accent bg-accent-soft text-accent' : 'border-border'
+            }`}
+          >
+            <button type="button" onClick={() => openDraft(draft.id)}>
+              {draft.label}
+            </button>
+            <button type="button" aria-label={`删除草稿 ${draft.label}`} onClick={() => box.discard(draft.id)}>
+              ×
+            </button>
+          </span>
+        ))}
+      </div>
+      {draftError ? (
+        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+          草稿未保存：{draftError}
+        </p>
+      ) : null}
       <p className="text-xs text-muted-foreground">顺序即展示顺序，用 ↑↓ 调整。</p>
       {rows.map((row, index) => (
         <div key={index} className="grid gap-2 sm:grid-cols-[10rem_8rem_minmax(0,1fr)_minmax(0,1fr)_auto]">

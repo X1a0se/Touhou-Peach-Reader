@@ -48,7 +48,13 @@ function fixture() {
       tags: [characterTag, plotTag],
       images: [cover, illustration],
       articles: [first, second],
-      series: [{ ...series, articleIds: [second.id, 'a_ffffffffffffffff', first.id] }],
+      series: [
+        {
+          ...series,
+          articleIds: [second.id, 'a_ffffffffffffffff', first.id],
+          translatorIds: [translator.id],
+        },
+      ],
     },
     { withFiles: true },
   );
@@ -107,6 +113,7 @@ describe('getSeriesView', () => {
     if (!view) return;
     expect(view.series.title).toBe('星之系列');
     expect(view.articles.map((a) => a.title)).toEqual(['系列第二篇', '系列第一篇']);
+    expect(view.translators.map((person) => person.name)).toEqual(['译者甲']);
   });
 
   it('未知 id 返回 null', () => {

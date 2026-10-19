@@ -116,6 +116,7 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
       status: 'ongoing',
       articleIds: [shortArticle?.id ?? ''],
       authorIds: [],
+      translatorIds: [],
       characterTagIds: [],
       plotTagIds: [],
     });
@@ -128,6 +129,24 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
     const demoted = library.snapshot()?.articles.find((article) => article.id === shortArticle?.id);
     expect(demoted?.type).toBe('short');
     expect(demoted?.seriesId).toBeUndefined();
+  });
+
+  it('edit-series-translator: 系列可以保存译者并读回', async () => {
+    const { library, editor } = await openDatabase();
+    const translatorId = library.snapshot()?.authors[0]?.id ?? '';
+    const seriesId = await editor.saveSeries({
+      title: '有译者的系列',
+      summary: '',
+      status: 'ongoing',
+      articleIds: [],
+      authorIds: [],
+      translatorIds: [translatorId],
+      characterTagIds: [],
+      plotTagIds: [],
+    });
+
+    const saved = library.snapshot()?.series.find((series) => series.id === seriesId);
+    expect(saved?.translatorIds).toEqual([translatorId]);
   });
 
   it('edit-cascade: 删除文章同时从系列目录与精选里移除', async () => {
@@ -286,6 +305,7 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
       status: 'ongoing',
       articleIds: [],
       authorIds: [],
+      translatorIds: [],
       characterTagIds: [],
       plotTagIds: [],
     });
@@ -365,6 +385,7 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
       status: series.status,
       articleIds: reversed,
       authorIds: series.authorIds,
+      translatorIds: series.translatorIds,
       characterTagIds: series.characterTagIds,
       plotTagIds: series.plotTagIds,
     });
@@ -378,6 +399,7 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
         status: series.status,
         articleIds: [...reversed, 'a_ffffffffffffffff'],
         authorIds: series.authorIds,
+        translatorIds: series.translatorIds,
         characterTagIds: series.characterTagIds,
         plotTagIds: series.plotTagIds,
       }),

@@ -542,6 +542,8 @@ export interface ArticleFile {
 
 `/plan` 里的 `Article` 字段一个都不增、一个都不减；`translatorIds` 与 `authorIds` 共用 `Author` 集合（译者也是人）。
 
+**唯一的一处实体字段增补（Goal 16）**：`Series` 增加可选的 `translatorIds: string[]`（默认 `[]`）。理由：系列级译者信息在 `/plan` 里无处存放，而「系列由谁翻译」是策展数据里常见的一项；作为加法变更不升 `schemaVersion`，旧包缺字段时按空数组处理，导出时也会写出该字段。
+
 ### 6.2 ID 策略（D11）
 
 | 实体 | 形态 | 规则 | 为什么 |
@@ -998,6 +1000,7 @@ $APPDATA/com.touhou.peachreader/          ← 桌面端 = %APPDATA%\com.touhou.p
 ```
 
 - `settings.json`、`active.json`、`user/*.json` **不是**数据库包的一部分，导出时不带。
+- **编辑器草稿箱（Goal 16）不在文件系统里**：存在 WebView 的 `localStorage`，键为 `tpr:drafts:v1:{databaseId}`，值为 `DraftEnvelope[]`（`{v:1,id,kind,label,updatedAt,payload}`）。按库隔离；最多 50 条（超出丢最旧）、单条 payload 上限 1.5 M 字符；写入失败（配额/过大）在表单里显示"草稿未保存"横幅，但**不阻断保存实体**。草稿不随数据库导出，换机不迁移。
 - 收藏（Goal 7）落在 `user/{databaseId}.json`：`favorites.articles` / `favorites.series` 为 id 数组，按加入时间倒序。数据库被重新导入导致某条消失时，读取时过滤并记 `stale`（Goal 7 要求"自动清理或标记失效"，选**标记失效**：保留 id，UI 显示灰色"已失效"）。
 - 同一 `databaseId` 重复导入 = **覆盖**（先备份再换名）；不同 id = 新增一个库，可在 `/settings` 切换。
 
@@ -1875,7 +1878,7 @@ const FORBIDDEN = [/@tauri-apps\//, /window\.__TAURI__/, /\bconvertFileSrc\b/, /
 
 ### 17.3 保持不变的部分
 
-- 8 个实体字段**未增未删**（`Article`/`Series`/`Tag`/`Author`/`ImageAsset`/`FeaturedEntry`/`CreditsEntry`/`Manifest` 全部照抄）。
+- 8 个实体字段**未增未删**（`Article`/`Series`/`Tag`/`Author`/`ImageAsset`/`FeaturedEntry`/`CreditsEntry`/`Manifest` 全部照抄）；唯一增补是 Goal 16 给 `Series` 加的**可选** `translatorIds`（§6.1 末尾，加法变更、不升 schema 版本）。
 - 数据模型语义（虚拟 tag 不落库、`articleIds` 有序、推荐语可多条）完全照抄。
 - `.tpr` 的目录骨架与 `/plan` 四、一致（仅补充了 `other/` 图片目录与 `articles/*.md` 的显式位置）。
 - 12 个 Goal 的验收口径未降低，只补了自动化手段。
@@ -2044,6 +2047,17 @@ Goal 15 追加记录（系列文章编号排序 + 文章编辑页快捷创建系
 - **真机 E2E**（`.tmp/goal15-e2e.mjs`，CDP）23/23 通过：快捷建系列→文章自动入目录第 1 篇、第二篇追加为第 2 篇、系列页 `01/02`、文章页「第 1 篇」、系列表单上移后顺序互换并落库、文章库与编辑器列表显示编号、快捷建作者/译者并自动勾选、`Page.reload` 后仍在、同名作者不再出现「新建」按钮、同名系列复用提示。
 - 截图：`.tmp/goal15-series.png`、`.tmp/goal15-articles.png`、`.tmp/goal15-editor.png`、`.tmp/goal15-article-form.png`、`.tmp/goal15-series-form.png`。
 
+Goal 16 追加记录（系列译者 / 搜索 `#` 联想 / 编辑器草稿箱）：
+
+- **系列译者**：`Series.translatorIds` 是可选加法字段（§6.1 末、§17.3），zod 用 `.default([])`，导出时写空数组；`SeriesPage` 在"篇数"上方多一行「译者」，编辑器系列表单复用 `AuthorPicker`。悬空译者沿用 `W_DANGLING_AUTHOR` 告警（`entity: 'series'`、`field: 'translatorIds'`），不新增告警码。
+- **`#` 联想**：纯函数放在 `apps/desktop/src/search/suggest.ts`——`tagFragmentAt()` 只认行首或空白后的 `#`，`computeTagSuggestions()` 合并虚拟标签（已完结/连载中/短篇文/系列文）与库内标签（按名称+别名过滤、最多 8 条），`applyTagSuggestion()` 替换片段并把光标放到名字后。UI 用 `role="listbox"` + `aria-activedescendant` 语义，↑↓ 选择、Enter/Tab 应用、Esc 关闭。踩坑：下拉最初用 `bg-surface`（半透明），叠在筛选 chips 上会透字 → 改 `bg-background` + `shadow-xl`。
+- **草稿箱**：`apps/desktop/src/editor/drafts.ts` 是纯逻辑 + 注入 `StorageLike`（`createDraftStore`、`DraftEnvelope`、`MAX_DRAFTS=50`、`MAX_PAYLOAD_CHARS=1.5M`、`DraftStorageError` 的 `E_QUOTA`/`E_TOO_LARGE`）；`useDraft.ts` 提供 `useDraftStore/useDraftList/useDraftAutosave/useDraftBox`，自动保存 **600 ms 防抖 + 卸载补写**。文章/系列/作者/标签/推荐语/鸣谢六个表单接入；图片面板不接（上传必须选文件，元数据草稿没有意义），在文档里明说。
+- **保存成功即清草稿**：`box.discard(draftId)` 在 `onSubmit` 成功后调用；打开已存在实体时 `box.close()`，避免草稿和实体表单互相串。
+- **修掉的真 bug**：`ArticleForm` 里"新建 = 空正文"的 `useEffect` 会在草稿恢复后立刻把正文清空（标题还在、正文空）。加 `hasDraft` 守卫跳过该初始化；这正是真机 E2E 才能发现的时序问题（截图里标题正确、正文是占位符）。
+- **测试**：`apps/desktop/test/drafts.test.ts` 8 例（保存/倒序、按库隔离、同 id 覆盖、超 50 条裁剪、payload 过大、配额错误、坏 JSON、删除与清空）；`apps/desktop/test/suggest.test.ts` 8 例（片段识别、空片段、名称/别名过滤、虚拟标签、条数上限、替换与光标、词中替换、无匹配）。`corepack pnpm check` = platform 10 + schema 25 + core 97 + desktop 16 = **148 个测试**。
+- **真机 E2E**（`.tmp/goal16-e2e.mjs`，CDP）16/16 通过：系列表单内新建译者并自动勾选、保存后 `series.translatorIds` 有 1 个、系列页显示译者、文章草稿自动落盘、离开再回来草稿仍在、`Page.reload` 后仍在、打开草稿标题/正文都恢复、保存后草稿被清、`#` 下拉列出虚拟标签、`#灵` 过滤到博丽灵梦、Enter 应用为 `#博丽灵梦 `、搜索结果命中。联想部分用 CDP `Input.insertText` 注入真实输入事件（合成 `input` 事件的光标位置不可靠，会误判为"联想没出现"）。
+- 截图：`.tmp/goal16-series.png`、`.tmp/goal16-draft.png`、`.tmp/goal16-suggest.png`。
+
 ---
 
 ## 附：文档自检
@@ -2057,6 +2071,6 @@ Goal 15 追加记录（系列文章编号排序 + 文章编辑页快捷创建系
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–15 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
+| Goal 1–16 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
 
 

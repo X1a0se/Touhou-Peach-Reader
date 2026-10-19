@@ -16,7 +16,9 @@ export {
   isEmptyQuery,
   normalizeTagName,
   parseQuery,
+  VIRTUAL_TAG_LABELS,
   type ParsedQuery,
+  type VirtualTagLabel,
 } from './parse-query.js';
 export {
   buildSnippets,

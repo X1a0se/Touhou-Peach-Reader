@@ -1,12 +1,13 @@
 import type { FilterKind } from '@tpr/core';
 import { resolveTags } from '@tpr/core';
 import { Button, EmptyState, HighlightedText, Panel, SectionHeading, cn } from '@tpr/ui';
-import { useEffect } from 'react';
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { useSearch } from '../search/useSearch.js';
+import { applyTagSuggestion, computeTagSuggestions, type TagSuggestion } from '../search/suggest.js';
 
 const FILTERS: ReadonlyArray<{ value: FilterKind; label: string }> = [
   { value: 'all', label: '全部' },
@@ -37,6 +38,10 @@ export function SearchPage() {
   const search = useSearch(services, libraryStatus === 'ready');
   const [params, setParams] = useSearchParams();
   const queryParam = params.get('q') ?? '';
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [caret, setCaret] = useState(0);
+  const [focused, setFocused] = useState(false);
+  const [active, setActive] = useState(0);
 
   // 详情页的标签/作者链接用 /search?q=名字 跳进来（Goal 5）
   useEffect(() => {
@@ -48,6 +53,45 @@ export function SearchPage() {
     setParams(value ? { q: value } : {}, { replace: true });
   };
 
+  const suggestion = useMemo(
+    () => computeTagSuggestions(search.query, caret, snapshot?.tags ?? []),
+    [search.query, caret, snapshot],
+  );
+  const open = focused && suggestion !== null;
+  const activeIndex = suggestion ? Math.min(active, suggestion.items.length - 1) : 0;
+
+  const applySuggestion = (item: TagSuggestion) => {
+    if (!suggestion) return;
+    const next = applyTagSuggestion(search.query, caret, suggestion, item.name);
+    changeQuery(next.query);
+    setActive(0);
+    requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(next.caret, next.caret);
+      setCaret(next.caret);
+    });
+  };
+
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!open || !suggestion) return;
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      setActive((value) => (value + 1) % suggestion.items.length);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActive((value) => (value - 1 + suggestion.items.length) % suggestion.items.length);
+    } else if (event.key === 'Enter') {
+      const item = suggestion.items[activeIndex];
+      if (!item) return;
+      event.preventDefault();
+      applySuggestion(item);
+    } else if (event.key === 'Escape') {
+      setFocused(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-5">
       <SectionHeading
@@ -57,15 +101,55 @@ export function SearchPage() {
       />
 
       <Panel className="p-4">
-        <input
-          // biome-ignore lint/a11y/noAutofocus: 搜索页的主输入框
-          autoFocus
-          value={search.query}
-          onChange={(event) => changeQuery(event.target.value)}
-          placeholder="标题、正文、作者、标签…（支持 #已完结 #短篇文 #标签名）"
-          aria-label="搜索关键词"
-          className="w-full rounded-lg border border-border bg-surface/60 px-4 py-2.5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-accent focus:ring-2 focus:ring-[var(--ring)]"
-        />
+        <div className="relative">
+          <input
+            // biome-ignore lint/a11y/noAutofocus: 搜索页的主输入框
+            autoFocus
+            ref={inputRef}
+            value={search.query}
+            onChange={(event) => {
+              changeQuery(event.target.value);
+              setCaret(event.target.selectionStart ?? event.target.value.length);
+            }}
+            onKeyDown={onKeyDown}
+            onKeyUp={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+            onClick={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
+            onFocus={() => setFocused(true)}
+            onBlur={() => window.setTimeout(() => setFocused(false), 120)}
+            placeholder="标题、正文、作者、标签…（输入 # 可联想标签）"
+            aria-label="搜索关键词"
+            aria-autocomplete="list"
+            aria-expanded={open}
+            aria-controls="search-tag-suggestions"
+            className="w-full rounded-lg border border-border bg-surface/60 px-4 py-2.5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-accent focus:ring-2 focus:ring-[var(--ring)]"
+          />
+          {open && suggestion ? (
+            <div
+              id="search-tag-suggestions"
+              role="listbox"
+              aria-label="标签联想"
+              className="absolute inset-x-0 top-full z-20 mt-1 overflow-hidden rounded-lg border border-border bg-background shadow-xl"
+            >
+              {suggestion.items.map((item, index) => (
+                <button
+                  key={`${item.category}:${item.name}`}
+                  type="button"
+                  role="option"
+                  aria-selected={index === activeIndex}
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => applySuggestion(item)}
+                  className={cn(
+                    'flex w-full items-center gap-2 px-3 py-2 text-left text-sm',
+                    index === activeIndex ? 'bg-accent-soft text-accent' : 'hover:bg-surface-strong',
+                  )}
+                >
+                  <span className="font-medium">#{item.name}</span>
+                  <span className="ml-auto text-[0.7rem] text-muted-foreground">{item.hint}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+        </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {FILTERS.map((item) => (
             <Button

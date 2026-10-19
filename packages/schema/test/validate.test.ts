@@ -66,6 +66,20 @@ describe('validateDatabase', () => {
     expect(codesOf(result.warnings)).toContain('W_DANGLING_AUTHOR');
   });
 
+  it('系列译者引用不存在只是 warning', () => {
+    const db = makeDatabase();
+    const series = db.series[0];
+    if (!series) throw new Error('fixture 缺系列');
+    series.translatorIds = ['p_0000000000ff'];
+
+    const result = validateDatabase(db);
+    expect(result.ok).toBe(true);
+    const warning = result.warnings.find(
+      (item) => item.code === 'W_DANGLING_AUTHOR' && item.field === 'translatorIds',
+    );
+    expect(warning).toBeTruthy();
+  });
+
   it('正文文件路径不符合约定是 error', () => {
     const article = makeArticle({ content: { file: 'articles/wrong-name.md' } });
     const db = makeDatabase({ articles: [article], series: [] });

@@ -49,6 +49,7 @@ export interface ArticleView {
 export interface SeriesView {
   series: Series;
   authors: PersonRef[];
+  translators: PersonRef[];
   characterTags: TagRef[];
   plotTags: TagRef[];
   cover: ImageRef | null;
@@ -149,6 +150,7 @@ export function getSeriesView(snapshot: DBSnapshot, id: string, opts: ViewOption
   return {
     series,
     authors: compact(series.authorIds.map((authorId) => personRef(snapshot, authorId))),
+    translators: compact(series.translatorIds.map((authorId) => personRef(snapshot, authorId))),
     characterTags: resolveTags(snapshot, series.characterTagIds),
     plotTags: resolveTags(snapshot, series.plotTagIds),
     cover: series.coverImageId ? resolveImageRef(snapshot, opts, series.coverImageId) : null,

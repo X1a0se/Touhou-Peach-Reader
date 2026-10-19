@@ -93,6 +93,7 @@ export const seriesSchema = z.object({
   status: seriesStatusSchema,
   articleIds: z.array(articleId).default([]),
   authorIds: z.array(authorId).default([]),
+  translatorIds: z.array(authorId).default([]),
   characterTagIds: z.array(tagId).default([]),
   plotTagIds: z.array(tagId).default([]),
   coverImageId: imageId.optional(),

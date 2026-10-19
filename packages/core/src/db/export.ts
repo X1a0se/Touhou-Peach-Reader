@@ -89,6 +89,7 @@ export function selectSubset(
   }
   for (const item of series) {
     for (const id of item.authorIds ?? []) authorIds.add(id);
+    for (const id of item.translatorIds ?? []) authorIds.add(id);
     for (const id of item.characterTagIds ?? []) tagIds.add(id);
     for (const id of item.plotTagIds ?? []) tagIds.add(id);
     if (item.coverImageId !== undefined) imageIds.add(item.coverImageId);

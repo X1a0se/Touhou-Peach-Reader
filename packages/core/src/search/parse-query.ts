@@ -31,6 +31,19 @@ const VIRTUAL_ALIASES: Record<string, string> = {
   系列: 'v:series-entry',
 };
 
+export interface VirtualTagLabel {
+  readonly name: string;
+  readonly description: string;
+}
+
+/** 搜索框 `#` 联想的虚拟标签（显示用，顺序即推荐顺序） */
+export const VIRTUAL_TAG_LABELS: readonly VirtualTagLabel[] = [
+  { name: '已完结', description: '系列已完结' },
+  { name: '连载中', description: '系列连载中' },
+  { name: '短篇文', description: '只看短篇' },
+  { name: '系列文', description: '只看系列条目' },
+];
+
 /** 归一化标签名：NFKC + 小写 + 去首尾空白（与 ids.normalizeName 对齐） */
 export function normalizeTagName(name: string): string {
   return name.normalize('NFKC').toLowerCase().replace(/[\s\u3000]+/gu, ' ').trim();

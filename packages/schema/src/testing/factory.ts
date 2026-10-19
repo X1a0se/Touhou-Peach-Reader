@@ -76,6 +76,7 @@ export function makeSeries(over: Partial<Series> = {}): Series {
     status: 'ongoing',
     articleIds: [],
     authorIds: [],
+    translatorIds: [],
     characterTagIds: [],
     plotTagIds: [],
     createdAt: FIXED_TIME,
