@@ -7,6 +7,7 @@ const NAV = [
   { to: '/search', label: '搜索' },
   { to: '/featured/short', label: '精选短文' },
   { to: '/featured/series', label: '精选系列' },
+  { to: '/favorites', label: '收藏' },
 ];
 
 export function Layout() {

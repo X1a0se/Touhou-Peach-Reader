@@ -5,6 +5,7 @@ export const DB_LAYOUT = {
   workspaceDir: 'workspace',
   importsDir: 'imports',
   exportsDir: 'exports',
+  userDir: 'user',
   activeFile: 'active.json',
 } as const;
 
@@ -19,6 +20,10 @@ export interface ActivePointer {
 
 export function activePath(platform: Platform): string {
   return platform.paths.join(platform.paths.dataDir, DB_LAYOUT.activeFile);
+}
+
+export function userPath(platform: Platform, databaseId: string): string {
+  return platform.paths.join(platform.paths.dataDir, DB_LAYOUT.userDir, `${databaseId}.json`);
 }
 
 export function workspacePath(platform: Platform, databaseId: string): string {

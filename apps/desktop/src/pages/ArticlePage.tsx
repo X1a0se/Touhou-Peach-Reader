@@ -1,6 +1,7 @@
 import { getArticleView, type ImageRef } from '@tpr/core';
 import { Markdown, cn } from '@tpr/ui';
 import { useEffect, useState } from 'react';
+import { FavoriteButton } from '../components/FavoriteButton.js';
 import { Link, useParams } from 'react-router';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
@@ -127,7 +128,10 @@ export function ArticlePage() {
           <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
             {TYPE_LABEL[article.type] ?? article.type}
           </span>
-          <span className="ml-auto font-mono text-[10px] text-muted-foreground">{article.id}</span>
+          <span className="ml-auto flex items-center gap-2">
+            <FavoriteButton kind="article" id={article.id} />
+            <span className="font-mono text-[10px] text-muted-foreground">{article.id}</span>
+          </span>
         </div>
         <h1 className="text-2xl font-semibold text-foreground">{article.title}</h1>
         {article.summary ? <p className="text-sm leading-6 text-muted-foreground">{article.summary}</p> : null}

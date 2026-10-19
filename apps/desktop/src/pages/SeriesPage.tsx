@@ -1,5 +1,6 @@
 import { getSeriesView } from '@tpr/core';
 import { cn } from '@tpr/ui';
+import { FavoriteButton } from '../components/FavoriteButton.js';
 import { Link, useParams } from 'react-router';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
@@ -65,7 +66,10 @@ export function SeriesPage() {
           <span className={cn('rounded-full border px-2 py-0.5', STATUS_STYLE[series.status] ?? 'border-border')}>
             {STATUS_LABEL[series.status] ?? series.status}
           </span>
-          <span className="ml-auto font-mono text-[10px] text-muted-foreground">{series.id}</span>
+          <span className="ml-auto flex items-center gap-2">
+            <FavoriteButton kind="series" id={series.id} />
+            <span className="font-mono text-[10px] text-muted-foreground">{series.id}</span>
+          </span>
         </div>
         <h1 className="text-2xl font-semibold text-foreground">{series.title}</h1>
         {series.summary ? <p className="text-sm leading-6 text-muted-foreground">{series.summary}</p> : null}

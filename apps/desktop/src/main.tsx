@@ -3,6 +3,7 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router';
 import { ServicesProvider } from './context.js';
+import { FavoritesProvider } from './favorites/FavoritesProvider.js';
 import { LibraryProvider } from './library/LibraryProvider.js';
 import { createPlatform } from './platform/index.js';
 import { router } from './router.js';
@@ -23,7 +24,9 @@ createRoot(rootElement).render(
   <StrictMode>
     <ServicesProvider value={services}>
       <LibraryProvider>
-        <RouterProvider router={router} />
+        <FavoritesProvider>
+          <RouterProvider router={router} />
+        </FavoritesProvider>
       </LibraryProvider>
     </ServicesProvider>
   </StrictMode>,

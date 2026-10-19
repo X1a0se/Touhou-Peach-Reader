@@ -1935,6 +1935,15 @@ Goal 6 追加记录：
 - 真机 11 项断言全过（导入、短篇页全部推荐语与推荐人、失效降级、卡片跳转、系列页过滤与推荐人、进入系列详情），截图 `.tmp/goal6-short.png` / `.tmp/goal6-series.png`。
 - 教训：CDP 里直接调 `window.__tpr.library.importBytes` 不会刷新 `LibraryProvider` 的 snapshot，验证 UI 前必须 `Page.reload` 让 Provider 从磁盘 `restore()`。
 
+Goal 7 追加记录：
+
+- **收藏是用户态、可丢的数据**：存 `user/{databaseId}.json` 的 `favorites.articles` / `favorites.series`（新收藏 `unshift` 到最前，即最近收藏在最上），不写进数据库包、不参与导出；`createFavorites(platform, () => library.current()?.databaseId ?? null)` 在没有当前库时静默不写盘。
+- **失效选择"标记"而不是"清理"**：`Favorites.list(snapshot)` 只做解析，目标不在 `maps` 里就 `stale: true`、`to: null`，UI 显示灰色「已失效」+「目标已从当前数据库中删除，可移出收藏夹」，id 仍留在文件里——数据库被重新导入后目标可能回来，清理就不可逆了。
+- **读写都要 `ensureLoaded()`**：按 `databaseId` 懒加载、只读一次；`toggle/remove` 前先确保已读盘，避免"启动瞬间点收藏"把文件覆盖成空。
+- 桌面端：`FavoritesProvider` 挂在 `LibraryProvider` 内（`main.tsx` 顺序 ServicesProvider → LibraryProvider → FavoritesProvider → RouterProvider），详情页 `FavoriteButton` 用 `aria-pressed` + ★/☆，收藏页两个 tab 各自显示计数，取消收藏即时生效。
+- 真机 9 项断言全过（按钮状态、收藏落盘、重载后仍在、取消后清空、系列 tab、失效标记不白屏），并**真实重启 `tauri dev` 进程**后确认收藏仍在（截图 `.tmp/goal7-favorites.png`）。
+- 教训：CDP 里直接改 `user/*.json` 后必须 `Page.reload`，Provider 只在挂载/换库时读盘。
+
 ---
 
 ## 附：文档自检

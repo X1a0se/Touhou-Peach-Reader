@@ -1,5 +1,6 @@
 import type { Platform } from '@tpr/platform';
 import { createLibrary, type Library } from './db/library.js';
+import { createFavorites, type Favorites } from './favorites.js';
 import { createSearchService, type SearchService } from './search/service.js';
 import { getName, getVersion } from './version.js';
 
@@ -16,6 +17,7 @@ export interface Services {
   readonly platform: Platform;
   readonly app: AppService;
   readonly library: Library;
+  readonly favorites: Favorites;
   readonly search: SearchService;
 }
 
@@ -25,6 +27,7 @@ export function createServices(platform: Platform): Services {
     platform,
     app: { getName, getVersion },
     library,
+    favorites: createFavorites(platform, () => library.current()?.databaseId ?? null),
     search: createSearchService(library),
   };
 }
