@@ -1926,6 +1926,15 @@ Goal 5 追加记录：
 - **详情页不额外读库**：`getArticleView` / `getSeriesView` 是 `DBSnapshot` 上的纯函数（§10.3），正文才走 `Library.readContent`；系列目录严格按 `series.articleIds` 顺序，缺 id 跳过。
 - 夹具升级：`packages/platform/scripts/make-fixture.mjs` 现在生成 3 篇文章（短篇 + 系列两篇，`articleIds` 故意倒序）并带 `sourceUrl`，用来同时验证"排序"和"原出处"。真机 17 项断言全过，截图 `.tmp/goal5-article.png` / `.tmp/goal5-series.png`。
 
+Goal 6 追加记录：
+
+- **精选卡片是纯函数**：`getFeaturedCards(snapshot, opts, 'short' | 'series')` 只读 `snapshot.featured`，把目标解析成 `FeaturedCard`；目标缺失时保留卡片、`status: 'missing'` 并给出中文 `reason`，页面单独渲染「条目已失效（N）」区块，不白屏也不丢推荐语。
+- **精选按目标类型分页**：短篇页只收 `targetType === 'article'`，系列页只收 `'series'`；系列条目（`type === 'series-entry'`）出现在短篇页时提示"请到精选系列中查看"，但仍给 `to` 允许用户点进去。
+- **`resolveImageRef` 从 `view.ts` 导出**：精选与详情页共用同一套图片绝对路径解析（`join(dir, image.file)`），避免两处各写一遍。
+- 夹具的 `featured.json` 扩到 3 条（短篇 2 条推荐语含署名、系列 1 条、故意指向不存在文章的 1 条），`counts.featured = 3`；封面改成脚本内生成的合法 160×224 纯色 PNG（`node:zlib` 手写 IHDR/IDAT/IEND），用来验证 `asset:` 协议真能加载。
+- 真机 11 项断言全过（导入、短篇页全部推荐语与推荐人、失效降级、卡片跳转、系列页过滤与推荐人、进入系列详情），截图 `.tmp/goal6-short.png` / `.tmp/goal6-series.png`。
+- 教训：CDP 里直接调 `window.__tpr.library.importBytes` 不会刷新 `LibraryProvider` 的 snapshot，验证 UI 前必须 `Page.reload` 让 Provider 从磁盘 `restore()`。
+
 ---
 
 ## 附：文档自检

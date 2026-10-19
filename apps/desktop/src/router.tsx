@@ -1,5 +1,6 @@
 import { createHashRouter } from 'react-router';
 import { ArticlePage } from './pages/ArticlePage.js';
+import { FeaturedPage } from './pages/FeaturedPage.js';
 import { HomePage } from './pages/HomePage.js';
 import { Layout } from './pages/Layout.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
@@ -17,6 +18,8 @@ export const router = createHashRouter([
     children: [
       { index: true, element: <HomePage /> },
       { path: 'search', element: <SearchPage /> },
+      { path: 'featured/short', element: <FeaturedPage page="short" /> },
+      { path: 'featured/series', element: <FeaturedPage page="series" /> },
       { path: 'article/:id', element: <ArticlePage /> },
       { path: 'series/:id', element: <SeriesPage /> },
       { path: '*', element: <NotFoundPage /> },

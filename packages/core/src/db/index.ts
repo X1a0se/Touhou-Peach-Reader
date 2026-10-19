@@ -1,5 +1,6 @@
 export * from './content-store.js';
 export * from './export.js';
+export * from './featured.js';
 export * from './import.js';
 export * from './layout.js';
 export * from './library.js';

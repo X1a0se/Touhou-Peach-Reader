@@ -66,7 +66,7 @@ const tagRef = (snapshot: DBSnapshot, id: string): TagRef | null => {
   return tag ? { id: tag.id, name: tag.name, category: tag.category } : null;
 };
 
-const imageRef = (snapshot: DBSnapshot, dir: string, id: string, join: (...parts: string[]) => string): ImageRef | null => {
+export function resolveImageRef(snapshot: DBSnapshot, opts: ViewOptions, id: string): ImageRef | null {
   const image = snapshot.maps.images.get(id);
   if (!image) return null;
   return {
@@ -74,9 +74,9 @@ const imageRef = (snapshot: DBSnapshot, dir: string, id: string, join: (...parts
     file: image.file,
     kind: image.kind,
     caption: image.caption ?? null,
-    path: join(dir, image.file),
+    path: opts.join(opts.dir, image.file),
   };
-};
+}
 
 const compact = <T>(values: ReadonlyArray<T | null>): T[] => values.filter((value): value is T => value !== null);
 
@@ -102,9 +102,9 @@ export function getArticleView(snapshot: DBSnapshot, id: string, opts: ViewOptio
     series: series
       ? { id: series.id, title: series.title, status: series.status, index: position >= 0 ? position + 1 : null }
       : null,
-    cover: article.coverImageId ? imageRef(snapshot, opts.dir, article.coverImageId, opts.join) : null,
+    cover: article.coverImageId ? resolveImageRef(snapshot, opts, article.coverImageId) : null,
     illustrations: compact(
-      (article.illustrationImageIds ?? []).map((imageId) => imageRef(snapshot, opts.dir, imageId, opts.join)),
+      (article.illustrationImageIds ?? []).map((imageId) => resolveImageRef(snapshot, opts, imageId)),
     ),
     sourceUrl: article.sourceUrl ?? null,
   };
@@ -122,7 +122,7 @@ export function getSeriesView(snapshot: DBSnapshot, id: string, opts: ViewOption
     authors: compact(series.authorIds.map((authorId) => personRef(snapshot, authorId))),
     characterTags: compact(series.characterTagIds.map((tagId) => tagRef(snapshot, tagId))),
     plotTags: compact(series.plotTagIds.map((tagId) => tagRef(snapshot, tagId))),
-    cover: series.coverImageId ? imageRef(snapshot, opts.dir, series.coverImageId, opts.join) : null,
+    cover: series.coverImageId ? resolveImageRef(snapshot, opts, series.coverImageId) : null,
     articles,
     sourceUrl: series.sourceUrl ?? null,
   };
