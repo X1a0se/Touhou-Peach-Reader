@@ -1697,7 +1697,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-zip = "9"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 walkdir = "2"
 ```
 
@@ -1730,9 +1730,12 @@ async fn zip_extract_all(app: tauri::AppHandle, zip_path: String, dest_dir: Stri
 | `fs_exists` / `fs_stat` / `fs_list_dir` / `fs_mkdir` / `fs_remove` / `fs_rename` / `fs_copy` | 同名方法 | 全部先过 `ensure_within(&app_data_dir, path)` |
 | `zip_extract_all` | `IZip.extractAll` | 用 `zip` crate 逐条流式复制（64 KB 缓冲）；拒 symlink、拒 `..`、限额（§5.5）；返回 `{entries, bytes, rejected}` |
 | `zip_create_from_dir` | `IZip.createFromDir` | `walkdir` 遍历 + `ZipWriter` DEFLATE；`manifest.json` 最后写 |
+| `save_export` | `apps/desktop/src/platform/files.ts` 的保存按钮 | **唯一豁免 app data 限制的命令**：目标路径来自系统保存对话框，只校验 `.tpr` 后缀、绝对路径、父目录存在；内部仍写 `*.tmp` 再 `rename` |
 | `http_*` | — | **不实现**：网络走 JS `fetch`（见 14.5），避免把 reqwest/TLS 拖进首次编译 |
 
 - 除 `zip_*` 外，其余命令都在 `spawn_blocking` 里跑，避免阻塞 async runtime。
+- `save_export` 是唯一的"写 app data 之外"的命令，因为导出必须落到用户选的位置；它不接受任意调用方，写之前要求父目录已存在且后缀为 `.tpr`。
+- zip 9 的 API 细节（实测）：`entry.name()` 返回 `Result<Cow<str>, ZipError>`；`ZipFile<'_, R>` 带泛型参数，辅助函数要写成 `fn is_symlink<R: Read + ?Sized>(f: &ZipFile<'_, R>)`。
 - 错误统一 `Err("ECODE: 可读信息")` 字符串，TS 侧用一个 `mapNativeError()` 转成 `PlatformError`（§5.3）。改错误文案不会破坏分类，因为分类只看 `ECODE` 前缀。
 
 ### 14.5 网络为什么不进 Rust
@@ -1909,6 +1912,15 @@ pnpm --filter @tpr/desktop tauri build --debug   # 可选：确认 Rust 侧可�
 | 4 根配置 | TS 7 移除 `baseUrl`，首次 `typecheck` 报 `TS5102` | 删掉各包 `baseUrl`/`paths`，靠 `workspace:` 链接 + `exports` 解析（§2.3-5） |
 | 9 `tauri init` | 手写配置；首次 `cargo build` 报 "`protocol-asset` feature 缺失" | `tauri = { version = "2", features = ["protocol-asset"] }`（`assetProtocol.enable: true` 的硬要求） |
 | 其余 | 照计划 | typecheck 5 包全绿、单测 34 个全绿、`build:web` 154 ms、边界检查全绿 |
+
+Goal 2–3 追加记录（同日完成）：
+
+- **`images.json` 是 `/plan` 目录树漏掉的集合**：`ImageAsset` 的 `caption`/`kind` 需要地方存放，`tpr` 里必须有 `images.json`（§7.2）。
+- **`.tpr` 没有 `series.json`**：系列只有 `series/{id}.json`，`readDatabaseDir` 首版误读了根级 `series.json`，已删。
+- **core 不依赖 zod**：`read.ts` 用结构化的 `SchemaLike<T>` 接 schema 包，保持 core 只依赖 `@tpr/platform` + `@tpr/schema` 的类型层。
+- **zip 9 API 与旧版不同**（见 §14.4 注），两个编译错误按注中写法修复。
+- **桌面端 E2E 自动化**：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 启动 `tauri dev`，用 CDP `Runtime.evaluate` 在页面里合成 `drop` 事件（把夹具 `.tpr` 塞进 `DataTransfer`）→ 真实走通 `importBytes` → Rust `zip_extract_all` + `fs_*` → 落盘；随后 `Page.reload` 验证 `restore()` 从磁盘读回，`library.export({all:true})` 产出 2983 字节 ZIP 并 `save_export` 到 %TEMP%。夹具由 `packages/platform/scripts/make-fixture.mjs` 生成。
+- 结论：**Goal 3 的导入/导出/持久化在真实 Tauri 壳里跑通**，不再是内存桩。
 
 ---
 

@@ -1,7 +1,7 @@
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { appDataDir } from '@tauri-apps/api/path';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { PlatformError } from '@tpr/platform';
+import { PlatformError, mapNativeError } from '@tpr/platform';
 import type {
   DirEntry,
   FileStat,
@@ -9,6 +9,7 @@ import type {
   IZip,
   INetwork,
   Platform,
+  RejectedEntry,
   ZipCreateResult,
   ZipExtractResult,
 } from '@tpr/platform';
@@ -20,54 +21,80 @@ import type {
  * 文件系统与 ZIP 在 Goal 3 换成 Rust 命令（自研命令统一校验"必须在 app data 目录内"）。
  */
 
-const notYet = (what: string): Promise<never> =>
-  Promise.reject(new PlatformError('ENOT_IMPLEMENTED', `${what} 将在 Goal 3 用 Rust 命令实现`));
+/** 自研命令统一返回 `Err("ECODE: ...")`，这里统一转成 PlatformError。 */
+const call = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
+  try {
+    return await invoke<T>(command, args);
+  } catch (error) {
+    throw mapNativeError(error);
+  }
+};
 
 class TauriFileSystem implements IFileSystem {
-  readText(): Promise<string> {
-    return notYet('fs.readText');
+  async readText(path: string): Promise<string> {
+    return call('fs_read_text', { path });
   }
-  readBytes(): Promise<Uint8Array> {
-    return notYet('fs.readBytes');
+  async readBytes(path: string): Promise<Uint8Array> {
+    const data = await call<number[]>('fs_read_bytes', { path });
+    return Uint8Array.from(data);
   }
-  writeText(): Promise<void> {
-    return notYet('fs.writeText');
+  async writeText(path: string, text: string): Promise<void> {
+    return call('fs_write_text', { path, text });
   }
-  writeBytes(): Promise<void> {
-    return notYet('fs.writeBytes');
+  async writeBytes(path: string, bytes: Uint8Array): Promise<void> {
+    return call('fs_write_bytes', { path, bytes: Array.from(bytes) });
   }
-  exists(): Promise<boolean> {
-    return notYet('fs.exists');
+  async exists(path: string): Promise<boolean> {
+    return call('fs_exists', { path });
   }
-  stat(): Promise<FileStat> {
-    return notYet('fs.stat');
+  async stat(path: string): Promise<FileStat> {
+    return call('fs_stat', { path });
   }
-  listDir(): Promise<DirEntry[]> {
-    return notYet('fs.listDir');
+  async listDir(path: string): Promise<DirEntry[]> {
+    return call('fs_list_dir', { path });
   }
-  mkdir(): Promise<void> {
-    return notYet('fs.mkdir');
+  async mkdir(path: string): Promise<void> {
+    return call('fs_mkdir', { path });
   }
-  remove(): Promise<void> {
-    return notYet('fs.remove');
+  async remove(path: string, opts?: { recursive?: boolean }): Promise<void> {
+    return call('fs_remove', { path, recursive: opts?.recursive === true });
   }
-  rename(): Promise<void> {
-    return notYet('fs.rename');
+  async rename(from: string, to: string): Promise<void> {
+    return call('fs_rename', { from, to });
   }
-  copy(): Promise<void> {
-    return notYet('fs.copy');
+  async copy(from: string, to: string): Promise<void> {
+    return call('fs_copy', { from, to });
   }
 }
 
 class TauriZip implements IZip {
-  extractAll(): Promise<ZipExtractResult> {
-    return notYet('zip.extractAll');
+  constructor(
+    private readonly fs: IFileSystem,
+    private readonly dataDir: string,
+    private readonly join: (...parts: string[]) => string,
+  ) {}
+
+  async extractAll(zipPath: string, destDir: string): Promise<ZipExtractResult> {
+    const result = await call<{ entries: number; bytes: number; rejected: RejectedEntry[] }>(
+      'zip_extract_all',
+      { zipPath, destDir },
+    );
+    return result;
   }
-  extractBytes(): Promise<ZipExtractResult> {
-    return notYet('zip.extractBytes');
+
+  /** 字节入口：先落到 app data 下的临时 .tpr，再交给 Rust 流式解压。 */
+  async extractBytes(bytes: Uint8Array, destDir: string): Promise<ZipExtractResult> {
+    const tmp = this.join(this.dataDir, 'imports', `incoming-${Date.now()}.tpr`);
+    await this.fs.writeBytes(tmp, bytes);
+    try {
+      return await this.extractAll(tmp, destDir);
+    } finally {
+      await this.fs.remove(tmp).catch(() => undefined);
+    }
   }
-  createFromDir(): Promise<ZipCreateResult> {
-    return notYet('zip.createFromDir');
+
+  async createFromDir(dirPath: string, zipPath: string, opts?: { order?: string[] }): Promise<ZipCreateResult> {
+    return call('zip_create_from_dir', { dirPath, zipPath, order: opts?.order ?? ['manifest.json'] });
   }
 }
 
@@ -147,11 +174,13 @@ const network: INetwork = {
 export async function createTauriPlatform(): Promise<Platform> {
   const dataDir = await appDataDir();
   const tools = makePathTools(dataDir);
+  const fs = new TauriFileSystem();
+  const zip = new TauriZip(fs, dataDir, tools.join);
 
   return {
     kind: 'tauri',
-    fs: new TauriFileSystem(),
-    zip: new TauriZip(),
+    fs,
+    zip,
     paths: {
       dataDir,
       join: tools.join,

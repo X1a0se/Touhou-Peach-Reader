@@ -1,0 +1,141 @@
+import type { DBSnapshot, Services } from '@tpr/core';
+import type { Issue } from '@tpr/schema';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { onTauriDrop, pickTprFile, readFileBytes, saveTprFile } from '../platform/files.js';
+
+export type LibraryStatus = 'loading' | 'empty' | 'ready';
+
+export interface LibraryState {
+  status: LibraryStatus;
+  snapshot: DBSnapshot | null;
+  busy: boolean;
+  message: string | null;
+  error: string | null;
+  warnings: Issue[];
+  importBytes(bytes: Uint8Array): Promise<void>;
+  importPath(path: string): Promise<void>;
+  exportAll(): Promise<void>;
+  pickAndImport(): Promise<void>;
+}
+
+const describe = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+export function useLibrary(services: Services): LibraryState {
+  const [status, setStatus] = useState<LibraryStatus>('loading');
+  const [snapshot, setSnapshot] = useState<DBSnapshot | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<Issue[]>([]);
+  const imported = useRef(false);
+
+  // 启动即恢复上次打开的库：这是"重启应用后数据还在"的验收路径
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const restored = await services.library.restore();
+        if (cancelled) return;
+        setSnapshot(restored);
+        setStatus(restored ? 'ready' : 'empty');
+      } catch (cause) {
+        if (cancelled) return;
+        setError(describe(cause));
+        setStatus('empty');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [services]);
+
+  const importBytes = useCallback(
+    async (bytes: Uint8Array) => {
+      if (busy) return;
+      setBusy(true);
+      setError(null);
+      setMessage(null);
+      try {
+        const outcome = await services.library.importBytes(bytes);
+        imported.current = true;
+        setSnapshot(outcome.snapshot);
+        setWarnings([...outcome.report.warnings]);
+        setStatus('ready');
+        setMessage(
+          `已导入「${outcome.snapshot.manifest.name}」：${outcome.snapshot.articles.length} 篇文章、${outcome.snapshot.series.length} 个系列`,
+        );
+      } catch (cause) {
+        setError(describe(cause));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, services],
+  );
+
+  const importPath = useCallback(
+    async (path: string) => {
+      if (busy) return;
+      setBusy(true);
+      setError(null);
+      setMessage(null);
+      try {
+        const outcome = await services.library.importZip(path);
+        imported.current = true;
+        setSnapshot(outcome.snapshot);
+        setWarnings([...outcome.report.warnings]);
+        setStatus('ready');
+        setMessage(
+          `已导入「${outcome.snapshot.manifest.name}」：${outcome.snapshot.articles.length} 篇文章、${outcome.snapshot.series.length} 个系列`,
+        );
+      } catch (cause) {
+        setError(describe(cause));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, services],
+  );
+
+  const pickAndImport = useCallback(async () => {
+    const path = await pickTprFile();
+    if (path) await importPath(path);
+  }, [importPath]);
+
+  const exportAll = useCallback(async () => {
+    if (!snapshot) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await services.library.export({ all: true });
+      const saved = await saveTprFile(result.fileName, result.bytes);
+      setWarnings((prev) => [...prev, ...result.warnings]);
+      setMessage(saved ? `已导出到 ${saved}` : '已生成导出文件（未保存）');
+    } catch (cause) {
+      setError(describe(cause));
+    } finally {
+      setBusy(false);
+    }
+  }, [services, snapshot]);
+
+  return {
+    status,
+    snapshot,
+    busy,
+    message,
+    error,
+    warnings,
+    importBytes,
+    importPath,
+    exportAll,
+    pickAndImport,
+  };
+}
+
+/** 桌面端原生拖拽 → 路径导入（Tauri 拦截了 HTML5 drop）。 */
+export function useNativeDrop(onPaths: (paths: string[]) => void): void {
+  useEffect(() => onTauriDrop(onPaths), [onPaths]);
+}
+
+export { readFileBytes };
