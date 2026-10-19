@@ -1984,6 +1984,15 @@ Goal 11 追加记录：
 - 单测 `test/github.test.ts`（9 个）+ `test/settings.test.ts`（6 个），core 76 passed；真机 CDP 13 项断言全过，其中真实调用 GitHub API 两次（`tauri-apps/tauri` 检查更新、`cli/cli` 解析 release 并验证 `.zip` 兜底），下载链路用注入的假 network 验证镜像前缀与导入闭环。
 - 截图：`.tmp/goal11-settings.png`（深色设置页）、`.tmp/goal11-credits.png`、`.tmp/goal11-import.png`。
 
+Goal 12 追加记录：
+
+- **路由懒加载**：除首页/布局/404 外全部 `lazy(() => import(...))`，`Layout` 的 `<Outlet />` 包 `Suspense`。入口 chunk 从 639 kB 降到 223.84 kB，`build:web` 的 >500 kB 警告消失（编辑器 27.68 kB、合并 7.46 kB 等按需加载）。
+- **移动端适配文档**：`packages/platform/docs/mobile-adaptation.md`（两条路线对比、六个接口逐项实现要点、路由映射、迁移步骤、已知限制）。
+- **打包**：`corepack pnpm tauri build` → `target/release/touhou-peach-reader.exe` + `bundle/nsis/Touhou Peach Reader_0.1.0_x64-setup.exe`（1.50 MiB，release 编译 2m42s；NSIS 与 nsis_tauri_utils 由 Tauri 自动下载）。
+- **产物验证**：直接运行 release exe（可执行文件与安装包同源）后，应用从 `%APPDATA%` 读回先前导入的夹具库，首页计数、文章正文/封面/作者别名/标签/外链、系列目录与外链均正常；截图 `.tmp/goal12-prod-home.png`、`.tmp/goal12-prod-article.png`、`.tmp/goal12-prod-body.png`、`.tmp/goal12-prod-series.png`。
+- **验收命令**：`node scripts/check-no-tauri.mjs`（core/ui/schema 无 Tauri API）与 `node scripts/check-boundaries.mjs` 均通过；`corepack pnpm check` = platform 7 + schema 23 + core 76 = 106 个测试。
+- **已知小坑**：release 版与 `tauri dev` 同时启动会因共用 WebView2 用户数据目录报 `HRESULT(0x8007139F)`；验证 release 前先关掉 dev 实例即可。
+
 ---
 
 ## 附：文档自检

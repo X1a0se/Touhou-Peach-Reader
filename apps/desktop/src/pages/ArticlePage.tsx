@@ -189,7 +189,7 @@ export function ArticlePage() {
         </p>
       ) : null}
 
-      {view.cover ? <CoverImage image={view.cover} toUrl={toUrl} className="max-h-96 w-full" /> : null}
+      {view.cover ? <CoverImage image={view.cover} toUrl={toUrl} className="h-56 w-40 self-start object-cover" /> : null}
 
       <section className="rounded-lg border border-border px-5 py-4">
         {bodyError ? (

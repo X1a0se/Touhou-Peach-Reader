@@ -1,22 +1,26 @@
+import { lazy } from 'react';
 import { createHashRouter } from 'react-router';
-import { ArticlePage } from './pages/ArticlePage.js';
-import { FavoritesPage } from './pages/FavoritesPage.js';
-import { EditorPage } from './pages/EditorPage.js';
-import { FeaturedPage } from './pages/FeaturedPage.js';
-import { CreditsPage } from './pages/CreditsPage.js';
 import { HomePage } from './pages/HomePage.js';
-import { ImportPage } from './pages/ImportPage.js';
 import { Layout } from './pages/Layout.js';
-import { MergePage } from './pages/MergePage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
-import { SearchPage } from './pages/SearchPage.js';
-import { SeriesPage } from './pages/SeriesPage.js';
-import { SettingsPage } from './pages/SettingsPage.js';
 
 /**
  * 路由表（design §13.3）：选 hash 而不是 history，生产环境的深链/刷新不依赖服务端 fallback。
- * 后续 Goal 会按设计表逐条补 /featured/*、/favorites、/editor…
+ *
+ * 除首屏（首页）外全部按路由懒加载：单个入口 chunk 从 640 kB 降到 200 kB 量级，
+ * 也让「编辑器 / 合并 / 设置」这类重页面只在真正进入时才解析。
  */
+const ArticlePage = lazy(() => import('./pages/ArticlePage.js').then((m) => ({ default: m.ArticlePage })));
+const CreditsPage = lazy(() => import('./pages/CreditsPage.js').then((m) => ({ default: m.CreditsPage })));
+const EditorPage = lazy(() => import('./pages/EditorPage.js').then((m) => ({ default: m.EditorPage })));
+const FavoritesPage = lazy(() => import('./pages/FavoritesPage.js').then((m) => ({ default: m.FavoritesPage })));
+const FeaturedPage = lazy(() => import('./pages/FeaturedPage.js').then((m) => ({ default: m.FeaturedPage })));
+const ImportPage = lazy(() => import('./pages/ImportPage.js').then((m) => ({ default: m.ImportPage })));
+const MergePage = lazy(() => import('./pages/MergePage.js').then((m) => ({ default: m.MergePage })));
+const SearchPage = lazy(() => import('./pages/SearchPage.js').then((m) => ({ default: m.SearchPage })));
+const SeriesPage = lazy(() => import('./pages/SeriesPage.js').then((m) => ({ default: m.SeriesPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage.js').then((m) => ({ default: m.SettingsPage })));
+
 export const router = createHashRouter([
   {
     path: '/',

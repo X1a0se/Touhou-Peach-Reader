@@ -1,4 +1,5 @@
 import { VersionBadge, cn } from '@tpr/ui';
+import { Suspense } from 'react';
 import { NavLink, Outlet } from 'react-router';
 import { useServices } from '../context.js';
 
@@ -48,7 +49,9 @@ export function Layout() {
         </nav>
       </header>
 
-      <Outlet />
+      <Suspense fallback={<p className="text-sm text-muted-foreground">载入中…</p>}>
+        <Outlet />
+      </Suspense>
 
       <footer className="mt-auto text-xs text-muted-foreground">
         数据目录由 <span className="font-mono">$APPDATA/com.touhou.peachreader</span> 决定；正文按需读取。
