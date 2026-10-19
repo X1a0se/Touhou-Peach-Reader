@@ -11,6 +11,17 @@ import { isTauri } from './index.js';
 
 export const TPR_FILTER = [{ name: '东方桃园数据库', extensions: ['tpr'] }];
 
+export const WALLPAPER_FILTER = [
+  { name: '图片（PNG / JPEG / WebP）', extensions: ['png', 'jpg', 'jpeg', 'webp'] },
+];
+
+/** 选一张壁纸；返回绝对路径，取消则 null（Goal 14）。 */
+export async function pickWallpaperFile(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const selected = await open({ multiple: false, directory: false, filters: WALLPAPER_FILTER });
+  return typeof selected === 'string' ? selected : null;
+}
+
 /** 选一个 .tpr；返回绝对路径，取消则 null。 */
 export async function pickTprFile(): Promise<string | null> {
   if (!isTauri()) return null;

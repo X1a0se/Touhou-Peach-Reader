@@ -1,19 +1,13 @@
-import type { AppSettings, Services, ThemeMode } from '@tpr/core';
+import type { AppSettings, Services, SettingsPatch, ThemeMode } from '@tpr/core';
+import { DEFAULT_SETTINGS } from '@tpr/core';
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
 import { useServices } from '../context.js';
 
 export interface SettingsState {
   settings: AppSettings;
   ready: boolean;
-  save(patch: Partial<AppSettings>): Promise<void>;
+  save(patch: SettingsPatch): Promise<void>;
 }
-
-const DEFAULT: AppSettings = {
-  theme: 'system',
-  language: 'zh-CN',
-  defaultSource: '',
-  mirrorPrefix: '',
-};
 
 const SettingsContext = createContext<SettingsState | null>(null);
 
@@ -28,9 +22,20 @@ export function resolveDark(theme: ThemeMode): boolean {
   return prefersDark();
 }
 
+/**
+ * 外观落到 <html>：`class="dark"` 控制明暗，`data-palette` 控制配色（design §13.1）。
+ * 两者都由 CSS token 消费，React 树不需要重渲染。
+ */
+function applyAppearance(theme: ThemeMode, palette: string): void {
+  const root = document.documentElement;
+  root.classList.toggle('dark', resolveDark(theme));
+  root.dataset['palette'] = palette;
+  root.style.colorScheme = resolveDark(theme) ? 'dark' : 'light';
+}
+
 export function SettingsProvider({ children }: { children: ReactNode }) {
   const services: Services = useServices();
-  const [settings, setSettings] = useState<AppSettings>(DEFAULT);
+  const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
@@ -47,16 +52,14 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-color-scheme: dark)');
-    const apply = (): void => {
-      document.documentElement.classList.toggle('dark', resolveDark(settings.theme));
-    };
+    const apply = (): void => applyAppearance(settings.theme, settings.palette);
     apply();
     if (settings.theme !== 'system') return;
     media.addEventListener('change', apply);
     return () => media.removeEventListener('change', apply);
-  }, [settings.theme]);
+  }, [settings.theme, settings.palette]);
 
-  const save = async (patch: Partial<AppSettings>): Promise<void> => {
+  const save = async (patch: SettingsPatch): Promise<void> => {
     const next = await services.settings.save(patch);
     setSettings(next);
   };

@@ -1,5 +1,5 @@
 import type { GitHubError } from '@tpr/core';
-import { DropZone } from '@tpr/ui';
+import { Button, DropZone, Panel, SectionHeading } from '@tpr/ui';
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { useServices } from '../context.js';
@@ -54,7 +54,9 @@ export function ImportPage() {
       const result = await services.github.download(source.trim(), {
         onProgress: (received, total) => {
           const mb = (received / 1024 / 1024).toFixed(1);
-          setProgress(total ? `正在下载 ${mb} / ${(total / 1024 / 1024).toFixed(1)} MB…` : `正在下载 ${mb} MB…`);
+          setProgress(
+            total ? `正在下载 ${mb} / ${(total / 1024 / 1024).toFixed(1)} MB…` : `正在下载 ${mb} MB…`,
+          );
         },
       });
       setProgress(`已下载 ${result.fileName}（${result.tag}），正在导入…`);
@@ -67,40 +69,41 @@ export function ImportPage() {
   };
 
   return (
-    <section className="flex flex-col gap-6">
-      <div>
-        <h2 className="text-xl font-semibold">导入数据库</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          拖入 `.tpr` 包、从本地选择，或填 GitHub 仓库 / release 地址在线下载。
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <SectionHeading
+        eyebrow="入口"
+        title="导入数据库"
+        description="拖入 .tpr 包、从本地选择，或填 GitHub 仓库 / release 地址在线下载。"
+      />
 
       {library.error ? (
-        <p className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+        <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-300">
           {library.error}
         </p>
       ) : null}
       {library.message ? (
-        <p className="rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">
+        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-700 dark:text-emerald-300">
           {library.message}{' '}
-          <Link className="underline" to="/">
+          <Link className="underline underline-offset-2" to="/">
             回首页
           </Link>
         </p>
       ) : null}
 
-      <DropZone
-        onPick={() => void pick()}
-        onFiles={(files) => {
-          const first = files[0];
-          if (!first) return;
-          void readFileBytes(first).then((bytes) => library.importBytes(bytes));
-        }}
-        busy={library.busy}
-        hint="一次拖入一个 .tpr 文件；导入会覆盖同 id 的本地库。"
-      />
+      <Panel className="py-4">
+        <DropZone
+          onPick={() => void pick()}
+          onFiles={(files) => {
+            const first = files[0];
+            if (!first) return;
+            void readFileBytes(first).then((bytes) => library.importBytes(bytes));
+          }}
+          busy={library.busy}
+          hint="一次拖入一个 .tpr 文件；导入会覆盖同 id 的本地库。"
+        />
+      </Panel>
 
-      <div className="rounded-lg border border-border p-5">
+      <Panel>
         <h3 className="text-sm font-medium">从 GitHub 下载</h3>
         <p className="mt-1 text-xs text-muted-foreground">
           支持 `owner/repo`、仓库地址、release 地址或资产直链；下载走设置里的镜像前缀（如果填了）。
@@ -108,25 +111,20 @@ export function ImportPage() {
         <div className="mt-3 flex flex-wrap gap-2">
           <input
             aria-label="GitHub 仓库或 release 地址"
-            className="min-w-0 flex-1 rounded-md border border-border bg-background px-3 py-2 font-mono text-sm outline-none focus:border-primary"
+            className="min-w-0 flex-1 rounded-lg border border-border bg-surface/60 px-3 py-2 font-mono text-sm outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-[var(--ring)]"
             value={source}
             onChange={(event) => setSource(event.target.value)}
             placeholder="example/tpr-db 或 https://github.com/example/tpr-db/releases/tag/v1.4.0"
           />
-          <button
-            type="button"
-            className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
-            disabled={library.busy}
-            onClick={() => void download()}
-          >
+          <Button variant="primary" disabled={library.busy} onClick={() => void download()}>
             {library.busy ? '处理中…' : '下载并导入'}
-          </button>
+          </Button>
         </div>
         {progress ? <p className="mt-2 text-xs text-muted-foreground">{progress}</p> : null}
         {githubError ? (
           <p className="mt-2 text-xs text-red-600 dark:text-red-400">{githubError}</p>
         ) : null}
-      </div>
-    </section>
+      </Panel>
+    </div>
   );
 }

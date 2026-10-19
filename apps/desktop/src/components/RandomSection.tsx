@@ -1,4 +1,5 @@
 import { type DBSnapshot, type TenPullResult, randomOne, resolveTags, tenPull } from '@tpr/core';
+import { Button, EmptyState, Panel, SectionHeading } from '@tpr/ui';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useServices } from '../context.js';
@@ -23,38 +24,43 @@ export function RandomSection({ snapshot }: { snapshot: DBSnapshot }) {
   };
 
   return (
-    <section className="rounded-lg border border-border p-5">
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h3 className="text-sm font-medium">随便看看</h3>
-        <div className="ml-auto flex gap-2">
-          <button
-            type="button"
-            onClick={drawOne}
-            className="rounded-md border border-border px-3 py-1.5 text-sm hover:bg-accent"
-          >
-            随机一篇
-          </button>
-          <button
-            type="button"
-            onClick={() => setResult(tenPull(snapshot))}
-            className="rounded-md border border-border bg-primary px-3 py-1.5 text-sm text-primary-foreground hover:opacity-90"
-          >
-            十连抽
-          </button>
-        </div>
-      </div>
+    <Panel>
+      <SectionHeading
+        eyebrow="发现"
+        title="随便看看"
+        description="点「十连抽」从全部文章里抽 10 篇，同一系列最多一篇。"
+        actions={
+          <>
+            <Button onClick={drawOne} disabled={snapshot.articles.length === 0}>
+              随机一篇
+            </Button>
+            <Button
+              variant="primary"
+              disabled={snapshot.articles.length === 0}
+              onClick={() => setResult(tenPull(snapshot))}
+            >
+              十连抽
+            </Button>
+          </>
+        }
+      />
 
-      {snapshot.articles.length === 0 ? (
-        <p className="text-sm text-muted-foreground">这个库还没有文章，先去导入或编辑吧。</p>
-      ) : null}
+      {snapshot.articles.length === 0 && (
+        <EmptyState
+          className="mt-4"
+          icon="🎲"
+          title="这个库还没有文章"
+          description="先去导入一篇，或在编辑器里新建。"
+        />
+      )}
 
-      {result ? (
-        <>
-          {result.depleted ? (
-            <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950 dark:text-amber-200">
+      {result !== null && (
+        <div className="mt-4">
+          {result.depleted && (
+            <p className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
               池子里只有 {result.groupCount} 组，本次抽到 {result.picks.length} 篇。
             </p>
-          ) : null}
+          )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
             {result.picks.map((article) => {
               const cover = coverUrl(article.coverImageId);
@@ -62,23 +68,25 @@ export function RandomSection({ snapshot }: { snapshot: DBSnapshot }) {
               return (
                 <div
                   key={article.id}
-                  className="group flex flex-col gap-1.5 rounded-md border border-border p-2 transition-colors hover:bg-accent/50"
+                  className="group flex flex-col gap-1.5 rounded-xl border border-border bg-surface/60 p-2 transition-colors hover:bg-surface-strong"
                 >
                   <Link to={`/article/${article.id}`} className="flex flex-col gap-1.5">
                     {cover ? (
                       <img
                         src={cover}
                         alt={article.title}
-                        className="aspect-[5/7] w-full rounded object-cover"
+                        className="aspect-[5/7] w-full rounded-lg object-cover"
                         loading="lazy"
                       />
                     ) : (
-                      <div className="flex aspect-[5/7] w-full items-center justify-center rounded border border-dashed border-border text-[10px] text-muted-foreground">
+                      <div className="flex aspect-[5/7] w-full items-center justify-center rounded-lg border border-dashed border-border text-[0.65rem] text-muted-foreground">
                         无封面
                       </div>
                     )}
-                    <span className="line-clamp-2 text-xs font-medium group-hover:underline">{article.title}</span>
-                    <span className="truncate text-[10px] text-muted-foreground">
+                    <span className="line-clamp-2 text-xs font-medium group-hover:text-accent">
+                      {article.title}
+                    </span>
+                    <span className="truncate text-[0.65rem] text-muted-foreground">
                       {series ? series.title : article.type === 'short' ? '短篇' : '未归系列'}
                     </span>
                   </Link>
@@ -90,17 +98,16 @@ export function RandomSection({ snapshot }: { snapshot: DBSnapshot }) {
               );
             })}
           </div>
-          <button
-            type="button"
+          <Button
+            className="mt-3"
+            size="sm"
+            variant="ghost"
             onClick={() => setResult(tenPull(snapshot))}
-            className="mt-3 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
           >
             重新抽取
-          </button>
-        </>
-      ) : (
-        <p className="text-sm text-muted-foreground">点「十连抽」从全部文章里抽 10 篇，同一系列最多一篇。</p>
+          </Button>
+        </div>
       )}
-    </section>
+    </Panel>
   );
 }

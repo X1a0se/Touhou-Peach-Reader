@@ -1,4 +1,5 @@
 import { type FeaturedPage as FeaturedPageKind, getFeaturedCards } from '@tpr/core';
+import { Button, EmptyState, Panel, SectionHeading } from '@tpr/ui';
 import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
 import { useServices } from '../context.js';
@@ -7,11 +8,6 @@ import { useLibraryContext } from '../library/LibraryProvider.js';
 const TITLE: Record<FeaturedPageKind, string> = {
   short: '精选短文',
   series: '精选系列',
-};
-
-const HINT: Record<FeaturedPageKind, string> = {
-  short: '推荐语全部来自数据库的 featured.json。',
-  series: '推荐语全部来自数据库的 featured.json。',
 };
 
 export function FeaturedPage({ page }: { page: FeaturedPageKind }) {
@@ -27,53 +23,63 @@ export function FeaturedPage({ page }: { page: FeaturedPageKind }) {
   const broken = cards.filter((card) => card.status === 'missing');
 
   return (
-    <section className="flex flex-col gap-6">
-      <header className="flex flex-col gap-1">
-        <h2 className="text-xl font-medium">{TITLE[page]}</h2>
-        <p className="text-xs text-muted-foreground">{HINT[page]}</p>
-      </header>
+    <div className="flex flex-col gap-6">
+      <SectionHeading
+        eyebrow="推荐"
+        title={TITLE[page]}
+        description="推荐语全部来自数据库的 featured.json。"
+      />
 
-      {status === 'loading' ? <p className="text-sm text-muted-foreground">载入中…</p> : null}
+      {status === 'loading' && <p className="text-sm text-muted-foreground">载入中…</p>}
 
-      {status === 'ready' && cards.length === 0 ? (
-        <p className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-          这个数据库还没有{TITLE[page]}。
-        </p>
-      ) : null}
+      {status === 'ready' && cards.length === 0 && (
+        <EmptyState
+          icon="✨"
+          title={`这个数据库还没有${TITLE[page]}`}
+          description="可以在编辑器「推荐语」页签里添加。"
+          action={
+            <Link to="/editor">
+              <Button size="sm">打开编辑器</Button>
+            </Link>
+          }
+        />
+      )}
 
       {valid.map((card) => (
-        <article key={card.key} className="overflow-hidden rounded-lg border border-border">
-          <div className="flex gap-4 p-4 hover:bg-accent/40">
-            <Link to={card.to ?? '#'} className="shrink-0 rounded-md" aria-label={`打开《${card.title}》`}>
+        <Panel key={card.key} className="overflow-hidden p-0">
+          <div className="flex flex-col gap-4 p-4 sm:flex-row">
+            <Link to={card.to ?? '#'} className="shrink-0" aria-label={`打开《${card.title}》`}>
               {card.cover ? (
                 <img
                   src={services.platform.assets.toUrl(card.cover.path)}
                   alt={card.cover.caption ?? card.title}
-                  className="h-28 w-20 rounded-md border border-border object-cover"
+                  className="h-36 w-24 rounded-xl border border-border object-cover shadow-sm"
                   loading="lazy"
                 />
               ) : (
-                <div className="flex h-28 w-20 items-center justify-center rounded-md border border-dashed border-border text-[10px] text-muted-foreground">
+                <div className="flex h-36 w-24 items-center justify-center rounded-xl border border-dashed border-border text-[0.65rem] text-muted-foreground">
                   无封面
                 </div>
               )}
             </Link>
-            <div className="flex min-w-0 flex-col gap-1">
+            <div className="flex min-w-0 flex-col gap-1.5">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 {card.kindLabel ? <span>{card.kindLabel}</span> : null}
-                <span className="ml-auto font-mono text-[10px]">{card.targetId}</span>
+                <span className="ml-auto font-mono text-[0.65rem]">{card.targetId}</span>
               </div>
-              <h3 className="truncate text-base font-medium">
-                <Link to={card.to ?? '#'} className="hover:underline">
+              <h3 className="truncate text-lg font-semibold">
+                <Link to={card.to ?? '#'} className="hover:text-accent">
                   {card.title}
                 </Link>
               </h3>
-              {card.summary ? <p className="line-clamp-2 text-sm text-muted-foreground">{card.summary}</p> : null}
+              {card.summary ? (
+                <p className="line-clamp-2 text-sm leading-6 text-muted-foreground">{card.summary}</p>
+              ) : null}
               <TagLinks tags={card.tags} limit={4} className="pt-0.5" />
             </div>
           </div>
 
-          <div className="border-t border-border bg-muted/30 px-4 py-3">
+          <div className="border-t border-border bg-surface-strong/60 px-4 py-3">
             <h4 className="mb-1.5 text-xs font-medium text-muted-foreground">
               推荐语{card.recommendations.length > 0 ? `（${card.recommendations.length}）` : ''}
             </h4>
@@ -85,7 +91,7 @@ export function FeaturedPage({ page }: { page: FeaturedPageKind }) {
                   <li
                     // biome-ignore lint/suspicious/noArrayIndexKey: 推荐语没有 id，同文本允许重复
                     key={index}
-                    className="text-sm leading-6"
+                    className="rounded-lg border-l-2 border-accent/60 bg-background/40 px-3 py-1 text-sm leading-6"
                   >
                     <span className="text-muted-foreground">{rec.author ? `@${rec.author}：` : ''}</span>
                     <span>{rec.text}</span>
@@ -94,23 +100,25 @@ export function FeaturedPage({ page }: { page: FeaturedPageKind }) {
               </ul>
             )}
           </div>
-        </article>
+        </Panel>
       ))}
 
-      {broken.length > 0 ? (
+      {broken.length > 0 && (
         <section className="flex flex-col gap-3">
-          <h3 className="text-sm font-medium text-amber-800 dark:text-amber-200">条目已失效（{broken.length}）</h3>
+          <h3 className="text-sm font-medium text-amber-700 dark:text-amber-300">
+            条目已失效（{broken.length}）
+          </h3>
           {broken.map((card) => (
             <div
               key={card.key}
-              className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm dark:border-amber-900 dark:bg-amber-950"
+              className="rounded-xl border border-amber-500/40 bg-amber-500/10 p-4 text-sm"
             >
               <div className="flex items-center gap-2">
-                <span className="rounded bg-amber-200 px-1.5 py-0.5 text-[10px] text-amber-900 dark:bg-amber-900 dark:text-amber-100">
+                <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-[0.65rem] text-amber-800 dark:text-amber-200">
                   已失效
                 </span>
                 <span className="truncate font-medium">{card.title}</span>
-                <span className="ml-auto shrink-0 font-mono text-[10px] text-amber-800/70 dark:text-amber-200/70">
+                <span className="ml-auto shrink-0 font-mono text-[0.65rem] text-amber-700/70 dark:text-amber-200/70">
                   {card.targetId}
                 </span>
               </div>
@@ -126,14 +134,14 @@ export function FeaturedPage({ page }: { page: FeaturedPageKind }) {
                 </ul>
               ) : null}
               {card.to ? (
-                <Link to={card.to} className="mt-2 inline-block text-xs underline underline-offset-2">
+                <Link to={card.to} className="mt-2 inline-block text-xs text-accent hover:underline">
                   仍然打开这篇文章
                 </Link>
               ) : null}
             </div>
           ))}
         </section>
-      ) : null}
-    </section>
+      )}
+    </div>
   );
 }

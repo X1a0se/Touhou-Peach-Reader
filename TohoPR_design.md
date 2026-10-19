@@ -982,8 +982,9 @@ export function migrateDatabase(
 
 ```
 $APPDATA/com.touhou.peachreader/          ← 桌面端 = %APPDATA%\com.touhou.peachreader
-├─ settings.json          全局：主题、语言、默认源、解压限额、网络镜像前缀
+├─ settings.json          全局：主题、配色、壁纸、语言、默认源、解压限额、网络镜像前缀
 ├─ active.json            当前库指针：{ "databaseId": "db_…", "openedAt": "ISO" }
+├─ wallpapers/            壁纸图片（`wp-{epoch_ms}.{png|jpg|jpeg|webp}`，≤20 MB，由 Rust 命令复制进来）
 ├─ workspace/
 │  └─ {databaseId}/       ← 与 .tpr **完全同构**（§7.2 的目录树）+ .dirty 标记
 ├─ user/
@@ -1451,6 +1452,9 @@ html, body, #root { height: 100%; }
 - shadcn 初始化会生成一个自带 `@import "tailwindcss"` 的 `globals.css`；搬进 `ui` 包时**必须删掉那一行**，否则 tailwind 被引入两次、`@source` 行为异常。
 - `@source` 是 Tailwind v4 在 monorepo 里找到 ui 包类名的**必需项**，漏了的表现是"组件样式全丢、只有基础样式"。
 - 主题切换 = 在 `<html>` 上加/去 `dark` 类；三档：`light / dark / system`（`prefers-color-scheme`），存 `settings.json`。
+- **配色体系（Goal 14）**：`<html data-palette="peach|bamboo|moon|scarlet|ink">` 与 `dark` 正交组合；`styles.css` 用 `[data-palette='x']` 与 `[data-palette='x'].dark` 两组 token 覆盖，声明顺序必须是「默认浅色 → 其它浅色 → `.dark` → 各配色 `.dark`」，否则同权重下暗色会被浅色覆盖。5 套配色 × 明暗 = 10 组 token，全部只改语义变量（background/surface/accent/…），组件不感知配色。
+- **壁纸（Goal 14）**：`settings.wallpapers.{home,article} = { file, opacity(0.1–1), blur(0–20) }`，两槽独立；文件先经 `import_wallpaper` 复制进 `$APPDATA/wallpapers/`（asset 协议只放行 app data），渲染用一个固定层 `.tpr-wallpaper{z-index:-1}` + `::after` 半透明渐变保证正文对比度。**只在 `Layout` 渲染一份**，按 `pathname.startsWith('/article/')` 选槽；页面内再渲染第二个层会把同页静态内容压到层下（实测正文整块变暗）。
+- 背景色与径向渐变画在 `html` 上、`body` 保持 `transparent`，否则 `z-index:-1` 的壁纸层会被 body 背景盖住（实测不可见）。
 
 ### 13.2 组件分层
 
@@ -1731,6 +1735,7 @@ async fn zip_extract_all(app: tauri::AppHandle, zip_path: String, dest_dir: Stri
 | `zip_extract_all` | `IZip.extractAll` | 用 `zip` crate 逐条流式复制（64 KB 缓冲）；拒 symlink、拒 `..`、限额（§5.5）；返回 `{entries, bytes, rejected}` |
 | `zip_create_from_dir` | `IZip.createFromDir` | `walkdir` 遍历 + `ZipWriter` DEFLATE；`manifest.json` 最后写 |
 | `save_export` | `apps/desktop/src/platform/files.ts` 的保存按钮 | **唯一豁免 app data 限制的命令**：目标路径来自系统保存对话框，只校验 `.tpr` 后缀、绝对路径、父目录存在；内部仍写 `*.tmp` 再 `rename` |
+| `import_wallpaper` | `IWallpaperStore.importFile` | 壁纸源在 app data 之外（用户任意目录），读入后复制到 `$APPDATA/wallpapers/wp-{epoch_ms}.{ext}`；校验绝对路径、扩展名白名单、≤20 MB、magic bytes（PNG/JPEG/WebP）；返回 `{fileName, bytes}` |
 | `http_*` | — | **不实现**：网络走 JS `fetch`（见 14.5），避免把 reqwest/TLS 拖进首次编译 |
 
 - 除 `zip_*` 外，其余命令都在 `spawn_blocking` 里跑，避免阻塞 async runtime。
@@ -2015,6 +2020,17 @@ Goal 13 追加记录（编辑器内新建标签 + 列表标签展示）：
 - **测试**：新增 `test/tags.test.ts` 5 个用例（去重/悬空、文章视图、精选卡片、收藏条目与失效条目），core 81 passed；`corepack pnpm check` = platform 7 + schema 23 + core 81 = 111 个测试。夹具给两篇系列条目补上标签，真机 CDP 16 项断言全过（含"输入新名称 → 新建 → 自动勾选 → 保存 → 刷新后仍在"完整链路）。
 - 截图：`.tmp/goal13-articles.png`、`.tmp/goal13-editor-tag.png`、`.tmp/goal13-favorites.png`。
 
+Goal 14 追加记录（界面美化 + 5 套配色 + 主界面/文章页壁纸）：
+
+- **设置模型**：`AppSettings` 增 `palette: 'peach'|'bamboo'|'moon'|'scarlet'|'ink'` 与 `wallpapers: { home, article }`（各 `{ file, opacity, blur }`）；`sanitizeWallpaperFile` 只接受 `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` 且扩展名在白名单内，`clampWallpaperOpacity` 收敛到 0.1–1、`clampWallpaperBlur` 收敛到 0–20；`SettingsPatch` 让 `wallpapers` 支持只改一个槽（深合并），避免保存主题时把壁纸清空。
+- **平台接口**：新增 `IWallpaperStore { importFile, remove, toUrl }` 并挂到 `Platform.wallpapers`；内存实现把图片存 Map、`toUrl` 返回 data URL；桌面实现 `importFile` 走 Rust `import_wallpaper`、`toUrl` 走 `convertFileSrc($APPDATA/wallpapers/...)`。
+- **Rust `import_wallpaper`**：源路径可在 app data 之外（用户任意目录），但仍校验绝对路径、扩展名、≤20 MB、magic bytes；目标写 `wallpapers/wp-{epoch_ms}.{ext}`。这是继 `save_export` 之后第二个"读/写 app data 之外"的命令，二者都只服务对话框选中的单个文件。
+- **配色**：`styles.css` 定义 5 套 `[data-palette]` × 深浅 token，`SettingsProvider` 同时切 `class="dark"` 与 `data-palette`；10 组组合的对比度按"面板半透明、正文用 foreground"设计。
+- **组件层**：`Button / Panel / SectionHeading / EmptyState / StatTile` 五个原子件进 `@tpr/ui`；`Layout` 改粘性顶栏 + pill 导航；`Home / Articles / Article / Series / Search / Featured / Favorites / Import / Merge / Credits / Settings / 404` 全部重排，`Editor` 只机械换类名（表单逻辑未动）。
+- **壁纸层三个坑（都实测踩过）**：① `z-index:-1` 时被 `body` 背景盖住 → 把背景色与径向渐变移到 `html`、`body` 改 `transparent`；② 每页各自渲染一层会压住同页静态内容（正文发暗）→ 只在 `Layout` 渲染、按路由选槽；③ `Markdown` 组件早期写死 `text-neutral-900/800/600`、`bg-neutral-50` 等浅色假设 → 深色主题下正文近乎不可见，全部换成 `foreground / muted-foreground / border / muted` 语义 token。
+- **验证**：`test/settings.test.ts` 增 6 个外观用例、`platform` 增 3 个壁纸用例；`corepack pnpm check` = platform 10 + schema 23 + core 87 = 120 个测试；`build:web` 入口 225.29 kB；真机 CDP 截图覆盖深/浅 × 桃夭/竹青/绯红与设置页、文章页、文章库、首页。
+- 截图：`.tmp/goal14-settings.png`、`.tmp/goal14-settings-light.png`、`.tmp/goal14-home-bamboo.png`、`.tmp/goal14-home-light.png`、`.tmp/goal14-home-scarlet.png`、`.tmp/goal14-article.png`、`.tmp/goal14-articles.png`。
+
 ---
 
 ## 附：文档自检
@@ -2028,6 +2044,6 @@ Goal 13 追加记录（编辑器内新建标签 + 列表标签展示）：
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–13 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
+| Goal 1–14 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
 
 

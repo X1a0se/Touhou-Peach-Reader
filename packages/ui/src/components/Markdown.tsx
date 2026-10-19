@@ -21,13 +21,13 @@ function inlineNodes(text: string, keyPrefix: string, onLink?: (url: string) => 
     const key = `${keyPrefix}-i${index++}`;
     if (token.startsWith('`')) {
       nodes.push(
-        <code key={key} className="rounded bg-neutral-100 px-1 py-0.5 font-mono text-[0.9em]">
+        <code key={key} className="rounded bg-muted px-1 py-0.5 font-mono text-[0.9em]">
           {token.slice(1, -1)}
         </code>,
       );
     } else if (token.startsWith('**')) {
       nodes.push(
-        <strong key={key} className="font-semibold text-neutral-900">
+        <strong key={key} className="font-semibold text-foreground">
           {token.slice(2, -2)}
         </strong>,
       );
@@ -171,12 +171,12 @@ function parseBlocks(source: string): Block[] {
 }
 
 const headingClass: Record<number, string> = {
-  1: 'mt-6 text-2xl font-semibold text-neutral-900',
-  2: 'mt-6 text-xl font-semibold text-neutral-900',
-  3: 'mt-5 text-lg font-semibold text-neutral-900',
-  4: 'mt-4 text-base font-semibold text-neutral-900',
-  5: 'mt-4 text-sm font-semibold text-neutral-900',
-  6: 'mt-4 text-sm font-semibold text-neutral-600',
+  1: 'mt-6 text-2xl font-semibold text-foreground',
+  2: 'mt-6 text-xl font-semibold text-foreground',
+  3: 'mt-5 text-lg font-semibold text-foreground',
+  4: 'mt-4 text-base font-semibold text-foreground',
+  5: 'mt-4 text-sm font-semibold text-foreground',
+  6: 'mt-4 text-sm font-semibold text-muted-foreground',
 };
 
 /** 受控的 Markdown 渲染：不注入 HTML，只认标题/段落/列表/引用/代码/规则线 + 四种行内标记。 */
@@ -184,7 +184,7 @@ export function Markdown({ source, onLink, className }: MarkdownProps) {
   const blocks = parseBlocks(source);
 
   return (
-    <div className={cn('space-y-3 text-[15px] leading-7 text-neutral-800', className)}>
+    <div className={cn('space-y-3 text-[15px] leading-7 text-foreground/90', className)}>
       {blocks.map((block, index) => {
         const key = `b${index}`;
         switch (block.kind) {
@@ -200,14 +200,14 @@ export function Markdown({ source, onLink, className }: MarkdownProps) {
             return (
               <pre
                 key={key}
-                className="overflow-x-auto rounded-lg border border-neutral-200 bg-neutral-50 p-3 text-xs leading-6 text-neutral-800"
+                className="overflow-x-auto rounded-lg border border-border bg-muted/50 p-3 text-xs leading-6 text-foreground/90"
               >
                 <code>{block.text}</code>
               </pre>
             );
           case 'quote':
             return (
-              <blockquote key={key} className="border-l-2 border-rose-200 pl-3 text-neutral-600">
+              <blockquote key={key} className="border-l-2 border-accent pl-3 text-muted-foreground">
                 {inlineNodes(block.lines.join('\n'), key, onLink)}
               </blockquote>
             );
@@ -222,7 +222,7 @@ export function Markdown({ source, onLink, className }: MarkdownProps) {
             );
           }
           case 'rule':
-            return <hr key={key} className="my-5 border-neutral-200" />;
+            return <hr key={key} className="my-5 border-border" />;
           case 'paragraph':
           default:
             return (

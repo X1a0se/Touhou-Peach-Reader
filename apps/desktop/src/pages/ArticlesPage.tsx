@@ -1,6 +1,6 @@
 import type { ArticleMeta } from '@tpr/schema';
 import { resolveTags } from '@tpr/core';
-import { cn } from '@tpr/ui';
+import { Button, EmptyState, SectionHeading, cn } from '@tpr/ui';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
@@ -48,13 +48,12 @@ export function ArticlesPage() {
   }, [snapshot, query, type]);
 
   return (
-    <section className="flex flex-col gap-5">
-      <header className="flex flex-col gap-1">
-        <h2 className="text-xl font-medium">文章库</h2>
-        <p className="text-xs text-muted-foreground">
-          共 {snapshot?.articles.length ?? 0} 篇；点标签可按该标签搜索，点击封面或标题进入详情。
-        </p>
-      </header>
+    <div className="flex flex-col gap-5">
+      <SectionHeading
+        eyebrow="浏览"
+        title="文章库"
+        description={`共 ${snapshot?.articles.length ?? 0} 篇；点标签可按该标签搜索，点击封面或标题进入详情。`}
+      />
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <input
@@ -62,40 +61,44 @@ export function ArticlesPage() {
           onChange={(event) => setQuery(event.target.value)}
           placeholder="按标题、简介、标签过滤…"
           aria-label="过滤文章"
-          className="w-full rounded-md border border-border bg-transparent px-4 py-2 text-sm outline-none placeholder:text-muted-foreground focus:border-primary/60"
+          className="w-full rounded-lg border border-border bg-surface/60 px-4 py-2 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-accent focus:ring-2 focus:ring-[var(--ring)]"
         />
         <div className="flex shrink-0 flex-wrap gap-2">
           {TYPE_FILTERS.map((item) => (
-            <button
+            <Button
               key={item.value}
-              type="button"
+              size="sm"
+              variant={type === item.value ? 'primary' : 'secondary'}
+              aria-pressed={type === item.value}
               onClick={() => setType(item.value)}
-              className={cn(
-                'rounded-full border px-3 py-1 text-xs transition-colors',
-                type === item.value
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border text-muted-foreground hover:bg-accent',
-              )}
             >
               {item.label}
-            </button>
+            </Button>
           ))}
         </div>
       </div>
 
-      {status === 'loading' ? <p className="text-sm text-muted-foreground">载入中…</p> : null}
+      {status === 'loading' && <p className="text-sm text-muted-foreground">载入中…</p>}
 
-      {status === 'ready' && !snapshot ? (
-        <p className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-          还没有导入数据库，先去首页拖入一个 .tpr。
-        </p>
-      ) : null}
+      {status === 'ready' && !snapshot && (
+        <EmptyState
+          title="还没有导入数据库"
+          description="先去首页拖入一个 .tpr，或从 GitHub 下载。"
+          action={
+            <Link to="/import">
+              <Button size="sm">去导入</Button>
+            </Link>
+          }
+        />
+      )}
 
-      {status === 'ready' && snapshot && articles.length === 0 ? (
-        <p className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-          {query.trim() ? '没有匹配的文章。' : '这个数据库还没有文章。'}
-        </p>
-      ) : null}
+      {status === 'ready' && snapshot && articles.length === 0 && (
+        <EmptyState
+          icon="🔍"
+          title={query.trim() ? '没有匹配的文章' : '这个数据库还没有文章'}
+          description={query.trim() ? '换个关键词，或清空过滤条件。' : '可以在编辑器里新建一篇。'}
+        />
+      )}
 
       <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {articles.map((article) => {
@@ -104,7 +107,10 @@ export function ArticlesPage() {
           const tags = snapshot ? resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds]) : [];
 
           return (
-            <li key={article.id} className="flex flex-col overflow-hidden rounded-lg border border-border">
+            <li
+              key={article.id}
+              className="group flex flex-col overflow-hidden rounded-xl border border-border bg-surface/70 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md"
+            >
               <Link
                 to={`/article/${article.id}`}
                 className="flex h-44 items-center justify-center overflow-hidden bg-muted/40"
@@ -114,7 +120,7 @@ export function ArticlesPage() {
                   <img
                     src={toUrl(cover.file)}
                     alt={cover.caption ?? article.title}
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
                     loading="lazy"
                   />
                 ) : (
@@ -123,26 +129,29 @@ export function ArticlesPage() {
               </Link>
 
               <div className="flex flex-1 flex-col gap-2 p-4">
-                <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+                <div className="flex items-center gap-2 text-[0.68rem] text-muted-foreground">
                   <span
                     className={cn(
-                      'rounded px-1.5 py-0.5 text-[10px]',
+                      'rounded-full px-2 py-0.5 font-medium',
                       article.type === 'short'
-                        ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200'
-                        : 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200',
+                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                        : 'bg-violet-500/10 text-violet-700 dark:text-violet-300',
                     )}
                   >
                     {TYPE_LABEL[article.type]}
                   </span>
                   {series ? (
-                    <Link to={`/series/${series.id}`} className="truncate underline underline-offset-2">
+                    <Link to={`/series/${series.id}`} className="truncate hover:text-accent">
                       {series.title}
                     </Link>
                   ) : null}
                   <span className="ml-auto shrink-0">{article.updatedAt.slice(0, 10)}</span>
                 </div>
 
-                <Link to={`/article/${article.id}`} className="truncate text-sm font-medium hover:underline">
+                <Link
+                  to={`/article/${article.id}`}
+                  className="truncate text-sm font-medium group-hover:text-accent"
+                >
                   {article.title}
                 </Link>
                 {article.summary ? (
@@ -155,6 +164,6 @@ export function ArticlesPage() {
           );
         })}
       </ul>
-    </section>
+    </div>
   );
 }

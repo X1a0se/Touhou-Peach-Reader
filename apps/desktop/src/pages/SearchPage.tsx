@@ -1,6 +1,6 @@
 import type { FilterKind } from '@tpr/core';
 import { resolveTags } from '@tpr/core';
-import { HighlightedText, cn } from '@tpr/ui';
+import { Button, EmptyState, HighlightedText, Panel, SectionHeading, cn } from '@tpr/ui';
 import { useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
@@ -18,10 +18,10 @@ const FILTERS: ReadonlyArray<{ value: FilterKind; label: string }> = [
 ];
 
 const KIND_STYLE: Record<string, string> = {
-  article: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
-  series: 'bg-violet-100 text-violet-800 dark:bg-violet-900 dark:text-violet-200',
-  author: 'bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200',
-  tag: 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+  article: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+  series: 'bg-violet-500/10 text-violet-700 dark:text-violet-300',
+  author: 'bg-sky-500/10 text-sky-700 dark:text-sky-300',
+  tag: 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
 };
 
 const KIND_LABEL: Record<string, string> = {
@@ -49,9 +49,14 @@ export function SearchPage() {
   };
 
   return (
-    <section className="flex flex-col gap-6">
-      <div className="flex flex-col gap-3">
-        <h2 className="text-xl font-medium">搜索</h2>
+    <div className="flex flex-col gap-5">
+      <SectionHeading
+        eyebrow="检索"
+        title="搜索"
+        description={`${search.status === 'indexing' ? '正在建索引…' : search.status === 'done' ? `${search.total} 条 · ${search.tookMs} ms · 索引 ${search.indexSize}` : '按标题、正文、作者、标签检索'}`}
+      />
+
+      <Panel className="p-4">
         <input
           // biome-ignore lint/a11y/noAutofocus: 搜索页的主输入框
           autoFocus
@@ -59,58 +64,47 @@ export function SearchPage() {
           onChange={(event) => changeQuery(event.target.value)}
           placeholder="标题、正文、作者、标签…（支持 #已完结 #短篇文 #标签名）"
           aria-label="搜索关键词"
-          className="w-full rounded-md border border-border bg-transparent px-4 py-2.5 text-sm outline-none placeholder:text-muted-foreground focus:border-primary/60"
+          className="w-full rounded-lg border border-border bg-surface/60 px-4 py-2.5 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-accent focus:ring-2 focus:ring-[var(--ring)]"
         />
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="mt-3 flex flex-wrap items-center gap-2">
           {FILTERS.map((item) => (
-            <button
+            <Button
               key={item.value}
-              type="button"
+              size="sm"
+              variant={search.filter === item.value ? 'primary' : 'secondary'}
+              aria-pressed={search.filter === item.value}
               onClick={() => search.setFilter(item.value)}
-              className={cn(
-                'rounded-full border px-3 py-1 text-xs transition-colors',
-                search.filter === item.value
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border text-muted-foreground hover:bg-accent',
-              )}
             >
               {item.label}
-            </button>
+            </Button>
           ))}
-          <span className="ml-auto text-xs text-muted-foreground">
-            {search.status === 'indexing'
-              ? '正在建索引…'
-              : search.status === 'done'
-                ? `${search.total} 条 · ${search.tookMs} ms · 索引 ${search.indexSize}`
-                : null}
-          </span>
         </div>
-      </div>
+      </Panel>
 
       {libraryStatus !== 'ready' ? (
-        <p className="rounded-md border border-border px-4 py-3 text-sm text-muted-foreground">
-          还没有可搜索的数据库，先去
-          <Link to="/" className="mx-1 underline underline-offset-2">
-            导入一个 .tpr
-          </Link>
-          。
-        </p>
+        <EmptyState
+          title="还没有可搜索的数据库"
+          description="先去首页导入一个 .tpr。"
+          action={
+            <Link to="/">
+              <Button size="sm">回到首页</Button>
+            </Link>
+          }
+        />
       ) : null}
 
       {search.error ? (
-        <p className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+        <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-300">
           {search.error}
         </p>
       ) : null}
 
       {search.status === 'idle' && libraryStatus === 'ready' ? (
-        <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-          <p>输入关键词开始搜索。</p>
-          <p className="mt-2 text-xs">
-            试试 <code className="rounded bg-muted px-1">#已完结</code>、
-            <code className="mx-1 rounded bg-muted px-1">#短篇文</code>，或直接输入作者别名。
-          </p>
-        </div>
+        <EmptyState
+          icon="🔎"
+          title="输入关键词开始搜索"
+          description="试试 #已完结、#短篇文，或直接输入作者别名。"
+        />
       ) : null}
 
       {search.status === 'running' && search.items.length === 0 ? (
@@ -118,13 +112,11 @@ export function SearchPage() {
       ) : null}
 
       {search.status === 'done' && search.total === 0 ? (
-        <p className="rounded-md border border-border px-4 py-6 text-center text-sm text-muted-foreground">
-          没有找到匹配项。
-        </p>
+        <EmptyState icon="🍃" title="没有找到匹配项" description="换个关键词，或切换筛选条件。" />
       ) : null}
 
       {search.items.length > 0 ? (
-        <ul className="flex flex-col divide-y divide-border rounded-lg border border-border">
+        <ul className="flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface/70 shadow-sm backdrop-blur-sm">
           {search.items.map((item) => {
             const to =
               item.kind === 'article'
@@ -142,12 +134,15 @@ export function SearchPage() {
                   : [];
 
             return (
-              <li key={`${item.kind}:${item.id}`} className="flex flex-col gap-1.5 px-4 py-3">
+              <li
+                key={`${item.kind}:${item.id}`}
+                className="flex flex-col gap-1.5 px-4 py-3 transition-colors hover:bg-surface-strong/60"
+              >
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center gap-2">
                     <span
                       className={cn(
-                        'rounded px-1.5 py-0.5 text-[10px]',
+                        'rounded-full px-2 py-0.5 text-[0.65rem] font-medium',
                         KIND_STYLE[item.kind] ?? 'bg-muted text-muted-foreground',
                       )}
                     >
@@ -156,19 +151,19 @@ export function SearchPage() {
                     {item.badges.map((badge) => (
                       <span
                         key={badge}
-                        className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                        className="rounded-full border border-border px-2 py-0.5 text-[0.65rem] text-muted-foreground"
                       >
                         {badge}
                       </span>
                     ))}
                     {to ? (
-                      <Link to={to} className="truncate text-sm font-medium hover:underline">
+                      <Link to={to} className="truncate text-sm font-medium hover:text-accent">
                         {item.title}
                       </Link>
                     ) : (
                       <span className="truncate text-sm font-medium">{item.title}</span>
                     )}
-                    <span className="ml-auto shrink-0 font-mono text-[10px] text-muted-foreground">
+                    <span className="ml-auto shrink-0 font-mono text-[0.65rem] text-muted-foreground">
                       {item.id}
                     </span>
                   </div>
@@ -194,6 +189,6 @@ export function SearchPage() {
           })}
         </ul>
       ) : null}
-    </section>
+    </div>
   );
 }

@@ -90,6 +90,21 @@ export interface INetwork {
   ): Promise<Uint8Array>;
 }
 
+/**
+ * 壁纸存储（Goal 14）。
+ *
+ * 用户从系统对话框选中的图片在 app data 之外，必须先复制进 `$APPDATA/wallpapers/`
+ * 才能被 asset 协议读取；复制与图片校验放在平台实现里（桌面端走 Rust 命令）。
+ */
+export interface IWallpaperStore {
+  /** 从绝对路径导入一张图片；返回存储名与字节数 */
+  importFile(absPath: string): Promise<{ fileName: string; bytes: number }>;
+  /** 删除存储的壁纸（不存在时静默） */
+  remove(fileName: string): Promise<void>;
+  /** 存储名 → CSS background 可用的 URL；空串返回 '' */
+  toUrl(fileName: string): string;
+}
+
 export interface Platform {
   readonly kind: 'tauri' | 'memory' | 'web';
   readonly fs: IFileSystem;
@@ -98,4 +113,5 @@ export interface Platform {
   readonly assets: IAssetUrls;
   readonly opener: IOpener;
   readonly network: INetwork;
+  readonly wallpapers: IWallpaperStore;
 }

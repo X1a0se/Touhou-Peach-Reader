@@ -2,9 +2,11 @@ import { PlatformError } from '../errors.js';
 import { basenamePath, dirnamePath, joinPath } from '../paths.js';
 import type { INetwork, Platform } from '../types.js';
 import { InMemoryFileSystem } from './fs.js';
+import { createMemoryWallpapers } from './wallpaper.js';
 import { FflateZip } from './zip.js';
 
 export { InMemoryFileSystem } from './fs.js';
+export { createMemoryWallpapers } from './wallpaper.js';
 export { FflateZip } from './zip.js';
 
 export interface MemoryPlatformOptions {
@@ -57,5 +59,6 @@ export function createMemoryPlatform(opts: MemoryPlatformOptions = {}): Platform
           throw new PlatformError('ENOT_IMPLEMENTED', '内存平台不支持网络请求');
         }),
     },
+    wallpapers: createMemoryWallpapers(fs),
   };
 }

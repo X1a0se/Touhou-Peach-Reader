@@ -1,4 +1,6 @@
+import { Button, EmptyState, Panel, SectionHeading } from '@tpr/ui';
 import { useState } from 'react';
+import { Link } from 'react-router';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 
@@ -18,44 +20,60 @@ export function CreditsPage() {
   };
 
   return (
-    <section className="flex flex-col gap-6">
-      <div>
-        <h2 className="text-xl font-semibold">特别鸣谢</h2>
-        <p className="mt-1 text-sm text-muted-foreground">
-          来自当前数据库的 `credits.json`，随库更新；数据库作者可以在这里署名。
-        </p>
-      </div>
+    <div className="flex flex-col gap-6">
+      <SectionHeading
+        eyebrow="致谢"
+        title="特别鸣谢"
+        description="来自当前数据库的 credits.json，随库更新；数据库作者可以在这里署名。"
+      />
 
       {error ? (
-        <p className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
+        <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-600 dark:text-red-300">
           {error}
         </p>
       ) : null}
 
       {status !== 'ready' ? (
-        <p className="text-sm text-muted-foreground">还没有打开数据库，先导入一个 `.tpr` 包吧。</p>
+        <EmptyState
+          icon="🌸"
+          title="还没有打开数据库"
+          description="先导入一个 .tpr 包，这里会显示它的鸣谢名单。"
+          action={
+            <Link to="/import">
+              <Button size="sm">去导入</Button>
+            </Link>
+          }
+        />
       ) : credits.length === 0 ? (
-        <p className="text-sm text-muted-foreground">这个数据库没有填写鸣谢。</p>
+        <EmptyState icon="🍃" title="这个数据库没有填写鸣谢" description="编辑器的「鸣谢」页签可以补上。" />
       ) : (
-        <ul className="divide-y divide-border rounded-lg border border-border">
+        <Panel className="divide-y divide-border p-0">
           {credits.map((credit, index) => (
-            <li key={`${credit.name}-${index}`} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-5 py-4">
-              <span className="font-medium">{credit.name}</span>
-              {credit.role ? <span className="text-sm text-muted-foreground">{credit.role}</span> : null}
+            <div
+              key={`${credit.name}-${index}`}
+              className="flex flex-wrap items-baseline gap-x-3 gap-y-1 px-5 py-4"
+            >
+              <span className="text-sm font-medium">{credit.name}</span>
+              {credit.role ? (
+                <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[0.7rem] text-accent">
+                  {credit.role}
+                </span>
+              ) : null}
               {credit.note ? <span className="text-sm text-muted-foreground">{credit.note}</span> : null}
               {credit.link ? (
-                <button
-                  type="button"
-                  className="ml-auto text-sm underline"
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="ml-auto"
                   onClick={() => void open(credit.link ?? '')}
                 >
-                  链接
-                </button>
+                  打开链接 ↗
+                </Button>
               ) : null}
-            </li>
+            </div>
           ))}
-        </ul>
+        </Panel>
       )}
-    </section>
+    </div>
   );
 }

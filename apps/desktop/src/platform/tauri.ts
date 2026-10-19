@@ -6,6 +6,7 @@ import type {
   DirEntry,
   FileStat,
   IFileSystem,
+  IWallpaperStore,
   IZip,
   INetwork,
   Platform,
@@ -98,6 +99,28 @@ class TauriZip implements IZip {
   }
 }
 
+class TauriWallpapers implements IWallpaperStore {
+  constructor(
+    private readonly fs: IFileSystem,
+    private readonly dataDir: string,
+    private readonly join: (...parts: string[]) => string,
+  ) {}
+
+  async importFile(absPath: string): Promise<{ fileName: string; bytes: number }> {
+    return call('import_wallpaper', { sourcePath: absPath });
+  }
+
+  async remove(fileName: string): Promise<void> {
+    if (fileName === '') return;
+    await this.fs.remove(this.join(this.dataDir, 'wallpapers', fileName)).catch(() => undefined);
+  }
+
+  toUrl(fileName: string): string {
+    if (fileName === '') return '';
+    return convertFileSrc(this.join(this.dataDir, 'wallpapers', fileName));
+  }
+}
+
 function makePathTools(dataDir: string) {
   const sep = dataDir.includes('\\') ? '\\' : '/';
   const trimTail = (p: string): string => p.replace(/[\\/]+$/, '');
@@ -176,6 +199,7 @@ export async function createTauriPlatform(): Promise<Platform> {
   const tools = makePathTools(dataDir);
   const fs = new TauriFileSystem();
   const zip = new TauriZip(fs, dataDir, tools.join);
+  const wallpapers = new TauriWallpapers(fs, dataDir, tools.join);
 
   return {
     kind: 'tauri',
@@ -205,5 +229,6 @@ export async function createTauriPlatform(): Promise<Platform> {
       },
     },
     network,
+    wallpapers,
   };
 }

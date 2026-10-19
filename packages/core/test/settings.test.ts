@@ -2,9 +2,14 @@ import { createMemoryPlatform } from '@tpr/platform/memory';
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_SETTINGS,
+  DEFAULT_WALLPAPER,
   applyMirrorPrefix,
+  clampWallpaperBlur,
+  clampWallpaperOpacity,
   createSettings,
   parseSettings,
+  sanitizeWallpaperFile,
+  wallpaperPath,
 } from '../src/settings/index.js';
 
 describe('settings: 全局设置持久化（Goal 11）', () => {
@@ -74,5 +79,73 @@ describe('settings: 全局设置持久化（Goal 11）', () => {
     expect(applyMirrorPrefix('https://github.com/a/b', 'https://m/gh')).toBe(
       'https://m/gh/https://github.com/a/b',
     );
+  });
+});
+
+describe('settings: 外观（Goal 14）', () => {
+  it('appearance-defaults: 默认 peach + 两个空壁纸槽', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const loaded = await createSettings(platform).load();
+    expect(loaded.palette).toBe('peach');
+    expect(loaded.wallpapers).toEqual({ home: DEFAULT_WALLPAPER, article: DEFAULT_WALLPAPER });
+  });
+
+  it('appearance-roundtrip: 配色与两处壁纸各自保存、重启读回', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const first = createSettings(platform);
+    await first.load();
+    await first.save({ palette: 'moon' });
+    await first.save({
+      wallpapers: { home: { file: 'wp-1.png', opacity: 0.7, blur: 6 } },
+    });
+
+    const loaded = await createSettings(platform).load();
+    expect(loaded.palette).toBe('moon');
+    expect(loaded.wallpapers.home).toEqual({ file: 'wp-1.png', opacity: 0.7, blur: 6 });
+    // 只 patch home 时 article 不被覆盖
+    expect(loaded.wallpapers.article).toEqual(DEFAULT_WALLPAPER);
+  });
+
+  it('appearance-parse: 非法配色回退 peach，壁纸字段逐项收敛', () => {
+    const parsed = parseSettings({
+      palette: 'neon',
+      wallpapers: {
+        home: { file: '../../etc/passwd', opacity: 9, blur: -4 },
+        article: { file: 'wp-2.webp', opacity: 0.2, blur: 99 },
+      },
+    });
+    expect(parsed?.palette).toBe('peach');
+    expect(parsed?.wallpapers.home.file).toBe('');
+    expect(parsed?.wallpapers.home.opacity).toBe(1);
+    expect(parsed?.wallpapers.home.blur).toBe(0);
+    expect(parsed?.wallpapers.article.file).toBe('wp-2.webp');
+    expect(parsed?.wallpapers.article.opacity).toBe(0.2);
+    expect(parsed?.wallpapers.article.blur).toBe(20);
+  });
+
+  it('wallpaper-sanitize: 只收壁纸目录里的裸文件名', () => {
+    expect(sanitizeWallpaperFile('wp-171234.png')).toBe('wp-171234.png');
+    expect(sanitizeWallpaperFile('a.jpg')).toBe('a.jpg');
+    expect(sanitizeWallpaperFile('../a.png')).toBe('');
+    expect(sanitizeWallpaperFile('C:\\a.png')).toBe('');
+    expect(sanitizeWallpaperFile('a.gif')).toBe('');
+    expect(sanitizeWallpaperFile('')).toBe('');
+    expect(sanitizeWallpaperFile(42)).toBe('');
+  });
+
+  it('wallpaper-limits: 不透明度 0.1–1、模糊 0–20 取整', () => {
+    expect(clampWallpaperOpacity(0)).toBe(0.1);
+    expect(clampWallpaperOpacity(2)).toBe(1);
+    expect(clampWallpaperOpacity(Number.NaN)).toBe(DEFAULT_WALLPAPER.opacity);
+    expect(clampWallpaperBlur(-1)).toBe(0);
+    expect(clampWallpaperBlur(7.6)).toBe(8);
+    expect(clampWallpaperBlur(999)).toBe(20);
+  });
+
+  it('wallpaper-path: 拼出 app data 下的绝对路径，空名返回空串', () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    expect(wallpaperPath(platform, 'wp-1.png')).toBe('/app/wallpapers/wp-1.png');
+    expect(wallpaperPath(platform, '')).toBe('');
+    expect(wallpaperPath(platform, '../x.png')).toBe('');
   });
 });

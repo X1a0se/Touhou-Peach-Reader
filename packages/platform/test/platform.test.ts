@@ -44,6 +44,38 @@ describe('InMemoryFileSystem', () => {
   });
 });
 
+describe('MemoryWallpapers', () => {
+  const png = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+  ]);
+
+  it('导入后给出 data URL，删除后返回空串', async () => {
+    const platform = createMemoryPlatform();
+    await platform.fs.writeBytes('/tmp/w.png', png);
+    const imported = await platform.wallpapers.importFile('/tmp/w.png');
+    expect(imported.bytes).toBe(png.byteLength);
+    expect(platform.wallpapers.toUrl(imported.fileName)).toMatch(/^data:image\/png;base64,/);
+
+    await platform.wallpapers.remove(imported.fileName);
+    expect(platform.wallpapers.toUrl(imported.fileName)).toBe('');
+  });
+
+  it('拒绝不支持的扩展名与超限文件', async () => {
+    const platform = createMemoryPlatform();
+    await platform.fs.writeBytes('/tmp/w.bmp', png);
+    await expect(platform.wallpapers.importFile('/tmp/w.bmp')).rejects.toBeInstanceOf(PlatformError);
+
+    const huge = new Uint8Array(20 * 1024 * 1024 + 1);
+    await platform.fs.writeBytes('/tmp/big.png', huge);
+    await expect(platform.wallpapers.importFile('/tmp/big.png')).rejects.toBeInstanceOf(PlatformError);
+  });
+
+  it('空文件名返回空 URL', () => {
+    const platform = createMemoryPlatform();
+    expect(platform.wallpapers.toUrl('')).toBe('');
+  });
+});
+
 describe('safeEntryPath', () => {
   it('拒绝 zip-slip 与绝对路径', () => {
     expect(safeEntryPath('../etc/passwd').ok).toBe(false);

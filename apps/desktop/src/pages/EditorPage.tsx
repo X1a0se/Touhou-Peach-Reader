@@ -27,12 +27,12 @@ const TABS: { key: Tab; label: string }[] = [
 ];
 
 const inputClass =
-  'w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:border-primary';
+  'w-full rounded-lg border border-border bg-surface/60 px-3 py-2 text-sm outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-[var(--ring)]';
 const labelClass = 'text-xs font-medium text-muted-foreground';
 const buttonClass =
-  'rounded-md border border-border px-3 py-1.5 text-sm transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50';
+  'rounded-lg border border-border px-3 py-1.5 text-sm transition-colors hover:bg-surface-strong disabled:cursor-not-allowed disabled:opacity-50';
 const primaryClass =
-  'rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50';
+  'rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50';
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -74,22 +74,25 @@ export function EditorPage() {
   return (
     <section className="flex flex-col gap-5">
       <header className="flex flex-col gap-1">
-        <h2 className="text-xl font-medium">编辑器</h2>
+        <p className="text-[0.68rem] font-semibold tracking-[0.2em] text-accent uppercase">写作</p>
+        <h2 className="text-2xl font-semibold tracking-tight">编辑器</h2>
         <p className="text-xs text-muted-foreground">
           所有改动立即写入 workspace/{'{databaseId'}/，重启后保留；每次保存前都会跑一遍校验。
         </p>
       </header>
 
       {error ? (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+        <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {error}
         </p>
       ) : null}
       {notice ? (
-        <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{notice}</p>
+        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-300">
+          {notice}
+        </p>
       ) : null}
 
-      <div className="flex flex-wrap gap-1 border-b border-border">
+      <div className="flex flex-wrap gap-1.5">
         {TABS.map((item) => (
           <button
             key={item.key}
@@ -99,10 +102,10 @@ export function EditorPage() {
               setError(null);
               setNotice(null);
             }}
-            className={`-mb-px border-b-2 px-3 py-2 text-sm transition-colors ${
+            className={`rounded-full px-3 py-1.5 text-sm transition-colors ${
               tab === item.key
-                ? 'border-primary font-medium text-foreground'
-                : 'border-transparent text-muted-foreground hover:text-foreground'
+                ? 'bg-accent-soft font-medium text-accent ring-1 ring-[var(--ring)]'
+                : 'text-muted-foreground hover:bg-surface-strong hover:text-foreground'
             }`}
           >
             {item.label}
@@ -135,7 +138,7 @@ function PanelList<T>({
   render(item: T): React.ReactNode;
 }) {
   return (
-    <ul className="flex max-h-[28rem] flex-col divide-y divide-border overflow-auto rounded-lg border border-border">
+    <ul className="flex max-h-[28rem] flex-col divide-y divide-border overflow-auto rounded-xl border border-border bg-surface/60">
       {items.map((item) => {
         const id = (item as { id: string }).id;
         return (
@@ -143,7 +146,7 @@ function PanelList<T>({
             <button
               type="button"
               onClick={() => onSelect(item)}
-              className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-muted ${
+              className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-surface-strong ${
                 selectedId === id ? 'bg-muted' : ''
               }`}
             >
@@ -363,7 +366,7 @@ function ArticleForm({
 
   return (
     <form
-      className="flex flex-col gap-4 rounded-lg border border-border p-4"
+      className="flex flex-col gap-4 rounded-xl border border-border bg-surface/60 p-4"
       onSubmit={(event) => {
         event.preventDefault();
         setBusy(true);
@@ -610,7 +613,7 @@ function SeriesForm({
 
   return (
     <form
-      className="flex flex-col gap-4 rounded-lg border border-border p-4"
+      className="flex flex-col gap-4 rounded-xl border border-border bg-surface/60 p-4"
       onSubmit={(event) => {
         event.preventDefault();
         setBusy(true);
@@ -754,7 +757,7 @@ function AuthorsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
 
       {editing ? (
         <form
-          className="flex flex-col gap-4 rounded-lg border border-border p-4"
+          className="flex flex-col gap-4 rounded-xl border border-border bg-surface/60 p-4"
           onSubmit={(event) => {
             event.preventDefault();
             void run(async () => {
@@ -870,7 +873,7 @@ function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; 
 
       {editing ? (
         <form
-          className="flex flex-col gap-4 rounded-lg border border-border p-4"
+          className="flex flex-col gap-4 rounded-xl border border-border bg-surface/60 p-4"
           onSubmit={(event) => {
             event.preventDefault();
             void run(async () => {
@@ -959,7 +962,7 @@ function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
   return (
     <div className="flex flex-col gap-5">
       <form
-        className="grid gap-3 rounded-lg border border-border p-4 sm:grid-cols-[minmax(0,1fr)_10rem_minmax(0,1fr)_auto] sm:items-end"
+        className="grid gap-3 rounded-xl border border-border bg-surface/60 p-4 sm:grid-cols-[minmax(0,1fr)_10rem_minmax(0,1fr)_auto] sm:items-end"
         onSubmit={(event) => {
           event.preventDefault();
           const input = event.currentTarget.querySelector<HTMLInputElement>('input[type=file]');
@@ -999,7 +1002,7 @@ function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
         {snapshot.images.map((image) => {
           const draft = drafts[image.id] ?? { kind: image.kind, caption: image.caption ?? '' };
           return (
-            <li key={image.id} className="flex gap-3 rounded-lg border border-border p-3">
+            <li key={image.id} className="flex gap-3 rounded-xl border border-border bg-surface/60 p-3">
               <img src={toUrl(image.file)} alt={image.caption ?? image.id} className="h-24 w-16 shrink-0 rounded object-cover" />
               <div className="flex min-w-0 flex-1 flex-col gap-2">
                 <span className="truncate text-xs text-muted-foreground">{image.file}</span>
@@ -1025,7 +1028,7 @@ function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
                 <div className="flex gap-2">
                   <button
                     type="button"
-                    className="rounded border border-border px-2 py-1 text-xs hover:bg-muted"
+                    className="rounded border border-border px-2 py-1 text-xs hover:bg-surface-strong"
                     onClick={() =>
                       void run(async () => {
                         await editor.updateImage(image.id, { kind: draft.kind, caption: draft.caption });
@@ -1036,7 +1039,7 @@ function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
                   </button>
                   <button
                     type="button"
-                    className="rounded border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-muted"
+                    className="rounded border border-destructive/40 px-2 py-1 text-xs text-destructive hover:bg-surface-strong"
                     onClick={() => {
                       if (!window.confirm('删除图片会同时清掉引用它的封面/插图，继续？')) return;
                       void run(async () => {
@@ -1075,7 +1078,7 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
 
   return (
     <div className="flex flex-col gap-5">
-      <ul className="flex flex-col divide-y divide-border rounded-lg border border-border">
+      <ul className="flex flex-col divide-y divide-border rounded-xl border border-border bg-surface/60">
         {snapshot.featured.length === 0 ? (
           <li className="px-4 py-8 text-center text-sm text-muted-foreground">还没有推荐语。</li>
         ) : null}
@@ -1112,7 +1115,7 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
       </ul>
 
       <form
-        className="flex flex-col gap-3 rounded-lg border border-border p-4"
+        className="flex flex-col gap-3 rounded-xl border border-border bg-surface/60 p-4"
         onSubmit={(event) => {
           event.preventDefault();
           const cleaned = rows
@@ -1205,7 +1208,7 @@ function CreditsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
 
   return (
     <form
-      className="flex flex-col gap-3 rounded-lg border border-border p-4"
+      className="flex flex-col gap-3 rounded-xl border border-border bg-surface/60 p-4"
       onSubmit={(event) => {
         event.preventDefault();
         const cleaned = rows

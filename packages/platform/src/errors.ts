@@ -15,6 +15,7 @@ export type PlatformErrorCode =
   | 'EINVAL'
   | 'ENOT_IMPLEMENTED'
   | 'EZIP_SLIP'
+  | 'E_TOO_LARGE'
   | 'EUNSUPPORTED';
 
 export class PlatformError extends Error {
@@ -40,6 +41,7 @@ const KNOWN: readonly PlatformErrorCode[] = [
   'EINVAL',
   'ENOT_IMPLEMENTED',
   'EZIP_SLIP',
+  'E_TOO_LARGE',
   'EUNSUPPORTED',
 ];
 

@@ -11,7 +11,7 @@ body,
 
 body {
   margin: 0;
-  background-color: var(--background);
+  background: transparent;
   color: var(--foreground);
   font-family:
     'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;

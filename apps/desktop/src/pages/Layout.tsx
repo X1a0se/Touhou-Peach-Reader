@@ -1,7 +1,8 @@
 import { VersionBadge, cn } from '@tpr/ui';
 import { Suspense } from 'react';
-import { NavLink, Outlet } from 'react-router';
+import { NavLink, Outlet, useLocation } from 'react-router';
 import { useServices } from '../context.js';
+import { WallpaperLayer } from '../components/WallpaperLayer.js';
 
 const NAV = [
   { to: '/', label: '首页' },
@@ -19,44 +20,69 @@ const NAV = [
 
 export function Layout() {
   const services = useServices();
+  const location = useLocation();
+  const slot = location.pathname.startsWith('/article/') ? 'article' : 'home';
 
   return (
-    <main className="mx-auto flex min-h-full max-w-5xl flex-col gap-8 px-8 py-14">
-      <header className="flex flex-col gap-4">
-        <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight">{services.app.getName()}</h1>
-          <VersionBadge version={services.app.getVersion()} />
-          <span className="ml-auto font-mono text-xs text-muted-foreground">{services.platform.kind}</span>
-        </div>
-        <p className="text-sm text-muted-foreground">东方同人阅读器 · 阅读器与数据库分离</p>
-        <nav className="flex flex-wrap gap-1 border-b border-border">
-          {NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) =>
-                cn(
-                  '-mb-px border-b-2 px-3 py-2 text-sm transition-colors',
-                  isActive
-                    ? 'border-primary font-medium text-foreground'
-                    : 'border-transparent text-muted-foreground hover:text-foreground',
-                )
-              }
+    <div className="relative min-h-full">
+      <WallpaperLayer slot={slot} />
+
+      <header className="sticky top-0 z-30 border-b border-border bg-background/75 backdrop-blur-md">
+        <div className="mx-auto flex max-w-6xl flex-col gap-2.5 px-6 pt-3 pb-2">
+          <div className="flex items-center gap-3">
+            <span
+              aria-hidden
+              className="grid h-9 w-9 place-items-center rounded-xl border border-border bg-accent-soft text-lg shadow-sm"
             >
-              {item.label}
-            </NavLink>
-          ))}
-        </nav>
+              🍑
+            </span>
+            <div className="min-w-0">
+              <h1 className="truncate text-lg leading-tight font-semibold tracking-tight">
+                {services.app.getName()}
+              </h1>
+              <p className="text-[0.7rem] text-muted-foreground">
+                东方同人阅读器 · 阅读器与数据库分离
+              </p>
+            </div>
+            <div className="ml-auto flex items-center gap-2">
+              <VersionBadge version={services.app.getVersion()} />
+              <span className="hidden rounded-full border border-border px-2 py-0.5 font-mono text-[0.65rem] text-muted-foreground sm:inline">
+                {services.platform.kind}
+              </span>
+            </div>
+          </div>
+
+          <nav aria-label="主导航" className="-mx-1 flex gap-1 overflow-x-auto pb-1">
+            {NAV.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === '/'}
+                className={({ isActive }) =>
+                  cn(
+                    'shrink-0 rounded-full px-3 py-1.5 text-sm whitespace-nowrap transition-colors',
+                    isActive
+                      ? 'bg-accent-soft font-medium text-foreground ring-1 ring-[var(--ring)]'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )
+                }
+              >
+                {item.label}
+              </NavLink>
+            ))}
+          </nav>
+        </div>
       </header>
 
-      <Suspense fallback={<p className="text-sm text-muted-foreground">载入中…</p>}>
-        <Outlet />
-      </Suspense>
+      <main className="relative z-10 mx-auto flex max-w-6xl flex-col gap-8 px-6 py-8">
+        <Suspense fallback={<p className="text-sm text-muted-foreground">载入中…</p>}>
+          <Outlet />
+        </Suspense>
+      </main>
 
-      <footer className="mt-auto text-xs text-muted-foreground">
+      <footer className="relative z-10 mx-auto max-w-6xl px-6 pb-8 text-xs text-muted-foreground">
         数据目录由 <span className="font-mono">$APPDATA/com.touhou.peachreader</span> 决定；正文按需读取。
       </footer>
-    </main>
+    </div>
   );
 }

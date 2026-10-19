@@ -24,6 +24,7 @@ pub fn run() {
             commands::fs::fs_copy,
             commands::zip::zip_extract_all,
             commands::zip::zip_create_from_dir,
+            commands::wallpaper::import_wallpaper,
             commands::fs::save_export,
         ])
         .run(tauri::generate_context!())
