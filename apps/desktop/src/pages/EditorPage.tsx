@@ -3,6 +3,7 @@ import { articleSeriesPosition } from '@tpr/core';
 import type {
   ArticleMeta,
   CreditsEntry,
+  ImageAsset,
   ImageKind,
   Recommendation,
   Series,
@@ -53,6 +54,90 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+const IMAGE_KIND_LABEL: Record<ImageAsset['kind'], string> = {
+  cover: '封面',
+  illustration: '插图',
+  captioned: '配图',
+  other: '其他',
+};
+
+function coverOptionLabel(image: ImageAsset): string {
+  const kind = IMAGE_KIND_LABEL[image.kind];
+  return image.caption ? `${image.caption}（${kind}）` : `${kind} · ${image.id}`;
+}
+
+/**
+ * 封面字段：下拉选库里已有图片，或直接上传一张（Goal 17）。
+ * 上传会立即写成 `kind='cover'` 的 ImageAsset，并自动选中，省掉“先去图片标签页再回来”的两步。
+ */
+function CoverField({
+  images,
+  value,
+  onChange,
+}: {
+  images: ImageAsset[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const services = useServices();
+  const { refresh } = useLibraryContext();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const upload = async (file: File): Promise<void> => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const ext = file.name.split('.').pop() ?? 'bin';
+      const caption = file.name.replace(/\.[^.]+$/, '');
+      const id = await services.editor.saveImage({ bytes, ext, kind: 'cover', caption });
+      await refresh();
+      onChange(id);
+      setMessage(`已上传并选中：${file.name}`);
+    } catch (error) {
+      setMessage(`上传失败：${errorText(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className={labelClass}>封面</span>
+      <div className="flex gap-2">
+        <select className={inputClass} value={value} onChange={(event) => onChange(event.target.value)}>
+          <option value="">无封面</option>
+          {images.map((image) => (
+            <option key={image.id} value={image.id}>
+              {coverOptionLabel(image)}
+            </option>
+          ))}
+        </select>
+        <label
+          className={`${buttonClass} flex shrink-0 cursor-pointer items-center px-3 ${busy ? 'pointer-events-none opacity-50' : ''}`}
+        >
+          {busy ? '上传中…' : '上传封面'}
+          <input
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif"
+            className="hidden"
+            disabled={busy}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) void upload(file);
+            }}
+          />
+        </label>
+      </div>
+      <span className="text-xs text-muted-foreground">
+        {message ?? '上传的图片会存进数据库的 images/ 目录，并自动选中；也可在「图片」标签页统一管理。'}
+      </span>
+    </div>
+  );
 }
 
 export function EditorPage() {
@@ -571,17 +656,7 @@ function ArticleForm({
       />
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="封面">
-          <select className={inputClass} value={coverImageId} onChange={(event) => setCoverImageId(event.target.value)}>
-            <option value="">无封面</option>
-            {snapshot.images.map((image) => (
-              <option key={image.id} value={image.id}>
-                {image.id}
-                {image.caption ? ` · ${image.caption}` : ''}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <CoverField images={snapshot.images} value={coverImageId} onChange={setCoverImageId} />
         <PickerRow
           title="插图（可多选）"
           options={snapshot.images.map((image) => ({ id: image.id, label: image.caption ?? image.id }))}
@@ -888,16 +963,7 @@ function SeriesForm({
       />
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="封面">
-          <select className={inputClass} value={coverImageId} onChange={(event) => setCoverImageId(event.target.value)}>
-            <option value="">无封面</option>
-            {snapshot.images.map((image) => (
-              <option key={image.id} value={image.id}>
-                {image.caption ?? image.id}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <CoverField images={snapshot.images} value={coverImageId} onChange={setCoverImageId} />
         <Field label="原出处">
           <input className={inputClass} value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} />
         </Field>
