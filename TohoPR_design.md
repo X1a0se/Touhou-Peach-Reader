@@ -1740,6 +1740,8 @@ async fn zip_extract_all(app: tauri::AppHandle, zip_path: String, dest_dir: Stri
 | `zip_create_from_dir` | `IZip.createFromDir` | `walkdir` 遍历 + `ZipWriter` DEFLATE；`manifest.json` 最后写 |
 | `save_export` | `apps/desktop/src/platform/files.ts` 的保存按钮 | **写 app data 之外**：目标路径来自系统保存对话框，只校验 `.tpr` 后缀、绝对路径、父目录存在；内部仍写 `*.tmp` 再 `rename` |
 | `stage_import` | `apps/desktop/src/platform/files.ts` 的 `stageTprFile` | **读 app data 之外**（Goal 18）：拖入 / 对话框选中的 `.tpr` 先复制到 `imports/staged-{ms}-{safe}.tpr`，后续解压与合并只碰 app data 内的路径；校验绝对路径、`.tpr` 后缀、常规文件、≤1 GB |
+| `app_info` | `apps/desktop/src/platform/app-info.ts` | 只读：返回 `{version, exePath, dataDir}`。`version` 取 `app.package_info()`（与 `tauri.conf.json` / `Cargo.toml` 同源）（Goal 19） |
+| `install_info` | `apps/desktop/src/platform/app-info.ts` | 只读：查 `HKCU\…\Uninstall\Touhou Peach Reader` 的 `InstallLocation` / `DisplayVersion`，返回 `{location, version}` 或 `null`；用于判断当前 exe 是安装版还是免安装版（Goal 20） |
 | `import_wallpaper` | `IWallpaperStore.importFile` | 壁纸源在 app data 之外（用户任意目录），读入后复制到 `$APPDATA/wallpapers/wp-{epoch_ms}.{ext}`；校验绝对路径、扩展名白名单、≤20 MB、magic bytes（PNG/JPEG/WebP）；返回 `{fileName, bytes}` |
 | `http_*` | — | **不实现**：网络走 JS `fetch`（见 14.5），避免把 reqwest/TLS 拖进首次编译 |
 
@@ -2072,9 +2074,36 @@ Goal 18 追加记录（修复：桌面/对话框路径导入被 app data 限制�
 - **修法**：新增 Rust 命令 `stage_import(source_path) -> String`：校验绝对路径、`.tpr` 后缀、常规文件、≤1 GB，复制到 `$APPDATA/imports/staged-{ms}-{sanitized}.tpr` 并返回该路径。TS 侧 `stageTprFile()`（`apps/desktop/src/platform/files.ts`）调它；`useLibrary.importPath` 与 `MergePage.choose` 改为"先 staging → 再 import/prepare → finally 删除 staged 文件"。解压/合并命令一行未改，安全边界仍是"只碰 app data"。
 - **验证**：真机 CDP 直接拿用户桌面那份 `夹具数据库-20261019-2319.tpr` 调 `stage_import` → 返回 `%APPDATA%\com.touhou.peachreader\imports\staged-….tpr`，`library.importZip(staged)` 导入成功（5 篇文章）、`fs_remove` 清理成功；非 `.tpr` 返回 `EINVAL: 只支持 .tpr 文件`，不存在的路径返回 `ENOENT`。
 - 教训：E2E 应至少有一条"从真实外部路径导入"的用例；只测 `importBytes` 会漏掉平台层的路径边界。
+
+Goal 19 追加记录（导出保真验证 + 安装版随构建同步）：
+
+- **用户的两个疑问**：① 导出的数据库是不是程序内修改后的版本；② 每次更新是否能同时作用于安装版与免安装版。
+- **导出链路核对**：`Library.export()` 读的是 `library.current().db`（编辑器 `applyEdit` 已经把内存副本 `Object.assign` 成最新值）与 `ContentStore` 里现读的正文，`selectSubset` 逐集合重建、`computeCounts` 重算、`manifest.updatedAt` 取导出时刻——**导出即当前状态**，没有缓存旧快照的路径。用户那份桌面导出（5 篇文章、2 个系列、2 位作者）也与库内一致。
+- **安装版不同步的根因**：Tauri 没有增量更新。`tauri build` 只写 `target/release` 与 `bundle/nsis`，NSIS 安装包**不会**自动覆盖已安装副本；实测注册表 `InstallLocation=D:\Touhou Peach Reader` 里仍是 19:08 构建的 0.1.0（哈希 `33E9109A…`），而 `target/release` 已是 0.1.1（`90E79ED4…`）。另外根 `package.json` 的 `version` 在升 0.1.1 时漏改，五个版本号里混进一个 0.1.0。
+- **修法一：发布脚本 `scripts/release.mjs`**：
+  - `status`（默认）只读核对五处版本（根/core/desktop/`tauri.conf.json`/`Cargo.toml`）、免安装 exe 的 `VersionInfo.FileVersion` 与 SHA-256、最新 NSIS 安装包、注册表里的安装版版本/哈希；任何不一致以退出码 1 结束并打印差异。
+  - `build` = `pnpm check` + `tauri build`（自动把 `~/.cargo/bin` 加进 PATH）。
+  - `install` = 检查无运行中进程 → 从注册表取 `InstallLocation`（NSIS 写入时带引号，解析要剥掉）→ `setup.exe /S /D=<dir>` 静默覆盖 → 轮询等待新 exe 版本落地。
+  - `--set x.y.z` 一次改五处版本号。
+  - 对应 `package.json`：`release:status` / `release:build` / `release:install` / `release`。
+- **修法二：运行时可确认**：Rust `app_info` 返回 `{version, exePath, dataDir}`；`apps/desktop/src/platform/app-info.ts` 在浏览器预览返回 `null`；设置页新增「关于」面板，显示版本、运行方式（按 `exePath` 是否含 `target\release` 区分安装版/免安装）、程序路径与数据目录。
+- **修法三：导出保真测试** `packages/core/test/export-fidelity.test.ts`（2 例）：导入夹具 → 编辑器改标题/简介/正文/角色标签/封面、调换系列目录 → 导出 → 解包逐文件断言（JSON 字段、`.md` 正文、`images/cover/*.png` 存在、`series.articleIds` 为新顺序、`counts` 与库一致）→ 再把导出物导入一个全新库，除 `manifest.updatedAt` 外与当前库逐字段相等（比较前对对象键排序，避免字段顺序误报）；另一例删除文章后再导出，断言 `.json`/`.md` 消失、系列目录同步清理、计数减一。
+- 结果：`corepack pnpm check` = platform 10 + schema 25 + core 99 + desktop 16 = **150 tests**；根 `package.json` 版本补到 0.1.1。
+- 教训：多副本分发（免安装 + 安装包 + 已安装）下，"改了代码但用户看到的还是旧版"是默认结果，不是意外；要么提供自动更新，要么把"核对 + 覆盖安装"做成一键命令。
 - 顺手把拖拽做成**全局能力**：`LibraryProvider` 注册一次 `onTauriDrop`（原来只有首页与导入页各注册一次），无论在哪个页面拖入 `.tpr` 都会导入；页面里的 `useNativeDrop` 调用随之删除，避免同一路径被导入两次。
 - 版本号随之升到 **0.1.1**（`apps/desktop/package.json`、`src-tauri/tauri.conf.json`、`Cargo.toml`），安装包改名为 `Touhou Peach Reader_0.1.1_x64-setup.exe`，方便用户分辨是否装上了这次修复。
 - 全局拖拽的验证方式：dev 下用 CDP 调 `plugin:event|emit` 发 `tauri://drag-drop`（payload `{paths:['C:/Users/…/Desktop/….tpr']}`），首页立即出现「已导入「夹具数据库」：5 篇文章、2 个系列」——说明监听已从页面搬到 Provider 且仍能走 `stage_import → importZip` 全链路。
+
+Goal 20 追加记录（统一更新两版：一条命令 + 运行方式识别）：
+
+- **问题**：即使有 `release.mjs`，更新仍是三步（build/install/portable 甚至只存在于文档里），免安装 exe 也埋在 `target/release` 里；用户无法一眼确认「我现在跑的是哪一版」，安装版落后时也没有提示。
+- **发布编排**：`release.mjs` 新增 `release` = `build → install → packagePortable → status`，并在开头检查应用是否在运行（运行中会锁 exe）；`packagePortable()` 把 exe 重命名为 `Touhou Peach Reader.exe`、连同安装包与 `README.txt`、`manifest.json`（版本/构建时间/SHA-256）写进 `dist/portable/`，每次先清空旧目录避免残留旧 exe。`status` 增加「免安装目录」一行，判据从「哈希一致」改为**版本号一致**（哈希必不相同，见 Goal 19 记录）。
+- **双击入口**：根目录 `发布更新.cmd` 调 `corepack pnpm release`，失败也 `pause`，不闪退。
+- **运行方式识别**：Rust 新增只读命令 `install_info()`，用 `reg query` 解析 `InstallLocation`/`DisplayVersion`（不新增 crate；非 Windows 返回 `None`）。TS 侧 `resolveRunMode(exePath, installLocation)` 按「exe 是否位于安装目录下」判断（去 `\\?\`、统一斜杠与大小写），不再用「路径里有没有 `target\release`」——后者对 `dist/portable` 会误判。
+- **关于面板**：显示运行方式、当前版本、程序路径、数据目录、安装版「版本 · 位置」；安装版版本与当前 exe 不一致时显示琥珀色提示，指引双击「发布更新.cmd」。
+- 验证：`node scripts/release.mjs release` 在 0.1.1 上端到端跑通（platform 10 + schema 25 + core 99 + desktop 21 = **155 tests**，末尾 `✔ 一致`）；分别启动 `D:\Touhou Peach Reader\touhou-peach-reader.exe` 与 `dist/portable/Touhou Peach Reader.exe`，CDP 读取「关于」面板确认运行方式分别为安装版/免安装版（截图 `.tmp/goal20-about-installed.png`、`.tmp/goal20-about-portable.png`）。
+- **冷启动 IPC 竞态**：WebView2 先渲染、Tauri IPC 后可用，冷启动后前 5–8 秒 `invoke('app_info')` 一直 pending（同一进程里稍后直接调用又能成功，说明不是路径或注册表问题）。`getAppRuntimeInfo` 因此带 `waitForInvoke(15s)` + 5 次重试（每次 5s 超时、间隔 800ms），面板在未返回前显示「读取中…」而不是「读取失败」；全部超时才降级并 `console.warn`。
+- 教训：多副本分发时，"更新"必须是一个给人用的一步操作，而不是一串给开发者看的命令；应用自身也要能回答"我是谁、从哪来、是不是最新"。
 
 ---
 
@@ -2089,6 +2118,6 @@ Goal 18 追加记录（修复：桌面/对话框路径导入被 app data 限制�
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–18 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
+| Goal 1–20 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
 
 

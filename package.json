@@ -1,6 +1,6 @@
 {
   "name": "touhou-peach-reader",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.14.0",
@@ -17,6 +17,11 @@
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "check:no-tauri": "node scripts/check-no-tauri.mjs",
     "check": "corepack pnpm typecheck && corepack pnpm test && node scripts/check-boundaries.mjs && node scripts/check-no-tauri.mjs",
+    "release": "node scripts/release.mjs release",
+    "release:status": "node scripts/release.mjs status",
+    "release:build": "node scripts/release.mjs build",
+    "release:install": "node scripts/release.mjs install",
+    "release:portable": "node scripts/release.mjs portable",
     "format": "biome format --write .",
     "lint": "biome check ."
   },

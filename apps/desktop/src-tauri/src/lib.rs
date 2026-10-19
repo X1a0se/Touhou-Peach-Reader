@@ -27,6 +27,8 @@ pub fn run() {
             commands::wallpaper::import_wallpaper,
             commands::fs::save_export,
             commands::fs::stage_import,
+            commands::app::app_info,
+            commands::app::install_info,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

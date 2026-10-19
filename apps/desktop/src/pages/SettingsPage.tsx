@@ -9,6 +9,7 @@ import { Button, Panel, SectionHeading } from '@tpr/ui';
 import { useEffect, useState } from 'react';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
+import { getAppRuntimeInfo, hasTauriInvoke, type AppRuntimeInfo } from '../platform/app-info.js';
 import { pickWallpaperFile } from '../platform/files.js';
 import { useSettingsContext } from '../settings/SettingsProvider.js';
 
@@ -208,6 +209,26 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [update, setUpdate] = useState<UpdateCheck | null>(null);
+  const [runtime, setRuntime] = useState<AppRuntimeInfo | null>(null);
+  const [runtimeLoading, setRuntimeLoading] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    const load = (): void => {
+      void getAppRuntimeInfo().then((info) => {
+        if (!alive) return;
+        setRuntimeLoading(false);
+        if (info) setRuntime(info);
+      });
+    };
+    load();
+    // 首次挂载可能早于 Tauri IPC 就绪，补一次重试（读到就停）。
+    const timer = setTimeout(load, 1500);
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, []);
 
   useEffect(() => {
     if (!ready) return;
@@ -402,6 +423,59 @@ export function SettingsPage() {
             </p>
           </div>
         )}
+      </Panel>
+
+      <Panel className="grid gap-3">
+        <SectionHeading
+          title="关于"
+          description="确认当前跑的是安装版还是免安装版；版本号来自 exe 自身，不是仓库里的 package.json。"
+        />
+        <dl className="grid gap-2 text-sm">
+          <div className="flex flex-wrap gap-2">
+            <dt className="w-20 shrink-0 text-muted-foreground">版本</dt>
+            <dd className="font-mono">{runtime?.version ?? '—'}</dd>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <dt className="w-20 shrink-0 text-muted-foreground">运行方式</dt>
+            <dd>
+              {runtime
+                ? runtime.mode === 'installed'
+                  ? '安装版'
+                  : '免安装版'
+                : runtimeLoading
+                  ? '读取中…'
+                  : hasTauriInvoke()
+                    ? '读取失败（详情见控制台）'
+                    : '浏览器预览（无 Tauri）'}
+            </dd>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <dt className="w-20 shrink-0 text-muted-foreground">程序路径</dt>
+            <dd className="break-all font-mono text-xs">{runtime?.exePath ?? '—'}</dd>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <dt className="w-20 shrink-0 text-muted-foreground">数据目录</dt>
+            <dd className="break-all font-mono text-xs">{runtime?.dataDir ?? services.platform.paths.dataDir}</dd>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <dt className="w-20 shrink-0 text-muted-foreground">安装版</dt>
+            <dd className="break-all font-mono text-xs">
+              {runtime?.install
+                ? `${runtime.install.version || '未知版本'} · ${runtime.install.location}`
+                : '未安装（当前为免安装版，或本机没有注册表记录）'}
+            </dd>
+          </div>
+        </dl>
+        {runtime?.install && runtime.install.version && runtime.install.version !== runtime.version ? (
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            安装版仍是 {runtime.install.version}，与当前 {runtime.version} 不一致。双击仓库根目录的
+            「发布更新.cmd」可一次性重建并覆盖两版。
+          </p>
+        ) : null}
+        <p className="text-xs text-muted-foreground">
+          升级：双击仓库根目录「发布更新.cmd」，或执行 `corepack pnpm release` —— 会重建、覆盖安装版、刷新
+          `dist/portable/` 免安装目录，并核对两版版本号。
+        </p>
       </Panel>
 
       <Panel tone="plain" className="rounded-xl border border-border bg-surface/40 p-5 text-sm text-muted-foreground">
