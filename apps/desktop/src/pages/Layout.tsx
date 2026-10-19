@@ -9,6 +9,7 @@ const NAV = [
   { to: '/featured/series', label: '精选系列' },
   { to: '/favorites', label: '收藏' },
   { to: '/editor', label: '编辑器' },
+  { to: '/merge', label: '合并' },
 ];
 
 export function Layout() {

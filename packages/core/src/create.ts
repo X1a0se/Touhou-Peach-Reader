@@ -2,6 +2,7 @@ import type { Platform } from '@tpr/platform';
 import { createLibrary, type Library } from './db/library.js';
 import { createEditor, type Editor } from './editor/index.js';
 import { createFavorites, type Favorites } from './favorites.js';
+import { createMergeService, type MergeService } from './merge/service.js';
 import { createSearchService, type SearchService } from './search/service.js';
 import { getName, getVersion } from './version.js';
 
@@ -21,6 +22,7 @@ export interface Services {
   readonly favorites: Favorites;
   readonly search: SearchService;
   readonly editor: Editor;
+  readonly merge: MergeService;
 }
 
 export function createServices(platform: Platform): Services {
@@ -32,5 +34,6 @@ export function createServices(platform: Platform): Services {
     favorites: createFavorites(platform, () => library.current()?.databaseId ?? null),
     search: createSearchService(library),
     editor: createEditor(platform, library),
+    merge: createMergeService(platform, library),
   };
 }

@@ -188,8 +188,19 @@ function PickerRow({
 }
 
 function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+  const library = useLibraryContext();
   const [editing, setEditing] = useState<ArticleMeta | null>(null);
   const [creating, setCreating] = useState(false);
+  const [picked, setPicked] = useState<Set<string>>(new Set());
+
+  const togglePicked = (id: string) => {
+    setPicked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
@@ -204,6 +215,27 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
         >
           新建文章
         </button>
+        <details className="rounded-md border border-border px-3 py-2 text-sm">
+          <summary className="cursor-pointer select-none text-muted-foreground">
+            多选导出（已选 {picked.size}）
+          </summary>
+          <div className="mt-2 flex max-h-48 flex-col gap-1 overflow-auto">
+            {snapshot.articles.map((article) => (
+              <label key={article.id} className="flex items-center gap-2">
+                <input type="checkbox" checked={picked.has(article.id)} onChange={() => togglePicked(article.id)} />
+                <span className="truncate">{article.title}</span>
+              </label>
+            ))}
+          </div>
+          <button
+            type="button"
+            className={`${buttonClass} mt-2 w-full`}
+            disabled={picked.size === 0 || library.busy}
+            onClick={() => void library.exportSelection({ articles: [...picked] })}
+          >
+            导出选中（{picked.size}）
+          </button>
+        </details>
         <PanelList
           items={snapshot.articles}
           selectedId={editing?.id ?? null}
@@ -238,6 +270,7 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
             setEditing(null);
             setCreating(false);
           }}
+          onExport={editing ? () => void library.exportSelection({ articles: [editing.id] }) : undefined}
           onDelete={
             editing
               ? async () => {
@@ -265,12 +298,14 @@ function ArticleForm({
   onSubmit,
   onCancel,
   onDelete,
+  onExport,
 }: {
   snapshot: DBSnapshot;
   initial: ArticleMeta | null;
   onSubmit(draft: Parameters<Editor['saveArticle']>[0]): Promise<void>;
   onCancel(): void;
   onDelete?: (() => Promise<void>) | undefined;
+  onExport?: (() => void) | undefined;
 }) {
   const services = useServices();
   const [title, setTitle] = useState(initial?.title ?? '');
@@ -418,6 +453,11 @@ function ArticleForm({
         <button type="button" className={buttonClass} onClick={onCancel}>
           取消
         </button>
+        {onExport ? (
+          <button type="button" className={buttonClass} onClick={onExport}>
+            导出这篇
+          </button>
+        ) : null}
         {onDelete ? (
           <button
             type="button"

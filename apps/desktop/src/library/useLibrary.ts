@@ -1,4 +1,4 @@
-import type { DBSnapshot, Services } from '@tpr/core';
+import type { DBSnapshot, ExportSelection, Services } from '@tpr/core';
 import type { Issue } from '@tpr/schema';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { onTauriDrop, pickTprFile, readFileBytes, saveTprFile } from '../platform/files.js';
@@ -15,6 +15,8 @@ export interface LibraryState {
   importBytes(bytes: Uint8Array): Promise<void>;
   importPath(path: string): Promise<void>;
   exportAll(): Promise<void>;
+  /** 导出单篇/选中（Goal 10）。 */
+  exportSelection(selection: ExportSelection): Promise<void>;
   pickAndImport(): Promise<void>;
   /** 编辑器写完内存后来刷新 Provider 里的 snapshot（不重读磁盘）。 */
   refresh(): Promise<void>;
@@ -105,21 +107,28 @@ export function useLibrary(services: Services): LibraryState {
     if (path) await importPath(path);
   }, [importPath]);
 
+  const exportSelection = useCallback(
+    async (selection: ExportSelection) => {
+      if (!snapshot) return;
+      setBusy(true);
+      setError(null);
+      try {
+        const result = await services.library.export(selection);
+        const saved = await saveTprFile(result.fileName, result.bytes);
+        setWarnings((prev) => [...prev, ...result.warnings]);
+        setMessage(saved ? `已导出到 ${saved}` : '已生成导出文件（未保存）');
+      } catch (cause) {
+        setError(describe(cause));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [services, snapshot],
+  );
+
   const exportAll = useCallback(async () => {
-    if (!snapshot) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const result = await services.library.export({ all: true });
-      const saved = await saveTprFile(result.fileName, result.bytes);
-      setWarnings((prev) => [...prev, ...result.warnings]);
-      setMessage(saved ? `已导出到 ${saved}` : '已生成导出文件（未保存）');
-    } catch (cause) {
-      setError(describe(cause));
-    } finally {
-      setBusy(false);
-    }
-  }, [services, snapshot]);
+    await exportSelection({ all: true });
+  }, [exportSelection]);
 
   const refresh = useCallback(async () => {
     setSnapshot(services.library.snapshot());
@@ -135,6 +144,7 @@ export function useLibrary(services: Services): LibraryState {
     importBytes,
     importPath,
     exportAll,
+    exportSelection,
     pickAndImport,
     refresh,
   };

@@ -5,6 +5,7 @@ import { EditorPage } from './pages/EditorPage.js';
 import { FeaturedPage } from './pages/FeaturedPage.js';
 import { HomePage } from './pages/HomePage.js';
 import { Layout } from './pages/Layout.js';
+import { MergePage } from './pages/MergePage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
 import { SearchPage } from './pages/SearchPage.js';
 import { SeriesPage } from './pages/SeriesPage.js';
@@ -24,6 +25,7 @@ export const router = createHashRouter([
       { path: 'featured/series', element: <FeaturedPage page="series" /> },
       { path: 'favorites', element: <FavoritesPage /> },
       { path: 'editor', element: <EditorPage /> },
+      { path: 'merge', element: <MergePage /> },
       { path: 'article/:id', element: <ArticlePage /> },
       { path: 'series/:id', element: <SeriesPage /> },
       { path: '*', element: <NotFoundPage /> },
