@@ -1,6 +1,7 @@
 import { DropZone, cn } from '@tpr/ui';
 import { useCallback } from 'react';
 import { Link } from 'react-router';
+import { RandomSection } from '../components/RandomSection.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { readFileBytes, useNativeDrop } from '../library/useLibrary.js';
 
@@ -86,6 +87,8 @@ export function HomePage() {
               ))}
             </dl>
           </section>
+
+          <RandomSection snapshot={snapshot} />
 
           <section className="rounded-lg border border-border p-5">
             <div className="mb-3 flex items-baseline justify-between">
