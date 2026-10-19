@@ -8,13 +8,14 @@ const NAV = [
   { to: '/featured/short', label: '精选短文' },
   { to: '/featured/series', label: '精选系列' },
   { to: '/favorites', label: '收藏' },
+  { to: '/editor', label: '编辑器' },
 ];
 
 export function Layout() {
   const services = useServices();
 
   return (
-    <main className="mx-auto flex min-h-full max-w-3xl flex-col gap-8 px-8 py-14">
+    <main className="mx-auto flex min-h-full max-w-5xl flex-col gap-8 px-8 py-14">
       <header className="flex flex-col gap-4">
         <div className="flex items-center gap-3">
           <h1 className="text-3xl font-semibold tracking-tight">{services.app.getName()}</h1>

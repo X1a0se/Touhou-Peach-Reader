@@ -1,11 +1,13 @@
 import type { Platform } from '@tpr/platform';
-import type { RawDatabase } from '@tpr/schema';
+import { type RawDatabase, validateDatabase } from '@tpr/schema';
 import { createContentStore, type ContentStore } from './content-store.js';
 import { exportDatabase, type ExportResult, type ExportSelection } from './export.js';
 import type { ImportOutcome } from './import.js';
 import { importDatabaseFromBytes, importDatabaseFromPath } from './import.js';
 import { normalizeDatabase } from './normalize.js';
 import { readDatabaseDir } from './read.js';
+import { serializeDatabase, writeDatabaseDir } from './write.js';
+import { computeCounts } from './normalize.js';
 import { toSnapshot, type DBSnapshot } from './snapshot.js';
 import { ioFor } from './workspace.js';
 import { readActive, workspacePath } from './workspace.js';
@@ -30,6 +32,11 @@ export interface Library {
   saveContent(articleId: string, markdown: string): Promise<void>;
   /** 每次从磁盘载入或写完正文都 +1；搜索索引靠它判断是否需要重建。 */
   readonly revision: number;
+  /**
+   * 编辑器专用：在结构化克隆出来的草稿上改，校验通过才替换内存态并整体落盘。
+   * 所有写入串行执行，避免快速连点造成 `.tmp` 竞争（design §9.1）。
+   */
+  applyEdit(build: (draft: RawDatabase) => void): Promise<void>;
 }
 
 /**
@@ -39,6 +46,7 @@ export interface Library {
 export function createLibrary(platform: Platform): Library {
   let loaded: LoadedDatabase | null = null;
   let revision = 0;
+  let writeQueue: Promise<void> = Promise.resolve();
 
   async function loadFrom(dir: string, databaseId: string): Promise<LoadedDatabase> {
     const io = ioFor(platform);
@@ -102,6 +110,57 @@ export function createLibrary(platform: Platform): Library {
 
     get revision() {
       return revision;
+    },
+
+    applyEdit(build) {
+      const run = async (): Promise<void> => {
+        const current = loaded;
+        if (!current) throw new Error('尚未打开数据库，无法编辑');
+        const draft = structuredClone(current.db);
+        build(draft);
+        draft.manifest.updatedAt = new Date().toISOString();
+        computeCounts(draft);
+        // 编辑后包内文件集合会变（新增正文/图片、改 kind），校验前必须重算
+        draft.filePaths = new Set([
+          ...draft.articles.flatMap((article) =>
+            typeof article.content === 'object' && article.content !== null ? [article.content.file] : [],
+          ),
+          ...draft.images.map((image) => image.file),
+        ]);
+        const report = validateDatabase(draft);
+        const error = report.errors[0];
+        if (error) throw new Error(`${error.code}: ${error.message}`);
+
+        const io = ioFor(platform);
+        const dirtyPath = io.join(current.dir, '.dirty');
+        await platform.fs.writeText(dirtyPath, JSON.stringify({ at: new Date().toISOString() }));
+        const markdown = new Map<string, string>();
+        for (const article of draft.articles) {
+          try {
+            markdown.set(article.id, await current.contents.read(article.id));
+          } catch {
+            markdown.set(article.id, '');
+          }
+        }
+        await writeDatabaseDir(io, current.dir, serializeDatabase(draft, markdown));
+        if (await platform.fs.exists(dirtyPath)) await platform.fs.remove(dirtyPath);
+
+        current.db.manifest.counts = draft.manifest.counts;
+        Object.assign(current.db, {
+          authors: draft.authors,
+          tags: draft.tags,
+          images: draft.images,
+          articles: draft.articles,
+          series: draft.series,
+          featured: draft.featured,
+          credits: draft.credits,
+        });
+        current.db.manifest.updatedAt = draft.manifest.updatedAt;
+        current.db.filePaths = draft.filePaths;
+        revision += 1;
+      };
+
+      return writeQueue.then(run, run);
     },
   };
 }

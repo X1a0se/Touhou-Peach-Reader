@@ -16,6 +16,8 @@ export interface LibraryState {
   importPath(path: string): Promise<void>;
   exportAll(): Promise<void>;
   pickAndImport(): Promise<void>;
+  /** 编辑器写完内存后来刷新 Provider 里的 snapshot（不重读磁盘）。 */
+  refresh(): Promise<void>;
 }
 
 const describe = (error: unknown): string =>
@@ -119,6 +121,10 @@ export function useLibrary(services: Services): LibraryState {
     }
   }, [services, snapshot]);
 
+  const refresh = useCallback(async () => {
+    setSnapshot(services.library.snapshot());
+  }, [services]);
+
   return {
     status,
     snapshot,
@@ -130,6 +136,7 @@ export function useLibrary(services: Services): LibraryState {
     importPath,
     exportAll,
     pickAndImport,
+    refresh,
   };
 }
 

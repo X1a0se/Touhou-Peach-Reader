@@ -1,6 +1,7 @@
 import { createHashRouter } from 'react-router';
 import { ArticlePage } from './pages/ArticlePage.js';
 import { FavoritesPage } from './pages/FavoritesPage.js';
+import { EditorPage } from './pages/EditorPage.js';
 import { FeaturedPage } from './pages/FeaturedPage.js';
 import { HomePage } from './pages/HomePage.js';
 import { Layout } from './pages/Layout.js';
@@ -22,6 +23,7 @@ export const router = createHashRouter([
       { path: 'featured/short', element: <FeaturedPage page="short" /> },
       { path: 'featured/series', element: <FeaturedPage page="series" /> },
       { path: 'favorites', element: <FavoritesPage /> },
+      { path: 'editor', element: <EditorPage /> },
       { path: 'article/:id', element: <ArticlePage /> },
       { path: 'series/:id', element: <SeriesPage /> },
       { path: '*', element: <NotFoundPage /> },

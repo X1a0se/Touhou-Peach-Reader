@@ -1951,6 +1951,16 @@ Goal 8 追加记录：
 - 首页新增「随便看看」区块：`随机一篇` 直接 `navigate('/article/' + id)`；`十连抽` 渲染 2/3/5 列卡片网格（封面 5:7、标题、系列名或"短篇"），提供「重新抽取」，不排除已抽过的。
 - 夹具只有 1 个系列（2 篇）+ 1 个短篇 → 十连抽得 2 组，正好覆盖"组数不足"分支；真机 7 项断言全过（按钮、组数提示、卡片网格、系列不重复、重抽、卡片跳转、随机跳转），截图 `.tmp/goal8-home.png`。
 
+Goal 9 追加记录：
+
+- **写入路径**：编辑器全部走 `library.applyEdit(build)` —— `structuredClone(current.db)` → 改草稿 → 重算 `filePaths` → `computeCounts` → `validateDatabase`（有 error 直接抛 `CODE: message`，不落盘）→ 写 `.dirty` → 逐篇读正文 → `serializeDatabase` + `writeDatabaseDir` → 删 `.dirty` → 内存替换 + `revision += 1`；所有写入走 `writeQueue` 串行（design §9.1）。
+- **`filePaths` 必须重算**：导入时 `filePaths` 是只读集合，编辑新增正文/图片后不重算会误报 `E_CONTENT_MISSING` / `E_IMAGE_FILE_MISSING`（实现时踩过）。
+- **作者别名复用**：`saveAuthor` 无 id 时按 `normalizeName` 在 canonicalName 与 aliases 里查重，命中就复用原 id，不新建（/goal 9 明确要求）；标签同理，但查重限定在同一 `category` 内。
+- **图片**：`saveImage` 写 `images/{kind}/{id}.{ext}`；`updateImage` 改 kind 时先复制到新路径再删旧文件；`deleteImage` 级联清掉引用它的 `coverImageId` / `illustrationImageIds`。
+- **系列双向同步**：`saveSeries` 把 `articleIds` 里的文章改成 `series-entry` 并写 `seriesId`，被移出的文章降级为 `short` 并删 `seriesId`；`deleteSeries` 一律降级。
+- 桌面端 `/editor` 七个 tab（文章/系列/作者/标签/图片/推荐语/鸣谢）：文章与系列是"列表 + 表单"两栏，正文按需读取（编辑元数据不覆盖正文），标签/作者用复选网格，图片用文件上传 + 逐张改 kind/配文，推荐语可多条（推荐人可空），鸣谢可增删并 ↑↓ 排序。`useLibrary().refresh()` 在每次保存后把 `library.snapshot()` 同步回 Provider。
+- 单测新增 `test/edit.test.ts` 8 个用例（新建/重启、别名复用、标签类别、系列同步、级联删除、图片移动/清理、推荐语与鸣谢、空标题拒绝），core 54 passed；真机 E2E `.tmp/goal9-e2e.mjs` 13 项全过（表单新建作者、表单改标题、详情页正文、图片上传/改 kind/删除、推荐语 2 条、鸣谢保序、刷新后全部保留），截图 `.tmp/goal9-editor.png`。
+
 ---
 
 ## 附：文档自检
