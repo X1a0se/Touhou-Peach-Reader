@@ -166,6 +166,8 @@ rustc -V && cargo -V
 2. **每完成一个 Goal 才允许升级一次**，升级必须附带 `pnpm -r typecheck && pnpm -r test && pnpm build:web` 全绿记录。
 3. `typescript@7.0.2` 是原生编译器（Corsa）。我们的 tsconfig 只用现代选项（`moduleResolution: "bundler"`、`jsx: "react-jsx"`、`verbatimModuleSyntax`），不用 project references，因此 TS7 的兼容面很窄。**降级预案**：若 `tsc -p --noEmit` 报"未知/不支持的选项"，把 `typescript` 换成 `5.9.3`（已确认存在），其余配置不动——这是唯一允许的版本回退。
 4. `vite@8` 使用 Rolldown/Oxc：不写 `build.rollupOptions.output.manualChunks`（对象形式已移除），需要分包时用 `build.rolldownOptions.codeSplitting`；不写 `esbuild.*` 选项。
+5. **TS 7 已移除 `baseUrl`**（实测报 `TS5102: Option 'baseUrl' has been removed`）。工作区解析不要靠 `paths` 指回源码：包与包之间走 pnpm 的 `workspace:` 链接 + 各包 `exports`，类型检查时由 `moduleResolution: "bundler"` 顺着 `node_modules` 找到 `.ts` 源文件。`paths` 只留给应用内的 `@/*`，且必须不写 `baseUrl`（TS 7 下 `paths` 相对 tsconfig 解析）。
+6. **`corepack enable` 可能没有写权限**（实测 `D:\nodejs` 不可写，`EPERM`）。因此根脚本与 `tauri.conf.json` 的 `beforeDevCommand`/`beforeBuildCommand` 一律写成 `corepack pnpm ...`，不依赖全局 `pnpm` shim。
 
 ---
 
@@ -572,9 +574,11 @@ export function normalizeName(raw: string): string {
   ```
 - ID 正则（zod 与运行时 `is*Id()` 共用）：
   ```ts
-  export const ID_DET = /^[pt]_[0-9a-f]{12}$/;        // author / tag
-  export const ID_RND = /^[asi]_[a-z0-9]{16}$/;       // article / series / image
+  export const ID_DET = /^[pt]_[0-9a-f]{12}$/;           // author / tag
+  export const ID_RND = /^[asi]_[a-z0-9]{16}$/;          // 生成：article / series / image
+  export const ID_RND_LENIENT = /^[asi]_[A-Za-z0-9]{16}$/; // 校验：容忍外部包的大写
   ```
+  生成器只产出小写 base36；**zod 校验用宽松版**（`ID_RND_LENIENT`），否则别的工具导出的合法 id 会被我们判死。文件系统不敏感问题由"生成端恒小写"保证，不靠校验端限制。
 - **id 一旦生成永不重算**：作者改名、标签改名都不换 id；否则合并会退化成按名字匹配。
 - 碰撞处理：加载时若两个不同归一化名产出同一 id（概率 2⁻⁴⁸ 量级），报 `E_ID_COLLISION` 并列出冲突双方，由用户手工改其中一方——不做静默加后缀。
 
@@ -700,6 +704,7 @@ export type Counts = Record<
 ├─ manifest.json
 ├─ authors.json                 ← 裸数组
 ├─ tags.json                    ← 裸数组
+├─ images.json                  ← 裸数组（图片元数据：caption / kind）
 ├─ articles/
 │  ├─ {articleId}.json
 │  └─ {articleId}.md
@@ -714,7 +719,9 @@ export type Counts = Record<
    └─ other/{imageId}.{ext}     ← 仅 kind='other' 时存在
 ```
 
-> 集合用"裸数组 + 每实体一文件"：`authors.json`/`tags.json`/`featured.json`/`credits.json` 小到单文件即可；`articles/`、`series/` 一实体一文件，是为了 GitHub 上 diff 可读、合并冲突粒度小。
+> 集合用"裸数组 + 每实体一文件"：`authors.json`/`tags.json`/`images.json`/`featured.json`/`credits.json` 小到单文件即可；`articles/`、`series/` 一实体一文件，是为了 GitHub 上 diff 可读、合并冲突粒度小。
+>
+> `images.json` 是 `/plan` 四、的目录树漏掉的一环：`ImageAsset` 有 `caption`/`kind` 这类元数据，但图片文件本身（`images/cover/{id}.ext`）只承载字节，元数据必须另有落点。补一个裸数组文件，语义与 `authors.json` 完全相同。
 
 ### 7.3 逐文件示例
 
@@ -789,6 +796,15 @@ export type Counts = Record<
   "createdAt": "2026-01-02T03:04:05.000Z",
   "updatedAt": "2026-09-30T12:00:00.000Z"
 }
+```
+
+`images.json`
+
+```json
+[
+  { "id": "i_8c2b7d1e5f9a3c6b", "file": "images/cover/i_8c2b7d1e5f9a3c6b.webp", "kind": "cover", "caption": "封面" },
+  { "id": "i_2d4e6f8a0b1c3d5e", "file": "images/illustration/i_2d4e6f8a0b1c3d5e.png", "kind": "illustration" }
+]
 ```
 
 `featured.json`（每条可承载**多条**推荐语）
@@ -1838,14 +1854,15 @@ const FORBIDDEN = [/@tauri-apps\//, /window\.__TAURI__/, /\bconvertFileSrc\b/, /
 | 2 | 本地存储 **SQLite**（`tauri-plugin-sql`） | **文件式 workspace**（与 `.tpr` 同构） | ① `/plan` 五、已留"或用文件系统 JSON 持久化"的口子；② `/goal` 3 明确允许"SQLite 或文件"；③ 单库 ≤ 2 万篇，JSON + 内存索引完全够用；④ 免去 SQLite schema 迁移与 `.tpr` 之间的双份模型 |
 | 3 | `content: string \| { file: string }` | 落盘**恒为** `{ file }`（导入时接受 string 并归一化） | 双形态会让"导出后逐字段相等"的 round-trip 断言变得含混；统一后格式只有一种 |
 | 4 | 标签/作者 **无 ID 规则** | 确定性 ID（`p_`/`t_` + sha256 前缀） | `/plan` 三、要求"按 id 归并"，但没定义 id 从哪来；不解决这个就无法合并 |
+| 5 | 四、目录树**没有图片元数据文件** | 新增 `images.json`（裸数组） | `ImageAsset` 有 `caption`/`kind`，而 `images/cover/{id}.ext` 只存字节；不给元数据一个落点，`.tpr` 就无法逐字段 round-trip |
 
 ### 17.2 一致性差异（3 处，实现细节，不改变架构）
 
 | # | `/plan` | 本设计 | 说明 |
 |---|---|---|---|
-| 5 | 搜索用 FlexSearch 的 highlight | 自建 `buildSnippets` | FlexSearch 的高亮基于 token 串，中文切词后原文位置对不上；自建才能保证片段来自原文 |
-| 6 | 路由未指定模式 | `createHashRouter` | `tauri://localhost` 下深链/刷新的 fallback 不可靠 |
-| 7 | 图片显示方式未指定 | 一律经 `IAssetUrls.toUrl()` | 用 Tauri `convertFileSrc` 才能加载 `asset:` URL；UI 层因此零 Tauri 依赖 |
+| 6 | 搜索用 FlexSearch 的 highlight | 自建 `buildSnippets` | FlexSearch 的高亮基于 token 串，中文切词后原文位置对不上；自建才能保证片段来自原文 |
+| 7 | 路由未指定模式 | `createHashRouter` | `tauri://localhost` 下深链/刷新的 fallback 不可靠 |
+| 8 | 图片显示方式未指定 | 一律经 `IAssetUrls.toUrl()` | 用 Tauri `convertFileSrc` 才能加载 `asset:` URL；UI 层因此零 Tauri 依赖 |
 
 ### 17.3 保持不变的部分
 
@@ -1882,6 +1899,16 @@ pnpm check              # typecheck + test + boundaries
 pnpm build:web          # 前端可构建
 pnpm --filter @tpr/desktop tauri build --debug   # 可选：确认 Rust 侧可打包
 ```
+
+### 18.1 实施记录（2026-10-19，Goal 1 实际执行）
+
+| 计划步骤 | 实际发生 | 处置 |
+|---|---|---|
+| 1 安装 Rust | `rustup-init.exe -y --profile minimal --default-toolchain stable-x86_64-pc-windows-msvc --no-modify-path` → **rustc/cargo 1.99.1**（2026-10-13） | `rust-toolchain.toml` 钉住 `1.99.1`；因 `--no-modify-path`，构建时显式 `export PATH="$HOME/.cargo/bin:$PATH"` |
+| 2 `corepack enable` | `EPERM`（`D:\nodejs` 不可写） | 全部脚本改用 `corepack pnpm ...`（§2.3-6） |
+| 4 根配置 | TS 7 移除 `baseUrl`，首次 `typecheck` 报 `TS5102` | 删掉各包 `baseUrl`/`paths`，靠 `workspace:` 链接 + `exports` 解析（§2.3-5） |
+| 9 `tauri init` | 手写配置；首次 `cargo build` 报 "`protocol-asset` feature 缺失" | `tauri = { version = "2", features = ["protocol-asset"] }`（`assetProtocol.enable: true` 的硬要求） |
+| 其余 | 照计划 | typecheck 5 包全绿、单测 34 个全绿、`build:web` 154 ms、边界检查全绿 |
 
 ---
 
