@@ -1738,12 +1738,13 @@ async fn zip_extract_all(app: tauri::AppHandle, zip_path: String, dest_dir: Stri
 | `fs_exists` / `fs_stat` / `fs_list_dir` / `fs_mkdir` / `fs_remove` / `fs_rename` / `fs_copy` | 同名方法 | 全部先过 `ensure_within(&app_data_dir, path)` |
 | `zip_extract_all` | `IZip.extractAll` | 用 `zip` crate 逐条流式复制（64 KB 缓冲）；拒 symlink、拒 `..`、限额（§5.5）；返回 `{entries, bytes, rejected}` |
 | `zip_create_from_dir` | `IZip.createFromDir` | `walkdir` 遍历 + `ZipWriter` DEFLATE；`manifest.json` 最后写 |
-| `save_export` | `apps/desktop/src/platform/files.ts` 的保存按钮 | **唯一豁免 app data 限制的命令**：目标路径来自系统保存对话框，只校验 `.tpr` 后缀、绝对路径、父目录存在；内部仍写 `*.tmp` 再 `rename` |
+| `save_export` | `apps/desktop/src/platform/files.ts` 的保存按钮 | **写 app data 之外**：目标路径来自系统保存对话框，只校验 `.tpr` 后缀、绝对路径、父目录存在；内部仍写 `*.tmp` 再 `rename` |
+| `stage_import` | `apps/desktop/src/platform/files.ts` 的 `stageTprFile` | **读 app data 之外**（Goal 18）：拖入 / 对话框选中的 `.tpr` 先复制到 `imports/staged-{ms}-{safe}.tpr`，后续解压与合并只碰 app data 内的路径；校验绝对路径、`.tpr` 后缀、常规文件、≤1 GB |
 | `import_wallpaper` | `IWallpaperStore.importFile` | 壁纸源在 app data 之外（用户任意目录），读入后复制到 `$APPDATA/wallpapers/wp-{epoch_ms}.{ext}`；校验绝对路径、扩展名白名单、≤20 MB、magic bytes（PNG/JPEG/WebP）；返回 `{fileName, bytes}` |
 | `http_*` | — | **不实现**：网络走 JS `fetch`（见 14.5），避免把 reqwest/TLS 拖进首次编译 |
 
 - 除 `zip_*` 外，其余命令都在 `spawn_blocking` 里跑，避免阻塞 async runtime。
-- `save_export` 是唯一的"写 app data 之外"的命令，因为导出必须落到用户选的位置；它不接受任意调用方，写之前要求父目录已存在且后缀为 `.tpr`。
+- 外部路径的例外只有三条：`save_export`（写到用户选的位置）、`import_wallpaper`（读用户选的壁纸）、`stage_import`（把拖入/选中的 `.tpr` 复制进 app data）。三者都只服务"用户在对话框/拖拽里明确指定的单个文件"，并各自校验后缀、绝对路径与大小上限。
 - zip 9 的 API 细节（实测）：`entry.name()` 返回 `Result<Cow<str>, ZipError>`；`ZipFile<'_, R>` 带泛型参数，辅助函数要写成 `fn is_symlink<R: Read + ?Sized>(f: &ZipFile<'_, R>)`。
 - 错误统一 `Err("ECODE: 可读信息")` 字符串，TS 侧用一个 `mapNativeError()` 转成 `PlatformError`（§5.3）。改错误文案不会破坏分类，因为分类只看 `ECODE` 前缀。
 
@@ -2064,6 +2065,14 @@ Goal 17 追加记录（封面内联上传）：
 - 下拉标签改为「配文（类型）」，无配文时显示「类型 · id」，比裸 id 可读；插图多选仍复用同一批 `ImageAsset`。
 - 验证：typecheck 通过；真机 CDP 用 `DataTransfer` 构造 160×224 PNG 触发隐藏 `input[type=file]` 的 change，下拉自动变为 `cover-test（封面）`，保存后文章详情页渲染该封面；测试产生的文章与图片已用 `editor.deleteArticle/deleteImage` 清掉。
 
+Goal 18 追加记录（修复：桌面/对话框路径导入被 app data 限制拦下）：
+
+- **现象**：用户从应用导出 `.tpr` 到桌面（`save_export` 允许外部路径），再拖回应用导入时横幅报 `EACCES: 路径越界（只允许 app data 目录）：\\?\C:\Users\…\Desktop\…tpr`。
+- **根因**：`library.importZip(path)` → `importDatabaseFromPath` → `platform.zip.extractAll(path, staging)`，而 Rust 的 `zip_extract_all` 仍先过 `ensure_within(app_data)`；拖拽与文件对话框给的正是 app data 之外的绝对路径。导出能成功、导入却失败，是两条路径的权限模型不一致（`save_export` 是例外，解压不是）。Goal 3 的 E2E 用 `importBytes` 与 app data 内路径，恰好绕过了这条分支。
+- **修法**：新增 Rust 命令 `stage_import(source_path) -> String`：校验绝对路径、`.tpr` 后缀、常规文件、≤1 GB，复制到 `$APPDATA/imports/staged-{ms}-{sanitized}.tpr` 并返回该路径。TS 侧 `stageTprFile()`（`apps/desktop/src/platform/files.ts`）调它；`useLibrary.importPath` 与 `MergePage.choose` 改为"先 staging → 再 import/prepare → finally 删除 staged 文件"。解压/合并命令一行未改，安全边界仍是"只碰 app data"。
+- **验证**：真机 CDP 直接拿用户桌面那份 `夹具数据库-20261019-2319.tpr` 调 `stage_import` → 返回 `%APPDATA%\com.touhou.peachreader\imports\staged-….tpr`，`library.importZip(staged)` 导入成功（5 篇文章）、`fs_remove` 清理成功；非 `.tpr` 返回 `EINVAL: 只支持 .tpr 文件`，不存在的路径返回 `ENOENT`。
+- 教训：E2E 应至少有一条"从真实外部路径导入"的用例；只测 `importBytes` 会漏掉平台层的路径边界。
+
 ---
 
 ## 附：文档自检
@@ -2077,6 +2086,6 @@ Goal 17 追加记录（封面内联上传）：
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–17 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
+| Goal 1–18 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
 
 

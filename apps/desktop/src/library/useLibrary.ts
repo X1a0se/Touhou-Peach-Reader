@@ -1,7 +1,7 @@
 import type { DBSnapshot, ExportSelection, Services } from '@tpr/core';
 import type { Issue } from '@tpr/schema';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { onTauriDrop, pickTprFile, readFileBytes, saveTprFile } from '../platform/files.js';
+import { onTauriDrop, pickTprFile, readFileBytes, saveTprFile, stageTprFile } from '../platform/files.js';
 
 export type LibraryStatus = 'loading' | 'empty' | 'ready';
 
@@ -84,8 +84,11 @@ export function useLibrary(services: Services): LibraryState {
       setBusy(true);
       setError(null);
       setMessage(null);
+      let staged: string | null = null;
       try {
-        const outcome = await services.library.importZip(path);
+        // 外部路径（桌面拖入 / 文件对话框）先复制进 app data，Rust 解压只认 app data 内的路径。
+        staged = await stageTprFile(path);
+        const outcome = await services.library.importZip(staged);
         imported.current = true;
         setSnapshot(outcome.snapshot);
         setWarnings([...outcome.report.warnings]);
@@ -96,6 +99,9 @@ export function useLibrary(services: Services): LibraryState {
       } catch (cause) {
         setError(describe(cause));
       } finally {
+        if (staged && staged !== path) {
+          await services.platform.fs.remove(staged).catch(() => undefined);
+        }
         setBusy(false);
       }
     },

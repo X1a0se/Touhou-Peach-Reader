@@ -3,7 +3,7 @@ import { Button, EmptyState, Panel, SectionHeading, StatTile } from '@tpr/ui';
 import { useState } from 'react';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
-import { pickTprFile } from '../platform/files.js';
+import { pickTprFile, stageTprFile } from '../platform/files.js';
 
 const COLLECTIONS: { key: CollectionKey; label: string }[] = [
   { key: 'authors', label: '作者' },
@@ -30,14 +30,20 @@ export function MergePage() {
     const path = await pickTprFile();
     if (!path) return;
     setBusy(true);
+    let staged: string | null = null;
     try {
       if (preview) await services.merge.discard(preview);
-      const next = await services.merge.prepare(path);
+      // 外部路径先复制进 app data；预览只保留解包目录，随后即可删掉暂存的 .tpr。
+      staged = await stageTprFile(path);
+      const next = await services.merge.prepare(staged);
       setPreview(next);
       setDecisions({});
     } catch (cause) {
       setError(describe(cause));
     } finally {
+      if (staged && staged !== path) {
+        await services.platform.fs.remove(staged).catch(() => undefined);
+      }
       setBusy(false);
     }
   };

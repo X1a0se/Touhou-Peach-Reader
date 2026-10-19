@@ -72,3 +72,15 @@ export function onTauriDrop(handler: (paths: string[]) => void): () => void {
 export async function readFileBytes(file: File): Promise<Uint8Array> {
   return new Uint8Array(await file.arrayBuffer());
 }
+
+/**
+ * 把外部 `.tpr` 复制进 app data（Goal 18）。
+ *
+ * 拖入 / 对话框选中的路径在 app data 之外，而 Rust 侧的解压、合并命令只接受 app data 内的
+ * 路径；这里先让 Rust 复制一份到 `imports/staged-*.tpr`，用完由调用方删除。
+ * 浏览器预览没有原生路径，原样返回（走 `importBytes` 分支）。
+ */
+export async function stageTprFile(sourcePath: string): Promise<string> {
+  if (!isTauri()) return sourcePath;
+  return invoke<string>('stage_import', { sourcePath });
+}

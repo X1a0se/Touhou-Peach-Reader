@@ -244,3 +244,51 @@ pub async fn save_export(path: String, bytes: Vec<u8>) -> Result<(), String> {
         .await
         .map_err(|e| format!("EIO: {e}"))?
 }
+
+/// 导入暂存：拖入 / 对话框选中的 `.tpr` 在 app data 之外，先复制进
+/// `$APPDATA/imports/staged-{ms}-{safe}.tpr`，后续解压与合并只碰 app data 内的路径。
+///
+/// 这是 `save_export` 之外第二个“外部路径”例外：**只读**源文件，不往外部写；
+/// 仍然限制 `.tpr` 后缀、绝对路径、常规文件与 1 GB 上限。
+#[tauri::command]
+pub async fn stage_import(app: AppHandle, source_path: String) -> Result<String, String> {
+    let source = PathBuf::from(&source_path);
+    if !source.is_absolute() {
+        return Err("EINVAL: 需要绝对路径".to_string());
+    }
+    let has_tpr_ext = source
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("tpr"))
+        .unwrap_or(false);
+    if !has_tpr_ext {
+        return Err("EINVAL: 只支持 .tpr 文件".to_string());
+    }
+    let meta = fs::metadata(&source).map_err(io_err)?;
+    if !meta.is_file() {
+        return Err("EINVAL: 不是常规文件".to_string());
+    }
+    if meta.len() > 1024 * 1024 * 1024 {
+        return Err("E_TOO_LARGE: 数据库包超过 1 GB".to_string());
+    }
+
+    let imports = app_data(&app)?.join("imports");
+    fs::create_dir_all(&imports).map_err(io_err)?;
+    let stem = source.file_stem().and_then(|s| s.to_str()).unwrap_or("import");
+    let safe: String = stem
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .take(40)
+        .collect();
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let dest = imports.join(format!("staged-{stamp}-{safe}.tpr"));
+
+    tauri::async_runtime::spawn_blocking(move || fs::copy(&source, &dest).map(|_| dest))
+        .await
+        .map_err(|e| format!("EIO: {e}"))?
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(io_err)
+}
