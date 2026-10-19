@@ -1,0 +1,85 @@
+import { describe, expect, it } from 'vitest';
+import { zipSync } from 'fflate';
+import { PlatformError } from '../src/errors.js';
+import { createMemoryPlatform } from '../src/memory/index.js';
+import { safeEntryPath } from '../src/security.js';
+
+describe('InMemoryFileSystem', () => {
+  it('读写文本与字节', async () => {
+    const { fs } = createMemoryPlatform();
+    await fs.writeText('/a/b.txt', '你好');
+    expect(await fs.readText('/a/b.txt')).toBe('你好');
+    expect((await fs.readBytes('/a/b.txt')).byteLength).toBe(6);
+    expect(await fs.exists('/a/b.txt')).toBe(true);
+    expect(await fs.exists('/a')).toBe(true);
+  });
+
+  it('listDir 区分文件与目录', async () => {
+    const { fs } = createMemoryPlatform();
+    await fs.writeText('/a/b.txt', 'x');
+    await fs.writeText('/a/c/d.txt', 'y');
+    const entries = await fs.listDir('/a');
+    expect(entries.map((e) => e.name).sort()).toEqual(['b.txt', 'c']);
+    expect(entries.find((e) => e.name === 'c')?.isDirectory).toBe(true);
+  });
+
+  it('rename 覆盖同名文件、移动目录', async () => {
+    const { fs } = createMemoryPlatform();
+    await fs.writeText('/a/x.txt', 'x');
+    await fs.writeText('/a/x.txt.tmp', 'y');
+    await fs.rename('/a/x.txt.tmp', '/a/x.txt');
+    expect(await fs.readText('/a/x.txt')).toBe('y');
+
+    await fs.rename('/a', '/b');
+    expect(await fs.exists('/a/x.txt')).toBe(false);
+    expect(await fs.readText('/b/x.txt')).toBe('y');
+  });
+
+  it('未递归删除非空目录会报 ENOTEMPTY', async () => {
+    const { fs } = createMemoryPlatform();
+    await fs.writeText('/a/b.txt', 'x');
+    await expect(fs.remove('/a')).rejects.toBeInstanceOf(PlatformError);
+    await fs.remove('/a', { recursive: true });
+    expect(await fs.exists('/a')).toBe(false);
+  });
+});
+
+describe('safeEntryPath', () => {
+  it('拒绝 zip-slip 与绝对路径', () => {
+    expect(safeEntryPath('../etc/passwd').ok).toBe(false);
+    expect(safeEntryPath('a/../../b').ok).toBe(false);
+    expect(safeEntryPath('/etc/passwd').ok).toBe(false);
+    expect(safeEntryPath('C:/windows').ok).toBe(false);
+    expect(safeEntryPath('a/b/c.json')).toEqual({ ok: true, path: 'a/b/c.json' });
+  });
+});
+
+describe('FflateZip', () => {
+  it('打包再解包，内容一致', async () => {
+    const { fs, zip } = createMemoryPlatform();
+    await fs.writeText('/data/articles/a.json', '{"id":"a"}');
+    await fs.writeText('/data/manifest.json', '{}');
+
+    const created = await zip.createFromDir('/data', '/out.tpr', { order: ['manifest.json'] });
+    expect(created.entries).toBe(2);
+
+    const extracted = await zip.extractAll('/out.tpr', '/restore');
+    expect(extracted.entries).toBe(2);
+    expect(extracted.rejected).toEqual([]);
+    expect(await fs.readText('/restore/articles/a.json')).toBe('{"id":"a"}');
+    expect(await fs.readText('/restore/manifest.json')).toBe('{}');
+  });
+
+  it('拒绝越界条目并记录 rejected，不中断整体', async () => {
+    const { fs, zip } = createMemoryPlatform();
+    const bytes = zipSync({
+      'ok.txt': new TextEncoder().encode('ok'),
+      '../evil.txt': new TextEncoder().encode('evil'),
+    });
+    const result = await zip.extractBytes(bytes, '/dest');
+    expect(result.entries).toBe(1);
+    expect(result.rejected).toHaveLength(1);
+    expect(await fs.readText('/dest/ok.txt')).toBe('ok');
+    expect(await fs.exists('/evil.txt')).toBe(false);
+  });
+});

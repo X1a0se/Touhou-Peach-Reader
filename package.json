@@ -1,0 +1,27 @@
+{
+  "name": "touhou-peach-reader",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "corepack pnpm --filter @tpr/desktop tauri dev",
+    "dev:web": "corepack pnpm --filter @tpr/desktop dev",
+    "build": "corepack pnpm --filter @tpr/desktop tauri build",
+    "build:web": "corepack pnpm --filter @tpr/desktop build",
+    "typecheck": "corepack pnpm -r --parallel typecheck",
+    "test": "corepack pnpm -r test",
+    "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check:no-tauri": "node scripts/check-no-tauri.mjs",
+    "check": "corepack pnpm typecheck && corepack pnpm test && node scripts/check-boundaries.mjs && node scripts/check-no-tauri.mjs",
+    "format": "biome format --write .",
+    "lint": "biome check ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "typescript": "7.0.2"
+  }
+}

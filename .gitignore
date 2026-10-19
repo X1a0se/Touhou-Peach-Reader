@@ -1,0 +1,21 @@
+# dependencies
+node_modules/
+
+# builds
+dist/
+target/
+*.tmp
+.dirty
+
+# tooling
+.vite/
+coverage/
+*.log
+pnpm-debug.log*
+
+# tauri generated
+apps/desktop/src-tauri/gen/
+
+# os
+.DS_Store
+Thumbs.db
