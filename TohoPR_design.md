@@ -1630,7 +1630,7 @@ pnpm tauri init --app-name "Touhou Peach Reader" \
 - `productName` 与窗口 `title` 都写死 `Touhou Peach Reader` —— Goal 1 的验收就是窗口标题，两个地方都要对。
 - `identifier` 决定 `$APPDATA` 的实际路径：`%APPDATA%\com.touhou.peachreader`（Windows）/ `~/Library/Application Support/com.touhou.peachreader`（macOS）。`@tpr/platform` 里的 `dataDir` 由它推导，**不要**在别处硬编码。
 - `assetProtocol.scope` 必须是 `$APPDATA/**`；写窄了图片全白，写宽了（如 `**`）等于把整个磁盘暴露给页面。
-- CSP 里 `connect-src` 必须含 GitHub 三个域：`api.github.com`（API）、`github.com`（release 重定向）、`objects.githubusercontent.com` / `*.githubusercontent.com`（实际资产下载）。**`style-src` 的 `'unsafe-inline'` 不能省**：Tailwind v4 与 React 内联 style 依赖它。
+- CSP 里 `connect-src` 必须含 GitHub 相关域：`api.github.com`（API）、`github.com`（release 重定向）、`objects.githubusercontent.com` / `release-assets.githubusercontent.com` / `*.githubusercontent.com`（实际资产下载）。实现时最初漏了资产域，真机下载会在重定向处被 CSP 拦下——已补进 `tauri.conf.json`。**`style-src` 的 `'unsafe-inline'` 不能省**：Tailwind v4 与 React 内联 style 依赖它。
 
 ### 14.3 Capabilities（最小权限）
 
@@ -1971,6 +1971,18 @@ Goal 10 追加记录：
 - 单测 `test/merge.test.ts` 7 个用例（新者胜、同内容不冲突、冲突+裁决、图片哈希冲突、幂等、prepare→apply→导出→再导入、悬空引用进 `report.dangling`），core 61 passed；真机 CDP 12 项断言全过（prepare 计数、自动更新、冲突清单、裁决落盘、未动项不变、无重复 id、取消清理且不改库、导出仍可用、`/merge` 页渲染）。
 - 编辑器文章面板新增「导出这篇」与「多选导出（已选 N）」，复用 `library.export({ articles })`；原生文件对话框无法在 CDP 里自动点，E2E 用服务层直调 + 页面渲染双重验证。
 - 顺带把 `random.test.ts` 的性能断言从 20ms 放宽到 50ms（取 5 次最快值），避免并行跑测试时抖动。
+
+Goal 11 追加记录：
+
+- **URL 解析是纯函数** `parseGitHubInput(input)`（`packages/core/src/github/url.ts`）：支持仓库首页、`/releases`、`/releases/latest`、`/releases/tag/{tag}`、资产直链、`owner/repo` 速记；非 github 域报 `E_GITHUB_HOST`，其余格式错误报 `E_GITHUB_URL`，错误类 `GitHubUrlError`（**故意不继承** `GitHubError`，调用方按类区分"地址错"和"网络错"）。
+- **API 直连、下载才套镜像**：`createGitHubService(platform, settings)` 的 `resolve` 打 `https://api.github.com/repos/{owner}/{repo}/releases/{latest|tags/{tag}}`，`download` 只对 `browser_download_url` 套 `applyMirrorPrefix`。理由：镜像通常只代理二进制，API 走镜像会破坏 JSON 语义；单测断言 api 未被镜像改写。
+- **资产挑选**：`.tpr` 优先，其次 `.zip`（`pickDatabaseAsset`）；都没有报 `E_NO_ASSET` 并列出资产名。下载上限默认 256 MB（`E_TOO_LARGE`），避免把内存打满。
+- **版本比较**：`checkUpdate` 把 tag 与 `manifest.version` 都去掉前缀 `v` 再比；tag 可能带仓库前缀（如 `tauri-v3.0.0`），此时只会判为"不同版本"，不会误判为相同。
+- **设置文件** `settings.json`（`createSettings`）：`{ theme, language, defaultSource, mirrorPrefix, extractLimits }`；宽容解析（坏字段逐个回退默认值，整份坏 JSON 回退全默认），写盘 tmp+rename；`settings.path` 直接暴露给设置页展示。core **不依赖 zod**，手写 `parseSettings`。
+- **主题三档**：`SettingsProvider` 在 `<html>` 上挂/去 `dark` 类，`system` 档监听 `prefers-color-scheme` 变化；切换即时生效并落盘。
+- **页面**：`/import`（DropZone + 原生拖拽 + GitHub 地址下载，默认源从设置预填）、`/credits`（`credits.json` 渲染，外链走 `IOpener`）、`/settings`（默认源、镜像前缀、主题、检查更新、重新下载并导入）。导航加到 10 项并改成 `flex-wrap`。
+- 单测 `test/github.test.ts`（9 个）+ `test/settings.test.ts`（6 个），core 76 passed；真机 CDP 13 项断言全过，其中真实调用 GitHub API 两次（`tauri-apps/tauri` 检查更新、`cli/cli` 解析 release 并验证 `.zip` 兜底），下载链路用注入的假 network 验证镜像前缀与导入闭环。
+- 截图：`.tmp/goal11-settings.png`（深色设置页）、`.tmp/goal11-credits.png`、`.tmp/goal11-import.png`。
 
 ---
 

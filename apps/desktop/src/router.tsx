@@ -3,12 +3,15 @@ import { ArticlePage } from './pages/ArticlePage.js';
 import { FavoritesPage } from './pages/FavoritesPage.js';
 import { EditorPage } from './pages/EditorPage.js';
 import { FeaturedPage } from './pages/FeaturedPage.js';
+import { CreditsPage } from './pages/CreditsPage.js';
 import { HomePage } from './pages/HomePage.js';
+import { ImportPage } from './pages/ImportPage.js';
 import { Layout } from './pages/Layout.js';
 import { MergePage } from './pages/MergePage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
 import { SearchPage } from './pages/SearchPage.js';
 import { SeriesPage } from './pages/SeriesPage.js';
+import { SettingsPage } from './pages/SettingsPage.js';
 
 /**
  * 路由表（design §13.3）：选 hash 而不是 history，生产环境的深链/刷新不依赖服务端 fallback。
@@ -26,6 +29,9 @@ export const router = createHashRouter([
       { path: 'favorites', element: <FavoritesPage /> },
       { path: 'editor', element: <EditorPage /> },
       { path: 'merge', element: <MergePage /> },
+      { path: 'import', element: <ImportPage /> },
+      { path: 'credits', element: <CreditsPage /> },
+      { path: 'settings', element: <SettingsPage /> },
       { path: 'article/:id', element: <ArticlePage /> },
       { path: 'series/:id', element: <SeriesPage /> },
       { path: '*', element: <NotFoundPage /> },

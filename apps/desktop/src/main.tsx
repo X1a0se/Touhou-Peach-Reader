@@ -5,6 +5,7 @@ import { RouterProvider } from 'react-router';
 import { ServicesProvider } from './context.js';
 import { FavoritesProvider } from './favorites/FavoritesProvider.js';
 import { LibraryProvider } from './library/LibraryProvider.js';
+import { SettingsProvider } from './settings/SettingsProvider.js';
 import { createPlatform } from './platform/index.js';
 import { router } from './router.js';
 import './styles.css';
@@ -23,11 +24,13 @@ if (import.meta.env.DEV) {
 createRoot(rootElement).render(
   <StrictMode>
     <ServicesProvider value={services}>
-      <LibraryProvider>
-        <FavoritesProvider>
-          <RouterProvider router={router} />
-        </FavoritesProvider>
-      </LibraryProvider>
+      <SettingsProvider>
+        <LibraryProvider>
+          <FavoritesProvider>
+            <RouterProvider router={router} />
+          </FavoritesProvider>
+        </LibraryProvider>
+      </SettingsProvider>
     </ServicesProvider>
   </StrictMode>,
 );

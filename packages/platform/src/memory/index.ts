@@ -1,6 +1,6 @@
 import { PlatformError } from '../errors.js';
 import { basenamePath, dirnamePath, joinPath } from '../paths.js';
-import type { Platform } from '../types.js';
+import type { INetwork, Platform } from '../types.js';
 import { InMemoryFileSystem } from './fs.js';
 import { FflateZip } from './zip.js';
 
@@ -10,6 +10,8 @@ export { FflateZip } from './zip.js';
 export interface MemoryPlatformOptions {
   dataDir?: string;
   files?: Record<string, string | Uint8Array>;
+  /** 注入假的网络实现（测试 GitHub 下载用）；缺省一律 ENOT_IMPLEMENTED */
+  network?: Partial<INetwork>;
 }
 
 /**
@@ -44,12 +46,16 @@ export function createMemoryPlatform(opts: MemoryPlatformOptions = {}): Platform
       },
     },
     network: {
-      fetchJson: async () => {
-        throw new PlatformError('ENOT_IMPLEMENTED', '内存平台不支持网络请求');
-      },
-      download: async () => {
-        throw new PlatformError('ENOT_IMPLEMENTED', '内存平台不支持网络请求');
-      },
+      fetchJson:
+        opts.network?.fetchJson ??
+        (async () => {
+          throw new PlatformError('ENOT_IMPLEMENTED', '内存平台不支持网络请求');
+        }),
+      download:
+        opts.network?.download ??
+        (async () => {
+          throw new PlatformError('ENOT_IMPLEMENTED', '内存平台不支持网络请求');
+        }),
     },
   };
 }

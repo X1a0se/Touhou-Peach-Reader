@@ -10,6 +10,9 @@ const NAV = [
   { to: '/favorites', label: '收藏' },
   { to: '/editor', label: '编辑器' },
   { to: '/merge', label: '合并' },
+  { to: '/import', label: '导入' },
+  { to: '/credits', label: '鸣谢' },
+  { to: '/settings', label: '设置' },
 ];
 
 export function Layout() {
@@ -24,7 +27,7 @@ export function Layout() {
           <span className="ml-auto font-mono text-xs text-muted-foreground">{services.platform.kind}</span>
         </div>
         <p className="text-sm text-muted-foreground">东方同人阅读器 · 阅读器与数据库分离</p>
-        <nav className="flex gap-1 border-b border-border">
+        <nav className="flex flex-wrap gap-1 border-b border-border">
           {NAV.map((item) => (
             <NavLink
               key={item.to}

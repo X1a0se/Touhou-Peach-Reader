@@ -6,3 +6,5 @@ export * from './random/index.js';
 export * from './search/index.js';
 export * from './editor/index.js';
 export * from './merge/index.js';
+export * from './github/index.js';
+export * from './settings/index.js';

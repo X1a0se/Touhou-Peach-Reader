@@ -2,8 +2,10 @@ import type { Platform } from '@tpr/platform';
 import { createLibrary, type Library } from './db/library.js';
 import { createEditor, type Editor } from './editor/index.js';
 import { createFavorites, type Favorites } from './favorites.js';
+import { createGitHubService, type GitHubService } from './github/client.js';
 import { createMergeService, type MergeService } from './merge/service.js';
 import { createSearchService, type SearchService } from './search/service.js';
+import { createSettings, type SettingsService } from './settings/index.js';
 import { getName, getVersion } from './version.js';
 
 /**
@@ -23,10 +25,13 @@ export interface Services {
   readonly search: SearchService;
   readonly editor: Editor;
   readonly merge: MergeService;
+  readonly settings: SettingsService;
+  readonly github: GitHubService;
 }
 
 export function createServices(platform: Platform): Services {
   const library = createLibrary(platform);
+  const settings = createSettings(platform);
   return {
     platform,
     app: { getName, getVersion },
@@ -35,5 +40,7 @@ export function createServices(platform: Platform): Services {
     search: createSearchService(library),
     editor: createEditor(platform, library),
     merge: createMergeService(platform, library),
+    settings,
+    github: createGitHubService(platform, settings),
   };
 }
