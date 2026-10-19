@@ -7,6 +7,8 @@ import { serializeDatabase, writeDatabaseDir } from '../src/db/write.js';
 import { createLibrary, type Library } from '../src/db/library.js';
 import { createEditor, type Editor } from '../src/editor/index.js';
 import { getFeaturedCards } from '../src/db/featured.js';
+import type { DBSnapshot } from '../src/db/snapshot.js';
+import { articleSeriesPosition } from '../src/db/view.js';
 
 async function openDatabase(): Promise<{
   platform: ReturnType<typeof createMemoryPlatform>;
@@ -173,6 +175,7 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
       translatorIds: article?.translatorIds ?? [],
       characterTagIds: article?.characterTagIds ?? [],
       plotTagIds: article?.plotTagIds ?? [],
+      ...(article.seriesId ? { seriesId: article.seriesId } : {}),
       coverImageId: imageId,
       illustrationImageIds: [],
     });
@@ -216,5 +219,168 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
         illustrationImageIds: [],
       }),
     ).rejects.toThrow('文章标题不能为空');
+  });
+
+  it('edit-article-series-append: 新建文章选系列后追加到目录末尾并成为 series-entry', async () => {
+    const { library, editor } = await openDatabase();
+    const series = library.snapshot()?.series[0];
+    expect(series).toBeTruthy();
+    if (!series) return;
+    const before = series.articleIds.length;
+
+    const id = await editor.saveArticle({
+      type: 'series-entry',
+      seriesId: series.id,
+      title: '追加的条目',
+      summary: '',
+      content: '# 追加的条目\n',
+      authorIds: [],
+      translatorIds: [],
+      characterTagIds: [],
+      plotTagIds: [],
+      illustrationImageIds: [],
+    });
+
+    const after = library.snapshot()?.series[0]?.articleIds ?? [];
+    expect(after).toEqual([...series.articleIds, id]);
+    expect(after).toHaveLength(before + 1);
+    expect(library.snapshot()?.articles.find((article) => article.id === id)?.type).toBe('series-entry');
+    expect(articleSeriesPosition(library.snapshot() as DBSnapshot, id)?.index).toBe(before + 1);
+  });
+
+  it('edit-article-series-keep: 已属系列的文章改元数据时保持原位置', async () => {
+    const { library, editor } = await openDatabase();
+    const series = library.snapshot()?.series[0];
+    const second = series?.articleIds[1];
+    expect(second).toBeTruthy();
+    if (!series || !second) return;
+    const before = [...series.articleIds];
+
+    await editor.saveArticle({
+      id: second,
+      type: 'series-entry',
+      seriesId: series.id,
+      title: '只改标题',
+      summary: '只改简介',
+      authorIds: [],
+      translatorIds: [],
+      characterTagIds: [],
+      plotTagIds: [],
+      illustrationImageIds: [],
+    });
+
+    expect(library.snapshot()?.series[0]?.articleIds).toEqual(before);
+    expect(library.snapshot()?.articles.find((article) => article.id === second)?.title).toBe('只改标题');
+  });
+
+  it('edit-article-series-move: 换系列时从原目录移出、追加到新目录末尾', async () => {
+    const { library, editor } = await openDatabase();
+    const source = library.snapshot()?.series[0];
+    const articleId = source?.articleIds[0];
+    expect(source && articleId).toBeTruthy();
+    if (!source || !articleId) return;
+
+    const targetId = await editor.saveSeries({
+      title: '目标系列',
+      summary: '',
+      status: 'ongoing',
+      articleIds: [],
+      authorIds: [],
+      characterTagIds: [],
+      plotTagIds: [],
+    });
+
+    await editor.saveArticle({
+      id: articleId,
+      type: 'series-entry',
+      seriesId: targetId,
+      title: '搬到另一个系列',
+      summary: '',
+      authorIds: [],
+      translatorIds: [],
+      characterTagIds: [],
+      plotTagIds: [],
+      illustrationImageIds: [],
+    });
+
+    const snapshot = library.snapshot();
+    expect(snapshot?.series.find((series) => series.id === source.id)?.articleIds).not.toContain(articleId);
+    expect(snapshot?.series.find((series) => series.id === targetId)?.articleIds).toEqual([articleId]);
+    expect(articleSeriesPosition(snapshot as DBSnapshot, articleId)?.series.id).toBe(targetId);
+  });
+
+  it('edit-article-series-clear: 清空系列后降级为短篇并从目录移除', async () => {
+    const { library, editor } = await openDatabase();
+    const series = library.snapshot()?.series[0];
+    const articleId = series?.articleIds[0];
+    expect(articleId).toBeTruthy();
+    if (!series || !articleId) return;
+
+    await editor.saveArticle({
+      type: 'short',
+      id: articleId,
+      title: '退出系列',
+      summary: '',
+      authorIds: [],
+      translatorIds: [],
+      characterTagIds: [],
+      plotTagIds: [],
+      illustrationImageIds: [],
+    });
+
+    const snapshot = library.snapshot();
+    expect(snapshot?.series.find((item) => item.id === series.id)?.articleIds).not.toContain(articleId);
+    const article = snapshot?.articles.find((item) => item.id === articleId);
+    expect(article?.type).toBe('short');
+    expect(article?.seriesId).toBeUndefined();
+  });
+
+  it('edit-article-series-guard: 没有系列却声明 series-entry 时拒绝', async () => {
+    const { editor } = await openDatabase();
+    await expect(
+      editor.saveArticle({
+        type: 'series-entry',
+        title: '没有系列',
+        summary: '',
+        authorIds: [],
+        translatorIds: [],
+        characterTagIds: [],
+        plotTagIds: [],
+        illustrationImageIds: [],
+      }),
+    ).rejects.toThrow('系列条目必须放在一个系列里');
+  });
+
+  it('edit-series-order: 目录顺序按传入数组保存，未知文章被校验拦下', async () => {
+    const { library, editor } = await openDatabase();
+    const series = library.snapshot()?.series[0];
+    expect(series?.articleIds.length).toBeGreaterThan(1);
+    if (!series) return;
+    const reversed = [...series.articleIds].reverse();
+
+    await editor.saveSeries({
+      id: series.id,
+      title: series.title,
+      summary: series.summary,
+      status: series.status,
+      articleIds: reversed,
+      authorIds: series.authorIds,
+      characterTagIds: series.characterTagIds,
+      plotTagIds: series.plotTagIds,
+    });
+    expect(library.snapshot()?.series[0]?.articleIds).toEqual(reversed);
+
+    await expect(
+      editor.saveSeries({
+        id: series.id,
+        title: series.title,
+        summary: series.summary,
+        status: series.status,
+        articleIds: [...reversed, 'a_ffffffffffffffff'],
+        authorIds: series.authorIds,
+        characterTagIds: series.characterTagIds,
+        plotTagIds: series.plotTagIds,
+      }),
+    ).rejects.toThrow('E_SERIES_ORDER');
   });
 });

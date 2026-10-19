@@ -100,6 +100,21 @@ export interface ViewOptions {
   join(...parts: string[]): string;
 }
 
+/**
+ * 文章在所属系列里的 1 基编号（design §13.6：编号即 `articleIds` 的位置）。
+ * 系列不存在、或文章不在目录里时返回 `null`，调用方据此显示「未编号」。
+ */
+export function articleSeriesPosition(
+  snapshot: DBSnapshot,
+  articleId: string,
+): { series: Series; index: number } | null {
+  const article = snapshot.maps.articles.get(articleId);
+  const series = article?.seriesId ? snapshot.maps.series.get(article.seriesId) : undefined;
+  if (!series) return null;
+  const position = series.articleIds.indexOf(articleId);
+  return position >= 0 ? { series, index: position + 1 } : null;
+}
+
 export function getArticleView(snapshot: DBSnapshot, id: string, opts: ViewOptions): ArticleView | null {
   const article = snapshot.maps.articles.get(id);
   if (!article) return null;

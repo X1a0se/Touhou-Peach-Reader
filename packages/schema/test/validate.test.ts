@@ -41,6 +41,21 @@ describe('validateDatabase', () => {
     expect(codesOf(result.errors)).toContain('E_SERIES_ORDER');
   });
 
+  it('文章标了系列但目录里没有它只是 warning（W_SERIES_MEMBERSHIP）', () => {
+    const db = makeDatabase();
+    const series = db.series[0];
+    if (!series) throw new Error('fixture 缺系列');
+    // 从目录里移除一篇文章，但保留它的 seriesId
+    const removed = series.articleIds[0];
+    if (!removed) throw new Error('fixture 缺系列文章');
+    series.articleIds = series.articleIds.filter((id) => id !== removed);
+
+    const result = validateDatabase(db);
+    expect(result.ok).toBe(true);
+    expect(codesOf(result.warnings)).toContain('W_SERIES_MEMBERSHIP');
+    expect(codesOf(result.errors)).toEqual([]);
+  });
+
   it('悬空作者引用只是 warning', () => {
     const db = makeDatabase();
     const article = db.articles[0];

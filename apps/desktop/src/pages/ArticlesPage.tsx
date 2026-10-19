@@ -1,5 +1,5 @@
 import type { ArticleMeta } from '@tpr/schema';
-import { resolveTags } from '@tpr/core';
+import { articleSeriesPosition, resolveTags } from '@tpr/core';
 import { Button, EmptyState, SectionHeading, cn } from '@tpr/ui';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
@@ -103,6 +103,7 @@ export function ArticlesPage() {
       <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {articles.map((article) => {
           const series = article.seriesId ? snapshot?.maps.series.get(article.seriesId) : undefined;
+          const position = snapshot ? articleSeriesPosition(snapshot, article.id) : null;
           const cover = article.coverImageId ? snapshot?.maps.images.get(article.coverImageId) : undefined;
           const tags = snapshot ? resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds]) : [];
 
@@ -140,6 +141,11 @@ export function ArticlesPage() {
                   >
                     {TYPE_LABEL[article.type]}
                   </span>
+                  {position ? (
+                    <span className="rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent">
+                      第 {position.index} 篇
+                    </span>
+                  ) : null}
                   {series ? (
                     <Link to={`/series/${series.id}`} className="truncate hover:text-accent">
                       {series.title}

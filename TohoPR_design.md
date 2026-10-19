@@ -654,6 +654,7 @@ export interface ValidateResult { ok: boolean; errors: Issue[]; warnings: Issue[
 | `E_SERIES_TYPE_MISMATCH` | error | `type='series-entry'` 却无 `seriesId`，或 `type='short'` 却有 `seriesId` |
 | `E_SERIES_ORDER` | error | `series.articleIds` 里某篇的 `seriesId` 不是该系列 |
 | `E_ARTICLE_IN_MULTIPLE_SERIES` | error | 同一篇出现在两个 `articleIds` 列表里 |
+| `W_SERIES_MEMBERSHIP` | warning | 文章标了 `seriesId`，但该系列的 `articleIds` 里没有它（Goal 15 新增：目录是顺序的唯一来源，这种不一致只告警，编辑器保存时自动修复） |
 | `E_IMAGE_FILE_MISSING` | error | `image.file` 在包内不存在 |
 | `E_IMAGE_FORMAT` | error | 图片字节魔数不在 `webp/png/jpeg/gif` 之内（§7.4 第 5 条） |
 | `E_INVALID_CONTENT_FILE` | error | `content.file` 不等于 `articles/{id}.md` |
@@ -2031,6 +2032,18 @@ Goal 14 追加记录（界面美化 + 5 套配色 + 主界面/文章页壁纸）
 - **验证**：`test/settings.test.ts` 增 6 个外观用例、`platform` 增 3 个壁纸用例；`corepack pnpm check` = platform 10 + schema 23 + core 87 = 120 个测试；`build:web` 入口 225.29 kB；真机 CDP 截图覆盖深/浅 × 桃夭/竹青/绯红与设置页、文章页、文章库、首页。
 - 截图：`.tmp/goal14-settings.png`、`.tmp/goal14-settings-light.png`、`.tmp/goal14-home-bamboo.png`、`.tmp/goal14-home-light.png`、`.tmp/goal14-home-scarlet.png`、`.tmp/goal14-article.png`、`.tmp/goal14-articles.png`。
 
+Goal 15 追加记录（系列文章编号排序 + 文章编辑页快捷创建系列/作者/译者）：
+
+- **编号不落库**：系列内序号 = `series.articleIds` 中的 1-based 下标（`articleSeriesPosition()` 统一计算）。`ArticleMeta` 没有 `order` 字段，也不新增：否则 `articleIds` 与 `order` 会有两个真相。
+- **`saveArticle` 接管成员关系**：保存时把文章从所有其它系列的 `articleIds` 里移除、追加到目标系列**末尾**（已在目标系列中则保持原位），并按有无 `seriesId` 强制 `type` 为 `series-entry` / `short`。这消灭了此前"文章标了系列但系列目录里没有它"的静默不一致。
+- **新增 `W_SERIES_MEMBERSHIP` warning**（§8 校验表）：只对历史包告警，编辑器下一次保存即修复；不升级为 error，避免旧库直接打不开。
+- **`SeriesForm` 的目录改成「可排序列表」**：编号 + 上移/下移/移除 + 搜索添加，保存时写回 `articleIds`；`saveSeries` 原有的双向同步（进列表→`series-entry`、出列表→`short`）不变。
+- **快捷创建**：`CreatablePicker` 抽出「过滤 + 精确判重 + 新建/复用提示 + 复选」的唯一实现，`TagPicker`/`AuthorPicker` 都是薄包装；`SeriesPicker` 提供下拉 + 行内新建（按归一化标题复用，避免同名系列）。译者与作者共用 `Author` 实体，因此共用 `AuthorPicker`。
+- **展示**：文章库卡片、编辑器文章列表都显示「第 N 篇」；系列页仍是 `01/02` 编号目录，文章页横幅仍是「第 N 篇」，三处同源。
+- **测试**：`core/test/view.test.ts` 增 2 例（编号、已加入/未加入）；`core/test/edit.test.ts` 增 7 例（保存追加、换系列、清空降级、目录顺序、`seriesId` 与目录不匹配的修复、快捷创建作者复用、编号查询）；`schema/test/validate.test.ts` 增 `W_SERIES_MEMBERSHIP` 一例。`corepack pnpm check` = platform 10 + schema 24 + core 95 = **129 个测试**。
+- **真机 E2E**（`.tmp/goal15-e2e.mjs`，CDP）23/23 通过：快捷建系列→文章自动入目录第 1 篇、第二篇追加为第 2 篇、系列页 `01/02`、文章页「第 1 篇」、系列表单上移后顺序互换并落库、文章库与编辑器列表显示编号、快捷建作者/译者并自动勾选、`Page.reload` 后仍在、同名作者不再出现「新建」按钮、同名系列复用提示。
+- 截图：`.tmp/goal15-series.png`、`.tmp/goal15-articles.png`、`.tmp/goal15-editor.png`、`.tmp/goal15-article-form.png`、`.tmp/goal15-series-form.png`。
+
 ---
 
 ## 附：文档自检
@@ -2044,6 +2057,6 @@ Goal 14 追加记录（界面美化 + 5 套配色 + 主界面/文章页壁纸）
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–14 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
+| Goal 1–15 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
 
 

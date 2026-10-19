@@ -1,4 +1,5 @@
 import type { DBSnapshot, Editor } from '@tpr/core';
+import { articleSeriesPosition } from '@tpr/core';
 import type {
   ArticleMeta,
   CreditsEntry,
@@ -10,6 +11,9 @@ import type {
 } from '@tpr/schema';
 import { normalizeName } from '@tpr/schema';
 import { useEffect, useState } from 'react';
+import { ArticleOrderPicker } from '../components/ArticleOrderPicker.js';
+import { AuthorPicker } from '../components/AuthorPicker.js';
+import { SeriesPicker } from '../components/SeriesPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
@@ -248,14 +252,17 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
             setCreating(false);
             setEditing(article);
           }}
-          render={(article) => (
-            <>
-              <span className="truncate">{article.title}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">
-                {article.type === 'short' ? '短篇' : '系列'}
-              </span>
-            </>
-          )}
+          render={(article) => {
+            const position = articleSeriesPosition(snapshot, article.id);
+            return (
+              <>
+                <span className="truncate">{article.title}</span>
+                <span className="shrink-0 text-xs text-muted-foreground">
+                  {article.type === 'short' ? '短篇' : position ? `第 ${position.index} 篇` : '系列'}
+                </span>
+              </>
+            );
+          }}
         />
       </div>
 
@@ -316,7 +323,6 @@ function ArticleForm({
   const { refresh } = useLibraryContext();
   const [title, setTitle] = useState(initial?.title ?? '');
   const [summary, setSummary] = useState(initial?.summary ?? '');
-  const [type, setType] = useState<'short' | 'series-entry'>(initial?.type ?? 'short');
   const [content, setContent] = useState<string | null>(initial ? null : '');
   const [authorIds, setAuthorIds] = useState<string[]>(initial?.authorIds ?? []);
   const [translatorIds, setTranslatorIds] = useState<string[]>(initial?.translatorIds ?? []);
@@ -349,7 +355,11 @@ function ArticleForm({
     };
   }, [initialId, services]);
 
-  const authors = snapshot.authors.map((author) => ({ id: author.id, label: author.canonicalName }));
+  const authors = snapshot.authors;
+
+  /** 当前文章在所属系列里的编号（新选系列时为 null） */
+  const position = initial ? articleSeriesPosition(snapshot, initial.id) : null;
+  const selectedSeries = seriesId ? snapshot.series.find((series) => series.id === seriesId) : undefined;
 
   /** 表单内新建标签：按名称/别名判重，复用则返回现有 id；创建后刷新快照让列表立即可见。 */
   const createTag = async (category: TagCategory, name: string): Promise<{ id: string; created: boolean }> => {
@@ -372,7 +382,7 @@ function ArticleForm({
         setBusy(true);
         void onSubmit({
           ...(initial ? { id: initial.id } : {}),
-          type,
+          type: seriesId ? 'series-entry' : 'short',
           title,
           summary,
           ...(initial ? (content === null ? {} : { content }) : { content: content ?? '' }),
@@ -387,21 +397,9 @@ function ArticleForm({
         }).finally(() => setBusy(false));
       }}
     >
-      <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="标题">
-          <input className={inputClass} value={title} onChange={(event) => setTitle(event.target.value)} required />
-        </Field>
-        <Field label="类型">
-          <select
-            className={inputClass}
-            value={type}
-            onChange={(event) => setType(event.target.value === 'series-entry' ? 'series-entry' : 'short')}
-          >
-            <option value="short">短篇</option>
-            <option value="series-entry">系列条目</option>
-          </select>
-        </Field>
-      </div>
+      <Field label="标题">
+        <input className={inputClass} value={title} onChange={(event) => setTitle(event.target.value)} required />
+      </Field>
 
       <Field label="简介">
         <textarea className={inputClass} rows={2} value={summary} onChange={(event) => setSummary(event.target.value)} />
@@ -418,16 +416,17 @@ function ArticleForm({
       </Field>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <Field label="系列">
-          <select className={inputClass} value={seriesId} onChange={(event) => setSeriesId(event.target.value)}>
-            <option value="">不属于系列</option>
-            {snapshot.series.map((series) => (
-              <option key={series.id} value={series.id}>
-                {series.title}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <div className="flex flex-col gap-1.5">
+          <span className={labelClass}>系列</span>
+          <SeriesPicker series={snapshot.series} value={seriesId} onChange={setSeriesId} />
+          <span className="text-xs text-muted-foreground">
+            {selectedSeries
+              ? position && position.series.id === selectedSeries.id
+                ? `当前为《${selectedSeries.title}》第 ${position.index} 篇（保存不会改变位置）`
+                : `保存后会加在《${selectedSeries.title}》目录末尾`
+              : '不属于系列的文章会保存为短篇'}
+          </span>
+        </div>
         <Field label="原出处">
           <input
             className={inputClass}
@@ -438,8 +437,8 @@ function ArticleForm({
         </Field>
       </div>
 
-      <PickerRow title="作者" options={authors} value={authorIds} onChange={setAuthorIds} />
-      <PickerRow title="译者" options={authors} value={translatorIds} onChange={setTranslatorIds} />
+      <AuthorPicker title="作者" authors={authors} value={authorIds} onChange={setAuthorIds} />
+      <AuthorPicker title="译者" authors={authors} value={translatorIds} onChange={setTranslatorIds} />
       <TagPicker
         title="角色标签"
         category="character"
@@ -651,12 +650,7 @@ function SeriesForm({
         <textarea className={inputClass} rows={2} value={summary} onChange={(event) => setSummary(event.target.value)} />
       </Field>
 
-      <PickerRow
-        title="目录（勾选顺序即文章顺序）"
-        options={snapshot.articles.map((article) => ({ id: article.id, label: article.title }))}
-        value={articleIds}
-        onChange={setArticleIds}
-      />
+      <ArticleOrderPicker articles={snapshot.articles} value={articleIds} onChange={setArticleIds} />
 
       <PickerRow
         title="作者"

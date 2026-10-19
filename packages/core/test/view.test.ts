@@ -1,7 +1,7 @@
 import { makeArticle, makeAuthor, makeDatabase, makeImage, makeSeries, makeTag } from '@tpr/schema/testing';
 import { describe, expect, it } from 'vitest';
 import { toSnapshot } from '../src/db/snapshot.js';
-import { getArticleView, getSeriesView } from '../src/db/view.js';
+import { articleSeriesPosition, getArticleView, getSeriesView } from '../src/db/view.js';
 
 // 不用 node:path：core 的 tsconfig 不带 node 类型，测试里保持纯字符串拼接
 const join = (...parts: string[]): string => parts.join('/');
@@ -112,5 +112,36 @@ describe('getSeriesView', () => {
   it('未知 id 返回 null', () => {
     const { db } = fixture();
     expect(getSeriesView(toSnapshot(db), 's_ffffffffffffffff', opts)).toBeNull();
+  });
+});
+
+describe('articleSeriesPosition', () => {
+  it('返回 1 基编号与所属系列', () => {
+    const { db } = fixture();
+    const snapshot = toSnapshot(db);
+    // articleIds = [second, missing, first]：second 第 1，first 第 3
+    expect(articleSeriesPosition(snapshot, 'a_0000000000000002')?.index).toBe(1);
+    expect(articleSeriesPosition(snapshot, 'a_0000000000000001')?.index).toBe(3);
+    expect(articleSeriesPosition(snapshot, 'a_0000000000000001')?.series.title).toBe('星之系列');
+  });
+
+  it('不在目录里的文章、未知文章都返回 null', () => {
+    const { db } = fixture();
+    const snapshot = toSnapshot(db);
+    expect(articleSeriesPosition(snapshot, 'a_ffffffffffffffff')).toBeNull();
+    // 文章标了 seriesId，但目录里没有它（旧版本编辑器会造成这种数据）
+    const orphan = makeArticle({
+      id: 'a_0000000000000003',
+      title: '目录外文章',
+      type: 'series-entry',
+      seriesId: 's_0000000000000001',
+    });
+    const snapshot2 = toSnapshot(
+      makeDatabase(
+        { articles: [...db.articles, orphan], series: db.series },
+        { withFiles: true },
+      ),
+    );
+    expect(articleSeriesPosition(snapshot2, orphan.id)).toBeNull();
   });
 });

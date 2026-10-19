@@ -113,13 +113,18 @@ export function createEditor(platform: Platform, library: Library): Editor {
     async saveArticle(draft) {
       const title = requireTitle(draft.title, '文章');
       const id = draft.id ?? newArticleId();
+      const targetSeriesId = draft.seriesId ?? '';
+      // 类型由系列决定（design §13.3）：要么在某个系列里，要么是短篇。
+      if (draft.type === 'series-entry' && !targetSeriesId) {
+        throw new Error('系列条目必须放在一个系列里');
+      }
       if (draft.content !== undefined) await library.saveContent(id, draft.content);
 
       await library.applyEdit((db) => {
         const existing = db.articles.find((article) => article.id === id);
         const next = {
           id,
-          type: draft.type,
+          type: targetSeriesId ? ('series-entry' as const) : ('short' as const),
           title,
           content: existing?.content ?? { file: `articles/${id}.md` },
           summary: trim(draft.summary),
@@ -127,15 +132,35 @@ export function createEditor(platform: Platform, library: Library): Editor {
           translatorIds: clean(draft.translatorIds),
           characterTagIds: clean(draft.characterTagIds),
           plotTagIds: clean(draft.plotTagIds),
-          ...(draft.seriesId ? { seriesId: draft.seriesId } : {}),
+          ...(targetSeriesId ? { seriesId: targetSeriesId } : {}),
           ...(draft.coverImageId ? { coverImageId: draft.coverImageId } : {}),
           illustrationImageIds: clean(draft.illustrationImageIds),
           ...(draft.sourceUrl?.trim() ? { sourceUrl: draft.sourceUrl.trim() } : {}),
           createdAt: existing?.createdAt ?? now(),
           updatedAt: now(),
         } satisfies (typeof db.articles)[number];
-        if (existing) Object.assign(existing, next);
-        else db.articles.push(next);
+        if (existing) {
+          Object.assign(existing, next);
+          // 清空系列时必须删掉旧 seriesId，否则 Object.assign 会把它留下
+          if (!targetSeriesId) delete existing.seriesId;
+        } else {
+          db.articles.push(next);
+        }
+
+        // 从属双向自洽：目标系列把文章追加到目录末尾；其它系列把文章移出。
+        for (const series of db.series) {
+          const listed = series.articleIds.includes(id);
+          if (series.id === targetSeriesId) {
+            // 已在目录里就保持原位置，避免改标题时把顺序打乱
+            if (!listed) {
+              series.articleIds = [...series.articleIds, id];
+              series.updatedAt = now();
+            }
+          } else if (listed) {
+            series.articleIds = series.articleIds.filter((articleId) => articleId !== id);
+            series.updatedAt = now();
+          }
+        }
       });
       return id;
     },

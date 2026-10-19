@@ -219,6 +219,18 @@ export function validateDatabase(db: RawDatabase): ValidateResult {
           hint: '单篇文章导出包会自然产生此提示，可忽略。',
         }),
       );
+    } else if (a.seriesId) {
+      // 反向检查：seriesId 指了系列，但系列目录里没有这篇（旧版本编辑器的已知不一致）
+      const owner = series.get(a.seriesId);
+      if (owner && !owner.articleIds.includes(a.id)) {
+        warnings.push(
+          warn('W_SERIES_MEMBERSHIP', 'article', `文章标了所属系列「${owner.title}」，但系列目录里没有它`, {
+            entityId: a.id,
+            field: 'seriesId',
+            hint: '在编辑器里重新保存这篇文章（或系列目录）即可修复。',
+          }),
+        );
+      }
     }
   }
 
