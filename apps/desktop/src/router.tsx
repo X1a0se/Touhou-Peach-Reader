@@ -1,0 +1,21 @@
+import { createHashRouter } from 'react-router';
+import { HomePage } from './pages/HomePage.js';
+import { Layout } from './pages/Layout.js';
+import { NotFoundPage } from './pages/NotFoundPage.js';
+import { SearchPage } from './pages/SearchPage.js';
+
+/**
+ * 路由表（design §13.3）：选 hash 而不是 history，生产环境的深链/刷新不依赖服务端 fallback。
+ * 后续 Goal 会按设计表逐条补 /article、/series、/featured/*、/favorites、/editor…
+ */
+export const router = createHashRouter([
+  {
+    path: '/',
+    element: <Layout />,
+    children: [
+      { index: true, element: <HomePage /> },
+      { path: 'search', element: <SearchPage /> },
+      { path: '*', element: <NotFoundPage /> },
+    ],
+  },
+]);

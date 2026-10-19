@@ -28,6 +28,8 @@ export interface Library {
   export(selection: ExportSelection): Promise<ExportResult>;
   readContent(articleId: string): Promise<string>;
   saveContent(articleId: string, markdown: string): Promise<void>;
+  /** 每次从磁盘载入或写完正文都 +1；搜索索引靠它判断是否需要重建。 */
+  readonly revision: number;
 }
 
 /**
@@ -36,6 +38,7 @@ export interface Library {
  */
 export function createLibrary(platform: Platform): Library {
   let loaded: LoadedDatabase | null = null;
+  let revision = 0;
 
   async function loadFrom(dir: string, databaseId: string): Promise<LoadedDatabase> {
     const io = ioFor(platform);
@@ -47,6 +50,7 @@ export function createLibrary(platform: Platform): Library {
       db,
       contents: createContentStore(io, dir),
     };
+    revision += 1;
     return loaded;
   }
 
@@ -93,6 +97,11 @@ export function createLibrary(platform: Platform): Library {
     async saveContent(articleId: string, markdown: string): Promise<void> {
       if (!loaded) throw new Error('尚未打开数据库');
       await loaded.contents.write(articleId, markdown);
+      revision += 1;
+    },
+
+    get revision() {
+      return revision;
     },
   };
 }

@@ -1,12 +1,13 @@
-import type { Services } from '@tpr/core';
-import { DropZone, VersionBadge, cn } from '@tpr/ui';
+import { DropZone, cn } from '@tpr/ui';
 import { useCallback } from 'react';
-import { readFileBytes, useLibrary, useNativeDrop } from './library/useLibrary.js';
+import { Link } from 'react-router';
+import { useLibraryContext } from '../library/LibraryProvider.js';
+import { readFileBytes, useNativeDrop } from '../library/useLibrary.js';
 
 const count = (value: number | undefined): string => (value === undefined ? '—' : String(value));
 
-export function App({ services }: { services: Services }) {
-  const library = useLibrary(services);
+export function HomePage() {
+  const library = useLibraryContext();
   const { importBytes, importPath, exportAll, pickAndImport, busy, snapshot, status } = library;
 
   const handlePaths = useCallback(
@@ -19,18 +20,7 @@ export function App({ services }: { services: Services }) {
   useNativeDrop(handlePaths);
 
   return (
-    <main className="mx-auto flex min-h-full max-w-3xl flex-col gap-8 px-8 py-14">
-      <header className="flex flex-col gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-3xl font-semibold tracking-tight">{services.app.getName()}</h1>
-          <VersionBadge version={services.app.getVersion()} />
-          <span className="ml-auto font-mono text-xs text-muted-foreground">{services.platform.kind}</span>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          东方同人阅读器 · 阅读器与数据库分离 · 目标 3：导入 / 导出与本地持久化
-        </p>
-      </header>
-
+    <>
       {library.error ? (
         <p className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900 dark:bg-red-950 dark:text-red-300">
           {library.error}
@@ -141,9 +131,13 @@ export function App({ services }: { services: Services }) {
         </>
       ) : null}
 
-      <footer className="mt-auto text-xs text-muted-foreground">
-        数据目录由 <span className="font-mono">$APPDATA/com.touhou.peachreader</span> 决定；正文按需读取。
-      </footer>
-    </main>
+      {status === 'ready' ? (
+        <p className="text-sm">
+          <Link to="/search" className="underline underline-offset-2 hover:text-foreground">
+            去搜索 →
+          </Link>
+        </p>
+      ) : null}
+    </>
   );
 }

@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@tpr/platform": "workspace:*",
-    "@tpr/schema": "workspace:*"
+    "@tpr/schema": "workspace:*",
+    "flexsearch": "0.8.212"
   },
   "devDependencies": {
     "vitest": "5.0.5"

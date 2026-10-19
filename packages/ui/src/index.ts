@@ -4,3 +4,5 @@ export { VersionBadge } from './components/VersionBadge.js';
 export type { VersionBadgeProps } from './components/VersionBadge.js';
 export { DropZone } from './components/DropZone.js';
 export type { DropZoneProps } from './components/DropZone.js';
+export { HighlightedText } from './components/HighlightedText.js';
+export type { HighlightedTextProps } from './components/HighlightedText.js';

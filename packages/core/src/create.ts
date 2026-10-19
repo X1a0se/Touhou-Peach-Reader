@@ -1,6 +1,7 @@
 import type { Platform } from '@tpr/platform';
-import { getName, getVersion } from './version.js';
 import { createLibrary, type Library } from './db/library.js';
+import { createSearchService, type SearchService } from './search/service.js';
+import { getName, getVersion } from './version.js';
 
 /**
  * core 的唯一入口（design §5.1 D8）：所有服务都由 `createServices(platform)` 产出，
@@ -15,12 +16,15 @@ export interface Services {
   readonly platform: Platform;
   readonly app: AppService;
   readonly library: Library;
+  readonly search: SearchService;
 }
 
 export function createServices(platform: Platform): Services {
+  const library = createLibrary(platform);
   return {
     platform,
     app: { getName, getVersion },
-    library: createLibrary(platform),
+    library,
+    search: createSearchService(library),
   };
 }

@@ -1162,24 +1162,19 @@ FlexSearch 默认按空白与标点切词，中文整句会变成一个 token，
 
 ```ts
 // packages/core/src/search/tokenize.ts
-const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff]/u;
+const CJK_RUN = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\u3040-\u30ff]+/gu;
 
 export function tokenizeZh(input: string): string[] {
   const text = input.normalize('NFKC').toLowerCase();
   const out: string[] = [];
-  const seg = typeof Intl !== 'undefined' && 'Segmenter' in Intl
-    ? new Intl.Segmenter('zh-Hans', { granularity: 'word' })
-    : null;
-  if (!seg) return fallbackSplit(text);          // 极端环境：按 CJK 单字 + 拉丁词切
-  for (const { segment, isWordLike } of seg.segment(text)) {
-    if (!isWordLike) continue;
-    const s = segment.trim();
-    if (!s) continue;
-    if (CJK.test(s)) {
-      out.push(s);                                // 整词
-      for (let i = 0; i + 1 < s.length; i++) out.push(s.slice(i, i + 2)); // 二元组，解决"未登录词"
+  for (const run of splitRuns(text)) {   // CJK 连续串 / 其它片段
+    if (run.cjk) {
+      out.push(run.value);               // 整串
+      for (let i = 0; i + 1 < run.value.length; i++) {
+        out.push(run.value.slice(i, i + 2));   // 二元组，解决"未登录词"
+      }
     } else {
-      out.push(s);
+      out.push(...segmentWords(run.value));    // 拉丁/数字交给 Intl.Segmenter
     }
   }
   return [...new Set(out)];
@@ -1187,7 +1182,8 @@ export function tokenizeZh(input: string): string[] {
 export const toIndexText = (input: string) => tokenizeZh(input).join(' ');
 ```
 
-- 为什么要二元组：新角色名/自造词（"帕秋莉诺蕾姬"之外的同人昵称）不在词典里，`Intl.Segmenter` 会切碎；二元组让"魔理沙""理沙"都能命中"雾雨魔理沙"。
+- **不能只靠 `Intl.Segmenter` 切中文**：实测 `segment('雾雨魔理沙')` → `雾 / 雨 / 魔 / 理沙`，整个名字被切碎，查「魔理沙」反而命中不了。所以 CJK 连续串自己产「整串 + 全部二元组」，Segmenter 只用来切拉丁词。
+- 为什么要二元组：新角色名/自造词不在词典里，"魔理沙""理沙"都能命中"雾雨魔理沙"。
 - 查询串走同一个函数：Query `"魔理沙 红魔馆"` → `"魔理沙 魔理 理沙 红魔馆 红魔 魔馆"`，交给 FlexSearch 做 OR + 打分，命中越多分越高。
 
 ### 11.3 索引构建
@@ -1220,59 +1216,47 @@ export async function buildSearchIndex(
 ```ts
 // packages/core/src/search/engine.ts
 export interface SearchEngine {
-  search(query: string, opts: SearchOptions): Promise<SearchHit[]>;
-  add(docs: IndexDoc[]): void;
-  remove(rids: string[]): void;
+  search(query: string, opts?: SearchOptions): SearchHit[];   // 同步：FlexSearch 本身是同步的
+  add(docs: readonly SearchDoc[]): void;
+  remove(rids: readonly string[]): void;
+  readonly size: number;
   dispose(): void;
 }
-export interface SearchOptions {
-  filter?: 'all' | 'short' | 'series' | 'series-entry' | 'author' | 'tag-character' | 'tag-plot';
-  limit?: number;                    // 默认 50
-}
+export type FilterKind = 'all' | 'short' | 'series' | 'author' | 'tag-character' | 'tag-plot';
+export interface SearchOptions { filter?: FilterKind; limit?: number }   // limit 默认 50
 export interface SearchHit { kind: HitKind; id: string; score: number; matchedFields: string[] }
 ```
 
-FlexSearch 用法（0.8）：
+FlexSearch 0.8 实测（2026-10-19，写代码前先验证过）：
+
+- `Document.add([{...}])` 数组形式**静默无效**，只能 `add({...})` 单条，且结果形状是 `[{field, result:[ids]}]`。
+- `Document` 多 token 查询的 AND 语义无法关闭：`bool:'or'` / `bool:'and'` 选项实测均无效（多词仍返回 `[]`）。
+- 结论：**不用 `Document`**，改为「每个字段一个 `Index`」——`new Index({ tokenize: 'strict', resolution: 9 })`，索引与查询都喂「空格分隔的 token 串」，召回、加权、过滤全部在自己的代码里做（D16 的隔离意义也更强：FlexSearch 只负责单 token 召回）。
 
 ```ts
-import { Document } from 'flexsearch';
-const doc = new Document<IndexDoc>({
-  document: {
-    id: 'rid',
-    index: [
-      { field: 'title',   tokenize: 'strict', context: false },
-      { field: 'summary', tokenize: 'strict' },
-      { field: 'body',    tokenize: 'strict' },
-      { field: 'people',  tokenize: 'strict' },
-      { field: 'tags',    tokenize: 'strict' },
-    ],
-    tag: [{ field: 'kind' }, { field: 'virtual' }],
-  },
-  // 不 store：结果只取 rid，展示数据回快照里查
-});
+const FIELD_NAMES = ['title', 'summary', 'body', 'people', 'tags'] as const;
+const indexes = new Map(FIELD_NAMES.map((field) => [field, new Index({ tokenize: 'strict', resolution: 9 })]));
 ```
 
 - `tokenize: 'strict'`：我们已经在 `toIndexText` 里切好词，不希望它再按字符拆。
 - **不启用 `store`/`highlight`/`enrich`**：正文高亮必须基于原文（而不是 token 串），自己算更准且省内存。
-- FlexSearch 的 API 若在小版本间漂移，只需改 `engine.ts` 一个文件（D16 的隔离意义）。
+- FlexSearch 的 API 若在小版本间漂移，只需改 `engine.ts` 一个文件。
 
 ### 11.5 查询与两段式策略
 
 ```ts
-async function search(query: string, opts: SearchOptions): Promise<SearchHit[]> {
-  const q = query.trim();
-  if (!q) return [];
-  const { virtualTags, terms } = parseQuery(q);        // '#已完结 魔理沙' → {virtualTags:['v:completed'], terms:['魔理沙']}
-  const tokens = toIndexText(terms.join(' '));
-  let hits = doc.search(tokens, { tag: opts.filter ? toTagFilter(opts.filter) : undefined, limit: opts.limit });
-  if (hits.length === 0 && terms.length > 0) {
-    // 第二段：只保留二元组，放宽召回（"输入错一个字也能找到"）
-    hits = doc.search(bigramsOnly(tokens), { limit: opts.limit });
-  }
-  return rank(hits, opts.filter).filter(h => h.score > 0).slice(0, opts.limit ?? 50);
+function search(query: string, opts: SearchOptions = {}): SearchHit[] {
+  const parsed = parseQuery(query);                       // '#已完结 魔理沙' → {virtualTags:['v:completed'], terms:['魔理沙']}
+  if (isEmptyQuery(parsed)) return [];
+  const tokens = queryTokens(parsed);                     // 见下：长 CJK 词拆二元组
+  const first = run(tokens, parsed, opts);
+  if (first.length > 0 || parsed.terms.length === 0) return first;
+  // 第二段：只保留二元组，放宽召回（"输入错一个字也能找到"）
+  return run(bigramsOnly(tokens), parsed, opts);
 }
 ```
 
+- **查询串必须与索引端用同一套切分**：索引里 CJK 串存的是「整串 + 全部二元组」，所以查询里的长 CJK 词（如 3 字的「魔理沙」）要先拆成二元组再召回；否则这个 3 字 token 在索引中根本不存在，会漏掉最该命中的名字。
 - 字段权重（后处理排序用）：`title ×3`、`people ×2.2`、`tags ×2`、`summary ×1.2`、`body ×1`；同分时 `updatedAt` 新的在前。
 - `parseQuery` 同时支持：`#系列文/#短篇文/#连载中/#已完结`、`#标签名`（任意 tag 名精确匹配）、普通关键词、`"精确短语"`（整串作为单 token 参与召回）。
 
@@ -1921,6 +1905,14 @@ Goal 2–3 追加记录（同日完成）：
 - **zip 9 API 与旧版不同**（见 §14.4 注），两个编译错误按注中写法修复。
 - **桌面端 E2E 自动化**：`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9222` 启动 `tauri dev`，用 CDP `Runtime.evaluate` 在页面里合成 `drop` 事件（把夹具 `.tpr` 塞进 `DataTransfer`）→ 真实走通 `importBytes` → Rust `zip_extract_all` + `fs_*` → 落盘；随后 `Page.reload` 验证 `restore()` 从磁盘读回，`library.export({all:true})` 产出 2983 字节 ZIP 并 `save_export` 到 %TEMP%。夹具由 `packages/platform/scripts/make-fixture.mjs` 生成。
 - 结论：**Goal 3 的导入/导出/持久化在真实 Tauri 壳里跑通**，不再是内存桩。
+
+Goal 4 追加记录：
+
+- **FlexSearch 0.8 的 `Document` 不能按原计划用**：数组 `add` 静默无效、多 token 查询的 AND 语义关不掉（`bool` 选项实测无效）。最终落地为「每字段一个 `Index`」+ 自己加权/过滤，见 §11.4 实测记录。
+- **`Intl.Segmenter` 不能切中文人名**：`雾雨魔理沙` → `雾/雨/魔/理沙`，因此 `tokenizeZh` 改为「CJK 连续串 → 整串 + 全部二元组，拉丁串才交给 Segmenter」，见 §11.2。
+- **查询端必须做同样的长词拆分**：索引里没有 3 字以上的 CJK token，查询「魔理沙」要先拆成「魔理/理沙」才能召回（§11.5）。
+- **路由开始落地**：本 Goal 引入 `react-router` 8 的 `createHashRouter`，`/`（库概览，Goal 8 会换成随机页）与 `/search`；`/article/:id`、`/series/:id` 等留给 Goal 5。
+- 真机验收：CDP 驱动真实 Tauri 窗口，导入夹具后搜 `Example`（作者别名）、`#连载中`、`博丽灵梦`（角色），6 个类别筛选与空结果态全部通过，截图 `.tmp/goal4-search.png`。
 
 ---
 
