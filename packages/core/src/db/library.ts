@@ -4,10 +4,9 @@ import { createContentStore, type ContentStore } from './content-store.js';
 import { exportDatabase, type ExportResult, type ExportSelection } from './export.js';
 import type { ImportOutcome } from './import.js';
 import { importDatabaseFromBytes, importDatabaseFromPath } from './import.js';
-import { normalizeDatabase } from './normalize.js';
+import { computeCounts, normalizeDatabase } from './normalize.js';
 import { readDatabaseDir } from './read.js';
-import { serializeDatabase, writeDatabaseDir } from './write.js';
-import { computeCounts } from './normalize.js';
+import { pruneDatabaseDir, serializeDatabase, writeDatabaseDir } from './write.js';
 import { toSnapshot, type DBSnapshot } from './snapshot.js';
 import { ioFor } from './workspace.js';
 import { readActive, workspacePath } from './workspace.js';
@@ -119,7 +118,8 @@ export function createLibrary(platform: Platform): Library {
         const draft = structuredClone(current.db);
         build(draft);
         draft.manifest.updatedAt = new Date().toISOString();
-        computeCounts(draft);
+        // computeCounts 返回新对象（不改入参），必须回写，否则首页计数永远停在导入时的值
+        draft.manifest.counts = computeCounts(draft);
         // 编辑后包内文件集合会变（新增正文/图片、改 kind），校验前必须重算
         draft.filePaths = new Set([
           ...draft.articles.flatMap((article) =>
@@ -142,7 +142,12 @@ export function createLibrary(platform: Platform): Library {
             markdown.set(article.id, '');
           }
         }
-        await writeDatabaseDir(io, current.dir, serializeDatabase(draft, markdown));
+        const files = serializeDatabase(draft, markdown);
+        await writeDatabaseDir(io, current.dir, files);
+        // 覆盖式写入不会删旧文件：必须清掉已删除的实体，否则重启会"复活"。
+        // keep 必须同时包含 JSON/Markdown 与图片二进制：serializeDatabase 只产出文本，
+        // 漏掉 image.file 会把所有图片当"已删除"清掉（导入后封面全丢）。
+        await pruneDatabaseDir(io, current.dir, new Set([...files.map((file) => file.path), ...draft.filePaths]));
         if (await platform.fs.exists(dirtyPath)) await platform.fs.remove(dirtyPath);
 
         current.db.manifest.counts = draft.manifest.counts;

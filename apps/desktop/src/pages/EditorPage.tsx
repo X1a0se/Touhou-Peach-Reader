@@ -11,7 +11,7 @@ import type {
   TagCategory,
 } from '@tpr/schema';
 import { normalizeName } from '@tpr/schema';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArticleOrderPicker } from '../components/ArticleOrderPicker.js';
 import { AuthorPicker } from '../components/AuthorPicker.js';
 import { DraftList } from '../components/DraftList.js';
@@ -19,6 +19,14 @@ import { SeriesPicker } from '../components/SeriesPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
 import { useServices } from '../context.js';
 import type { DraftStore } from '../editor/drafts.js';
+import {
+  EDITOR_KIND_LABEL,
+  EDITOR_KINDS,
+  type EditorKind,
+  type EditorSearchHit,
+  searchEditor,
+  TAG_CATEGORY_LABEL,
+} from '../editor/search.js';
 import { useDraftAutosave, useDraftBox, useDraftStore } from '../editor/useDraft.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 
@@ -42,7 +50,15 @@ const buttonClass =
 const primaryClass =
   'rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50';
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
   return (
     <label className="flex flex-col gap-1.5">
       <span className={labelClass}>{label}</span>
@@ -108,7 +124,11 @@ function CoverField({
     <div className="flex flex-col gap-1.5">
       <span className={labelClass}>封面</span>
       <div className="flex gap-2">
-        <select className={inputClass} value={value} onChange={(event) => onChange(event.target.value)}>
+        <select
+          className={inputClass}
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+        >
           <option value="">无封面</option>
           {images.map((image) => (
             <option key={image.id} value={image.id}>
@@ -134,7 +154,8 @@ function CoverField({
         </label>
       </div>
       <span className="text-xs text-muted-foreground">
-        {message ?? '上传的图片会存进数据库的 images/ 目录，并自动选中；也可在「图片」标签页统一管理。'}
+        {message ??
+          '上传的图片会存进数据库的 images/ 目录，并自动选中；也可在「图片」标签页统一管理。'}
       </span>
     </div>
   );
@@ -146,10 +167,66 @@ export function EditorPage() {
   const [tab, setTab] = useState<Tab>('articles');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [query, setQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [activeHit, setActiveHit] = useState(0);
+  const [focus, setFocus] = useState<{ kind: EditorKind; id: string; token: number } | null>(null);
+  const search = useMemo(
+    () => (snapshot ? searchEditor(snapshot, query) : null),
+    [snapshot, query],
+  );
 
   if (!snapshot) {
-    return <p className="text-sm text-muted-foreground">还没有导入数据库，先在首页拖入一个 .tpr。</p>;
+    return (
+      <p className="text-sm text-muted-foreground">还没有导入数据库，先在首页拖入一个 .tpr。</p>
+    );
   }
+
+  const hits = search?.hits ?? [];
+  const matched = search ? EDITOR_KINDS.reduce((sum, kind) => sum + search.totals[kind], 0) : 0;
+
+  const pickHit = (hit: EditorSearchHit): void => {
+    setTab(hit.kind as Tab);
+    setQuery('');
+    setSearchOpen(false);
+    setActiveHit(0);
+    setFocus({ kind: hit.kind, id: hit.id, token: Date.now() });
+    setError(null);
+    setNotice(null);
+  };
+
+  const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      if (!searchOpen) {
+        // 第一次按 ↓ 只是把候选列表打开并停在第一项，不应跳过首项
+        setSearchOpen(true);
+        setActiveHit(0);
+        return;
+      }
+      setActiveHit((current) => (hits.length === 0 ? 0 : Math.min(current + 1, hits.length - 1)));
+      return;
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      setActiveHit((current) => Math.max(current - 1, 0));
+      return;
+    }
+    if (event.key === 'Enter') {
+      // 列表已按 Esc 收起时，Enter 只负责重新打开，避免"看不见结果却跳走"
+      if (!searchOpen) {
+        setSearchOpen(true);
+        return;
+      }
+      const hit = hits[activeHit];
+      if (hit) {
+        event.preventDefault();
+        pickHit(hit);
+      }
+      return;
+    }
+    if (event.key === 'Escape') setSearchOpen(false);
+  };
 
   const run = async (action: () => Promise<void>, done: string): Promise<void> => {
     setError(null);
@@ -184,6 +261,91 @@ export function EditorPage() {
         </p>
       ) : null}
 
+      <div className="relative z-20">
+        <input
+          type="text"
+          role="combobox"
+          aria-label="搜索编辑器内容"
+          aria-expanded={searchOpen && Boolean(search)}
+          aria-controls="editor-search-results"
+          aria-activedescendant={
+            searchOpen && hits[activeHit]
+              ? `editor-hit-${hits[activeHit].kind}-${hits[activeHit].id}`
+              : undefined
+          }
+          placeholder="搜索文章、系列、作者、标签、图片、推荐语、鸣谢…（不含正文）"
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setSearchOpen(true);
+            setActiveHit(0);
+          }}
+          onFocus={() => setSearchOpen(true)}
+          onBlur={() => setTimeout(() => setSearchOpen(false), 120)}
+          onKeyDown={onSearchKeyDown}
+          className={inputClass}
+        />
+        {search && searchOpen ? (
+          <div className="absolute inset-x-0 top-full mt-2 max-h-[26rem] overflow-auto rounded-xl border border-border bg-background p-2 shadow-xl">
+            <div
+              id="editor-search-results"
+              role="listbox"
+              aria-label="编辑器搜索结果"
+              className="flex flex-col gap-2"
+            >
+              {hits.length === 0 ? (
+                <p className="px-3 py-6 text-center text-sm text-muted-foreground">没有匹配项。</p>
+              ) : null}
+              {EDITOR_KINDS.map((kind) => {
+                const group = hits.filter((hit) => hit.kind === kind);
+                if (group.length === 0) return null;
+                return (
+                  <div key={kind}>
+                    <p className="px-2 pb-1 text-[0.68rem] font-semibold tracking-[0.16em] text-muted-foreground uppercase">
+                      {EDITOR_KIND_LABEL[kind]} · {search.totals[kind]}
+                    </p>
+                    <div className="flex flex-col">
+                      {group.map((hit) => {
+                        const index = hits.indexOf(hit);
+                        return (
+                          <div key={`${hit.kind}:${hit.id}`}>
+                            <button
+                              type="button"
+                              role="option"
+                              id={`editor-hit-${hit.kind}-${hit.id}`}
+                              aria-selected={index === activeHit}
+                              aria-label={`打开${EDITOR_KIND_LABEL[hit.kind]}《${hit.label}》`}
+                              onMouseDown={(event) => event.preventDefault()}
+                              onClick={() => pickHit(hit)}
+                              onMouseEnter={() => setActiveHit(index)}
+                              className={`flex w-full items-center justify-between gap-3 rounded-md px-3 py-1.5 text-left text-sm ${
+                                index === activeHit
+                                  ? 'bg-accent-soft text-accent'
+                                  : 'hover:bg-surface-strong'
+                              }`}
+                            >
+                              <span className="truncate">{hit.label}</span>
+                              {hit.detail ? (
+                                <span className="shrink-0 text-xs text-muted-foreground">
+                                  {hit.detail}
+                                </span>
+                              ) : null}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="border-t border-border px-2 pt-2 text-xs text-muted-foreground">
+              共 {matched} 项匹配 · ↑↓ 选择，Enter 打开 · 只搜实体字段，不含正文
+            </p>
+          </div>
+        ) : null}
+      </div>
+
       <div className="flex flex-wrap gap-1.5">
         {TABS.map((item) => (
           <button
@@ -205,32 +367,117 @@ export function EditorPage() {
         ))}
       </div>
 
-      {tab === 'articles' ? <ArticlesPanel snapshot={snapshot} run={run} editor={services.editor} /> : null}
-      {tab === 'series' ? <SeriesPanel snapshot={snapshot} run={run} editor={services.editor} /> : null}
-      {tab === 'authors' ? <AuthorsPanel snapshot={snapshot} run={run} editor={services.editor} /> : null}
-      {tab === 'tags' ? <TagsPanel snapshot={snapshot} run={run} editor={services.editor} /> : null}
-      {tab === 'images' ? <ImagesPanel snapshot={snapshot} run={run} editor={services.editor} /> : null}
-      {tab === 'featured' ? <FeaturedPanel snapshot={snapshot} run={run} editor={services.editor} /> : null}
-      {tab === 'credits' ? <CreditsPanel snapshot={snapshot} run={run} editor={services.editor} /> : null}
+      {tab === 'articles' ? (
+        <ArticlesPanel
+          snapshot={snapshot}
+          run={run}
+          editor={services.editor}
+          visibleIds={search ? search.ids.articles : null}
+          focus={focus?.kind === 'articles' ? focus : null}
+        />
+      ) : null}
+      {tab === 'series' ? (
+        <SeriesPanel
+          snapshot={snapshot}
+          run={run}
+          editor={services.editor}
+          visibleIds={search ? search.ids.series : null}
+          focus={focus?.kind === 'series' ? focus : null}
+        />
+      ) : null}
+      {tab === 'authors' ? (
+        <AuthorsPanel
+          snapshot={snapshot}
+          run={run}
+          editor={services.editor}
+          visibleIds={search ? search.ids.authors : null}
+          focus={focus?.kind === 'authors' ? focus : null}
+        />
+      ) : null}
+      {tab === 'tags' ? (
+        <TagsPanel
+          snapshot={snapshot}
+          run={run}
+          editor={services.editor}
+          visibleIds={search ? search.ids.tags : null}
+          focus={focus?.kind === 'tags' ? focus : null}
+        />
+      ) : null}
+      {tab === 'images' ? (
+        <ImagesPanel
+          snapshot={snapshot}
+          run={run}
+          editor={services.editor}
+          visibleIds={search ? search.ids.images : null}
+          focus={focus?.kind === 'images' ? focus : null}
+        />
+      ) : null}
+      {tab === 'featured' ? (
+        <FeaturedPanel
+          snapshot={snapshot}
+          run={run}
+          editor={services.editor}
+          visibleIds={search ? search.ids.featured : null}
+          focus={focus?.kind === 'featured' ? focus : null}
+        />
+      ) : null}
+      {tab === 'credits' ? (
+        <CreditsPanel
+          snapshot={snapshot}
+          run={run}
+          editor={services.editor}
+          visibleIds={search ? search.ids.credits : null}
+          focus={focus?.kind === 'credits' ? focus : null}
+        />
+      ) : null}
     </section>
   );
 }
 
 type Run = (action: () => Promise<void>, done: string) => Promise<void>;
 
+/**
+ * 搜索跳转：只在 focus.token 变化时执行一次。
+ *
+ * 不能把 snapshot / box / setEditing 放进依赖列表——保存后 `refresh()` 会换一份 snapshot，
+ * 那些依赖会立刻把正在编辑（甚至带草稿）的表单重置掉。用 ref 保存最新回调，依赖只留 id/token。
+ */
+function useFocusJump(
+  focus: { id: string; token: number } | null,
+  onJump: (id: string) => void,
+): void {
+  const callback = useRef(onJump);
+  const token = focus?.token;
+  const id = focus?.id;
+
+  useEffect(() => {
+    callback.current = onJump;
+  }, [onJump]);
+
+  useEffect(() => {
+    if (token === undefined || id === undefined) return;
+    callback.current(id);
+  }, [token, id]);
+}
+
 function PanelList<T>({
   items,
   selectedId,
   onSelect,
   render,
+  empty,
 }: {
   items: T[];
   selectedId: string | null;
   onSelect(item: T): void;
   render(item: T): React.ReactNode;
+  empty?: string;
 }) {
   return (
     <ul className="flex max-h-[28rem] flex-col divide-y divide-border overflow-auto rounded-xl border border-border bg-surface/60">
+      {items.length === 0 && empty ? (
+        <li className="px-3 py-6 text-center text-sm text-muted-foreground">{empty}</li>
+      ) : null}
       {items.map((item) => {
         const id = (item as { id: string }).id;
         return (
@@ -266,14 +513,20 @@ function PickerRow({
     <div className="flex flex-col gap-1.5">
       <span className={labelClass}>{title}</span>
       <div className="flex max-h-40 flex-wrap gap-x-4 gap-y-1 overflow-auto rounded-md border border-border p-2">
-        {options.length === 0 ? <span className="text-xs text-muted-foreground">还没有可选条目</span> : null}
+        {options.length === 0 ? (
+          <span className="text-xs text-muted-foreground">还没有可选条目</span>
+        ) : null}
         {options.map((option) => (
           <label key={option.id} className="flex items-center gap-1.5 text-sm">
             <input
               type="checkbox"
               checked={value.includes(option.id)}
               onChange={(event) =>
-                onChange(event.target.checked ? [...value, option.id] : value.filter((id) => id !== option.id))
+                onChange(
+                  event.target.checked
+                    ? [...value, option.id]
+                    : value.filter((id) => id !== option.id),
+                )
               }
             />
             {option.label}
@@ -284,7 +537,19 @@ function PickerRow({
   );
 }
 
-function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+function ArticlesPanel({
+  snapshot,
+  run,
+  editor,
+  visibleIds = null,
+  focus = null,
+}: {
+  snapshot: DBSnapshot;
+  run: Run;
+  editor: Editor;
+  visibleIds?: Set<string> | null;
+  focus?: { id: string; token: number } | null;
+}) {
   const library = useLibraryContext();
   const services = useServices();
   const databaseId = services.library.current()?.databaseId ?? '';
@@ -326,6 +591,19 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
     });
   };
 
+  const visible = visibleIds
+    ? snapshot.articles.filter((article) => visibleIds.has(article.id))
+    : snapshot.articles;
+
+  useFocusJump(focus, (id) => {
+    const target = snapshot.articles.find((article) => article.id === id);
+    if (!target) return;
+    box.close();
+    setCreating(false);
+    setDraftPayload(null);
+    setEditing(target);
+  });
+
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
       <div className="flex flex-col gap-3">
@@ -352,7 +630,11 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
           <div className="mt-2 flex max-h-48 flex-col gap-1 overflow-auto">
             {snapshot.articles.map((article) => (
               <label key={article.id} className="flex items-center gap-2">
-                <input type="checkbox" checked={picked.has(article.id)} onChange={() => togglePicked(article.id)} />
+                <input
+                  type="checkbox"
+                  checked={picked.has(article.id)}
+                  onChange={() => togglePicked(article.id)}
+                />
                 <span className="truncate">{article.title}</span>
               </label>
             ))}
@@ -367,8 +649,9 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
           </button>
         </details>
         <PanelList
-          items={snapshot.articles}
+          items={visible}
           selectedId={editing?.id ?? null}
+          empty="没有匹配的文章。"
           onSelect={(article) => {
             setCreating(false);
             setDraftPayload(null);
@@ -381,7 +664,11 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
               <>
                 <span className="truncate">{article.title}</span>
                 <span className="shrink-0 text-xs text-muted-foreground">
-                  {article.type === 'short' ? '短篇' : position ? `第 ${position.index} 篇` : '系列'}
+                  {article.type === 'short'
+                    ? '短篇'
+                    : position
+                      ? `第 ${position.index} 篇`
+                      : '系列'}
                 </span>
               </>
             );
@@ -405,11 +692,14 @@ function ArticlesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
             if (box.draftId) box.discard(box.draftId);
             closeForm();
           }}
-          onExport={editing ? () => void library.exportSelection({ articles: [editing.id] }) : undefined}
+          onExport={
+            editing ? () => void library.exportSelection({ articles: [editing.id] }) : undefined
+          }
           onDelete={
             editing
               ? async () => {
-                  if (!window.confirm(`删除《${editing.title}》？该操作会同时更新系列目录与精选。`)) return;
+                  if (!window.confirm(`删除《${editing.title}》？该操作会同时更新系列目录与精选。`))
+                    return;
                   await run(async () => {
                     await editor.deleteArticle(editing.id);
                   }, '文章已删除');
@@ -469,16 +759,22 @@ function ArticleForm({
   const [content, setContent] = useState<string | null>(
     draft ? draft.content : initial ? null : '',
   );
-  const [authorIds, setAuthorIds] = useState<string[]>(draft?.authorIds ?? initial?.authorIds ?? []);
+  const [authorIds, setAuthorIds] = useState<string[]>(
+    draft?.authorIds ?? initial?.authorIds ?? [],
+  );
   const [translatorIds, setTranslatorIds] = useState<string[]>(
     draft?.translatorIds ?? initial?.translatorIds ?? [],
   );
   const [characterTagIds, setCharacterTagIds] = useState<string[]>(
     draft?.characterTagIds ?? initial?.characterTagIds ?? [],
   );
-  const [plotTagIds, setPlotTagIds] = useState<string[]>(draft?.plotTagIds ?? initial?.plotTagIds ?? []);
+  const [plotTagIds, setPlotTagIds] = useState<string[]>(
+    draft?.plotTagIds ?? initial?.plotTagIds ?? [],
+  );
   const [seriesId, setSeriesId] = useState(draft?.seriesId ?? initial?.seriesId ?? '');
-  const [coverImageId, setCoverImageId] = useState(draft?.coverImageId ?? initial?.coverImageId ?? '');
+  const [coverImageId, setCoverImageId] = useState(
+    draft?.coverImageId ?? initial?.coverImageId ?? '',
+  );
   const [illustrationImageIds, setIllustrationImageIds] = useState<string[]>(
     draft?.illustrationImageIds ?? initial?.illustrationImageIds ?? [],
   );
@@ -553,15 +849,21 @@ function ArticleForm({
 
   /** 当前文章在所属系列里的编号（新选系列时为 null） */
   const position = initial ? articleSeriesPosition(snapshot, initial.id) : null;
-  const selectedSeries = seriesId ? snapshot.series.find((series) => series.id === seriesId) : undefined;
+  const selectedSeries = seriesId
+    ? snapshot.series.find((series) => series.id === seriesId)
+    : undefined;
 
   /** 表单内新建标签：按名称/别名判重，复用则返回现有 id；创建后刷新快照让列表立即可见。 */
-  const createTag = async (category: TagCategory, name: string): Promise<{ id: string; created: boolean }> => {
+  const createTag = async (
+    category: TagCategory,
+    name: string,
+  ): Promise<{ id: string; created: boolean }> => {
     const key = normalizeName(name);
     const existed = snapshot.tags.some(
       (tag) =>
         tag.category === category &&
-        (normalizeName(tag.name) === key || (tag.aliases ?? []).some((alias) => normalizeName(alias) === key)),
+        (normalizeName(tag.name) === key ||
+          (tag.aliases ?? []).some((alias) => normalizeName(alias) === key)),
     );
     const id = await services.editor.saveTag({ category, name });
     await refresh();
@@ -597,14 +899,27 @@ function ArticleForm({
         </p>
       ) : null}
       <Field label="标题">
-        <input className={inputClass} value={title} onChange={(event) => setTitle(event.target.value)} required />
+        <input
+          className={inputClass}
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          required
+        />
       </Field>
 
       <Field label="简介">
-        <textarea className={inputClass} rows={2} value={summary} onChange={(event) => setSummary(event.target.value)} />
+        <textarea
+          className={inputClass}
+          rows={2}
+          value={summary}
+          onChange={(event) => setSummary(event.target.value)}
+        />
       </Field>
 
-      <Field label="正文（Markdown）" hint="保存后写到 articles/{id}.md；编辑元数据时不会覆盖正文。">
+      <Field
+        label="正文（Markdown）"
+        hint="保存后写到 articles/{id}.md；编辑元数据时不会覆盖正文。"
+      >
         <textarea
           className={`${inputClass} font-mono`}
           rows={12}
@@ -637,7 +952,12 @@ function ArticleForm({
       </div>
 
       <AuthorPicker title="作者" authors={authors} value={authorIds} onChange={setAuthorIds} />
-      <AuthorPicker title="译者" authors={authors} value={translatorIds} onChange={setTranslatorIds} />
+      <AuthorPicker
+        title="译者"
+        authors={authors}
+        value={translatorIds}
+        onChange={setTranslatorIds}
+      />
       <TagPicker
         title="角色标签"
         category="character"
@@ -659,7 +979,10 @@ function ArticleForm({
         <CoverField images={snapshot.images} value={coverImageId} onChange={setCoverImageId} />
         <PickerRow
           title="插图（可多选）"
-          options={snapshot.images.map((image) => ({ id: image.id, label: image.caption ?? image.id }))}
+          options={snapshot.images.map((image) => ({
+            id: image.id,
+            label: image.caption ?? image.id,
+          }))}
           value={illustrationImageIds}
           onChange={setIllustrationImageIds}
         />
@@ -704,7 +1027,19 @@ export interface SeriesDraftPayload {
   sourceUrl: string;
 }
 
-function SeriesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+function SeriesPanel({
+  snapshot,
+  run,
+  editor,
+  visibleIds = null,
+  focus = null,
+}: {
+  snapshot: DBSnapshot;
+  run: Run;
+  editor: Editor;
+  visibleIds?: Set<string> | null;
+  focus?: { id: string; token: number } | null;
+}) {
   const services = useServices();
   const databaseId = services.library.current()?.databaseId ?? '';
   const store = useDraftStore(databaseId);
@@ -720,6 +1055,19 @@ function SeriesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
     setCreating(true);
     setDraftPayload((draft.payload as SeriesDraftPayload | undefined) ?? null);
   };
+
+  const visible = visibleIds
+    ? snapshot.series.filter((series) => visibleIds.has(series.id))
+    : snapshot.series;
+
+  useFocusJump(focus, (id) => {
+    const target = snapshot.series.find((series) => series.id === id);
+    if (!target) return;
+    box.close();
+    setCreating(false);
+    setDraftPayload(null);
+    setEditing(target);
+  });
 
   const closeForm = () => {
     setEditing(null);
@@ -757,7 +1105,8 @@ function SeriesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
           }}
         />
         <PanelList
-          items={snapshot.series}
+          items={visible}
+          empty="没有匹配的系列。"
           selectedId={editing?.id ?? null}
           onSelect={(series) => {
             setCreating(false);
@@ -768,7 +1117,9 @@ function SeriesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
           render={(series) => (
             <>
               <span className="truncate">{series.title}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">{series.articleIds.length} 篇</span>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {series.articleIds.length} 篇
+              </span>
             </>
           )}
         />
@@ -834,17 +1185,27 @@ function SeriesForm({
   const { refresh } = useLibraryContext();
   const [title, setTitle] = useState(draft?.title ?? initial?.title ?? '');
   const [summary, setSummary] = useState(draft?.summary ?? initial?.summary ?? '');
-  const [status, setStatus] = useState<'ongoing' | 'completed'>(draft?.status ?? initial?.status ?? 'ongoing');
-  const [articleIds, setArticleIds] = useState<string[]>(draft?.articleIds ?? initial?.articleIds ?? []);
-  const [authorIds, setAuthorIds] = useState<string[]>(draft?.authorIds ?? initial?.authorIds ?? []);
+  const [status, setStatus] = useState<'ongoing' | 'completed'>(
+    draft?.status ?? initial?.status ?? 'ongoing',
+  );
+  const [articleIds, setArticleIds] = useState<string[]>(
+    draft?.articleIds ?? initial?.articleIds ?? [],
+  );
+  const [authorIds, setAuthorIds] = useState<string[]>(
+    draft?.authorIds ?? initial?.authorIds ?? [],
+  );
   const [translatorIds, setTranslatorIds] = useState<string[]>(
     draft?.translatorIds ?? initial?.translatorIds ?? [],
   );
   const [characterTagIds, setCharacterTagIds] = useState<string[]>(
     draft?.characterTagIds ?? initial?.characterTagIds ?? [],
   );
-  const [plotTagIds, setPlotTagIds] = useState<string[]>(draft?.plotTagIds ?? initial?.plotTagIds ?? []);
-  const [coverImageId, setCoverImageId] = useState(draft?.coverImageId ?? initial?.coverImageId ?? '');
+  const [plotTagIds, setPlotTagIds] = useState<string[]>(
+    draft?.plotTagIds ?? initial?.plotTagIds ?? [],
+  );
+  const [coverImageId, setCoverImageId] = useState(
+    draft?.coverImageId ?? initial?.coverImageId ?? '',
+  );
   const [sourceUrl, setSourceUrl] = useState(draft?.sourceUrl ?? initial?.sourceUrl ?? '');
   const [busy, setBusy] = useState(false);
 
@@ -883,12 +1244,16 @@ function SeriesForm({
     enabled: !initial && Boolean(draftId && draftStore),
   });
 
-  const createTag = async (category: TagCategory, name: string): Promise<{ id: string; created: boolean }> => {
+  const createTag = async (
+    category: TagCategory,
+    name: string,
+  ): Promise<{ id: string; created: boolean }> => {
     const key = normalizeName(name);
     const existed = snapshot.tags.some(
       (tag) =>
         tag.category === category &&
-        (normalizeName(tag.name) === key || (tag.aliases ?? []).some((alias) => normalizeName(alias) === key)),
+        (normalizeName(tag.name) === key ||
+          (tag.aliases ?? []).some((alias) => normalizeName(alias) === key)),
     );
     const id = await services.editor.saveTag({ category, name });
     await refresh();
@@ -923,13 +1288,20 @@ function SeriesForm({
       ) : null}
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="标题">
-          <input className={inputClass} value={title} onChange={(event) => setTitle(event.target.value)} required />
+          <input
+            className={inputClass}
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+            required
+          />
         </Field>
         <Field label="状态">
           <select
             className={inputClass}
             value={status}
-            onChange={(event) => setStatus(event.target.value === 'completed' ? 'completed' : 'ongoing')}
+            onChange={(event) =>
+              setStatus(event.target.value === 'completed' ? 'completed' : 'ongoing')
+            }
           >
             <option value="ongoing">连载中</option>
             <option value="completed">已完结</option>
@@ -938,13 +1310,32 @@ function SeriesForm({
       </div>
 
       <Field label="简介">
-        <textarea className={inputClass} rows={2} value={summary} onChange={(event) => setSummary(event.target.value)} />
+        <textarea
+          className={inputClass}
+          rows={2}
+          value={summary}
+          onChange={(event) => setSummary(event.target.value)}
+        />
       </Field>
 
-      <ArticleOrderPicker articles={snapshot.articles} value={articleIds} onChange={setArticleIds} />
+      <ArticleOrderPicker
+        articles={snapshot.articles}
+        value={articleIds}
+        onChange={setArticleIds}
+      />
 
-      <AuthorPicker title="作者" authors={snapshot.authors} value={authorIds} onChange={setAuthorIds} />
-      <AuthorPicker title="译者" authors={snapshot.authors} value={translatorIds} onChange={setTranslatorIds} />
+      <AuthorPicker
+        title="作者"
+        authors={snapshot.authors}
+        value={authorIds}
+        onChange={setAuthorIds}
+      />
+      <AuthorPicker
+        title="译者"
+        authors={snapshot.authors}
+        value={translatorIds}
+        onChange={setTranslatorIds}
+      />
       <TagPicker
         title="角色标签"
         category="character"
@@ -965,7 +1356,11 @@ function SeriesForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <CoverField images={snapshot.images} value={coverImageId} onChange={setCoverImageId} />
         <Field label="原出处">
-          <input className={inputClass} value={sourceUrl} onChange={(event) => setSourceUrl(event.target.value)} />
+          <input
+            className={inputClass}
+            value={sourceUrl}
+            onChange={(event) => setSourceUrl(event.target.value)}
+          />
         </Field>
       </div>
 
@@ -997,14 +1392,30 @@ export interface AuthorDraftPayload {
   sourceUrl: string;
 }
 
-function AuthorsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+function AuthorsPanel({
+  snapshot,
+  run,
+  editor,
+  visibleIds = null,
+  focus = null,
+}: {
+  snapshot: DBSnapshot;
+  run: Run;
+  editor: Editor;
+  visibleIds?: Set<string> | null;
+  focus?: { id: string; token: number } | null;
+}) {
   const services = useServices();
   const databaseId = services.library.current()?.databaseId ?? '';
   const store = useDraftStore(databaseId);
   const box = useDraftBox<AuthorDraftPayload>(store, 'author');
-  const [editing, setEditing] = useState<{ id?: string; canonicalName: string; aliases: string; notes: string; sourceUrl: string } | null>(
-    null,
-  );
+  const [editing, setEditing] = useState<{
+    id?: string;
+    canonicalName: string;
+    aliases: string;
+    notes: string;
+    sourceUrl: string;
+  } | null>(null);
 
   const startNew = () => {
     box.start();
@@ -1021,6 +1432,10 @@ function AuthorsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
     };
     setEditing({ ...payload });
   };
+  const visibleAuthors = visibleIds
+    ? snapshot.authors.filter((author) => visibleIds.has(author.id))
+    : snapshot.authors;
+
   const startEdit = (id: string) => {
     const author = snapshot.authors.find((item) => item.id === id);
     if (!author) return;
@@ -1046,6 +1461,9 @@ function AuthorsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
         : null,
     [editing],
   );
+
+  useFocusJump(focus, startEdit);
+
   const { error: draftError } = useDraftAutosave({
     store,
     draftId: box.draftId,
@@ -1072,13 +1490,16 @@ function AuthorsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
           }}
         />
         <PanelList
-          items={snapshot.authors}
+          items={visibleAuthors}
+          empty="没有匹配的作者。"
           selectedId={editing?.id ?? null}
           onSelect={(author) => startEdit(author.id)}
           render={(author) => (
             <>
               <span className="truncate">{author.canonicalName}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">{author.aliases.length} 别名</span>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {author.aliases.length} 别名
+              </span>
             </>
           )}
         />
@@ -1093,7 +1514,10 @@ function AuthorsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
               await editor.saveAuthor({
                 ...(editing.id ? { id: editing.id } : {}),
                 canonicalName: editing.canonicalName,
-                aliases: editing.aliases.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean),
+                aliases: editing.aliases
+                  .split(/[，,、\n]/)
+                  .map((item) => item.trim())
+                  .filter(Boolean),
                 notes: editing.notes,
                 sourceUrl: editing.sourceUrl,
               });
@@ -1177,14 +1601,34 @@ export interface TagDraftPayload {
   aliases: string;
 }
 
-function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+function TagsPanel({
+  snapshot,
+  run,
+  editor,
+  visibleIds = null,
+  focus = null,
+}: {
+  snapshot: DBSnapshot;
+  run: Run;
+  editor: Editor;
+  visibleIds?: Set<string> | null;
+  focus?: { id: string; token: number } | null;
+}) {
   const services = useServices();
   const databaseId = services.library.current()?.databaseId ?? '';
   const store = useDraftStore(databaseId);
   const box = useDraftBox<TagDraftPayload>(store, 'tag');
-  const [editing, setEditing] = useState<{ id?: string; category: TagCategory; name: string; aliases: string } | null>(null);
+  const [editing, setEditing] = useState<{
+    id?: string;
+    category: TagCategory;
+    name: string;
+    aliases: string;
+  } | null>(null);
   const [filter, setFilter] = useState<'all' | TagCategory>('all');
-  const list = snapshot.tags.filter((tag) => filter === 'all' || tag.category === filter);
+  // 搜索期间忽略类别筛选：否则命中项可能被 filter 挡掉，列表显示为空但右侧已打开
+  const list = visibleIds
+    ? snapshot.tags.filter((tag) => visibleIds.has(tag.id))
+    : snapshot.tags.filter((tag) => filter === 'all' || tag.category === filter);
 
   const startNew = () => {
     box.start();
@@ -1193,7 +1637,11 @@ function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; 
   const openDraft = (id: string) => {
     const draft = box.open(id);
     if (!draft) return;
-    const payload = (draft.payload as TagDraftPayload | undefined) ?? { category: 'character', name: '', aliases: '' };
+    const payload = (draft.payload as TagDraftPayload | undefined) ?? {
+      category: 'character',
+      name: '',
+      aliases: '',
+    };
     setEditing({ category: payload.category, name: payload.name, aliases: payload.aliases });
   };
 
@@ -1204,6 +1652,18 @@ function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; 
         : null,
     [editing],
   );
+  useFocusJump(focus, (id) => {
+    const tag = snapshot.tags.find((item) => item.id === id);
+    if (tag) {
+      setEditing({
+        id: tag.id,
+        category: tag.category,
+        name: tag.name,
+        aliases: tag.aliases?.join('，') ?? '',
+      });
+    }
+  });
+
   const { error: draftError } = useDraftAutosave({
     store,
     draftId: box.draftId,
@@ -1229,7 +1689,11 @@ function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; 
             if (wasOpen) setEditing(null);
           }}
         />
-        <select className={inputClass} value={filter} onChange={(event) => setFilter(event.target.value as 'all' | TagCategory)}>
+        <select
+          className={inputClass}
+          value={visibleIds ? 'all' : filter}
+          onChange={(event) => setFilter(event.target.value as 'all' | TagCategory)}
+        >
           <option value="all">全部类别</option>
           <option value="character">角色</option>
           <option value="plot">情节</option>
@@ -1238,12 +1702,22 @@ function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; 
         </select>
         <PanelList
           items={list}
+          empty="没有匹配的标签。"
           selectedId={editing?.id ?? null}
-          onSelect={(tag: Tag) => setEditing({ id: tag.id, category: tag.category, name: tag.name, aliases: tag.aliases?.join('，') ?? '' })}
+          onSelect={(tag: Tag) =>
+            setEditing({
+              id: tag.id,
+              category: tag.category,
+              name: tag.name,
+              aliases: tag.aliases?.join('，') ?? '',
+            })
+          }
           render={(tag) => (
             <>
               <span className="truncate">{tag.name}</span>
-              <span className="shrink-0 text-xs text-muted-foreground">{tag.category}</span>
+              <span className="shrink-0 text-xs text-muted-foreground">
+                {TAG_CATEGORY_LABEL[tag.category]}
+              </span>
             </>
           )}
         />
@@ -1259,7 +1733,10 @@ function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; 
                 ...(editing.id ? { id: editing.id } : {}),
                 category: editing.category,
                 name: editing.name,
-                aliases: editing.aliases.split(/[，,、\n]/).map((item) => item.trim()).filter(Boolean),
+                aliases: editing.aliases
+                  .split(/[，,、\n]/)
+                  .map((item) => item.trim())
+                  .filter(Boolean),
               });
             }, '标签已保存');
             if (box.draftId) box.discard(box.draftId);
@@ -1275,7 +1752,9 @@ function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; 
             <select
               className={inputClass}
               value={editing.category}
-              onChange={(event) => setEditing({ ...editing, category: event.target.value as TagCategory })}
+              onChange={(event) =>
+                setEditing({ ...editing, category: event.target.value as TagCategory })
+              }
             >
               <option value="character">角色</option>
               <option value="plot">情节</option>
@@ -1334,14 +1813,36 @@ function TagsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; 
 
 const IMAGE_KINDS: ImageKind[] = ['cover', 'illustration', 'captioned', 'other'];
 
-function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+function ImagesPanel({
+  snapshot,
+  run,
+  editor,
+  visibleIds = null,
+  focus = null,
+}: {
+  snapshot: DBSnapshot;
+  run: Run;
+  editor: Editor;
+  visibleIds?: Set<string> | null;
+  focus?: { id: string; token: number } | null;
+}) {
   const services = useServices();
   const [kind, setKind] = useState<ImageKind>('cover');
   const [caption, setCaption] = useState('');
   const [busy, setBusy] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, { kind: ImageKind; caption: string }>>({});
   const loaded = services.library.current();
-  const toUrl = (file: string) => (loaded ? services.platform.assets.toUrl(services.platform.paths.join(loaded.dir, file)) : '');
+  const toUrl = (file: string) =>
+    loaded ? services.platform.assets.toUrl(services.platform.paths.join(loaded.dir, file)) : '';
+  const visibleImages = visibleIds
+    ? snapshot.images.filter((image) => visibleIds.has(image.id))
+    : snapshot.images;
+
+  useFocusJump(focus, (id) => {
+    document
+      .querySelector(`[data-image-id="${id}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
 
   return (
     <div className="flex flex-col gap-5">
@@ -1366,7 +1867,11 @@ function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
           <input type="file" accept="image/*" className="text-sm" />
         </Field>
         <Field label="类型">
-          <select className={inputClass} value={kind} onChange={(event) => setKind(event.target.value as ImageKind)}>
+          <select
+            className={inputClass}
+            value={kind}
+            onChange={(event) => setKind(event.target.value as ImageKind)}
+          >
             {IMAGE_KINDS.map((item) => (
               <option key={item} value={item}>
                 {item}
@@ -1375,7 +1880,11 @@ function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
           </select>
         </Field>
         <Field label="配文">
-          <input className={inputClass} value={caption} onChange={(event) => setCaption(event.target.value)} />
+          <input
+            className={inputClass}
+            value={caption}
+            onChange={(event) => setCaption(event.target.value)}
+          />
         </Field>
         <button type="submit" className={primaryClass} disabled={busy}>
           上传
@@ -1383,18 +1892,34 @@ function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
       </form>
 
       <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {snapshot.images.map((image) => {
+        {visibleImages.length === 0 ? (
+          <li className="col-span-full px-4 py-8 text-center text-sm text-muted-foreground">
+            没有匹配的图片。
+          </li>
+        ) : null}
+        {visibleImages.map((image) => {
           const draft = drafts[image.id] ?? { kind: image.kind, caption: image.caption ?? '' };
           return (
-            <li key={image.id} className="flex gap-3 rounded-xl border border-border bg-surface/60 p-3">
-              <img src={toUrl(image.file)} alt={image.caption ?? image.id} className="h-24 w-16 shrink-0 rounded object-cover" />
+            <li
+              key={image.id}
+              data-image-id={image.id}
+              className="flex gap-3 rounded-xl border border-border bg-surface/60 p-3"
+            >
+              <img
+                src={toUrl(image.file)}
+                alt={image.caption ?? image.id}
+                className="h-24 w-16 shrink-0 rounded object-cover"
+              />
               <div className="flex min-w-0 flex-1 flex-col gap-2">
                 <span className="truncate text-xs text-muted-foreground">{image.file}</span>
                 <select
                   className="rounded-md border border-border bg-background px-2 py-1 text-xs"
                   value={draft.kind}
                   onChange={(event) =>
-                    setDrafts({ ...drafts, [image.id]: { ...draft, kind: event.target.value as ImageKind } })
+                    setDrafts({
+                      ...drafts,
+                      [image.id]: { ...draft, kind: event.target.value as ImageKind },
+                    })
                   }
                 >
                   {IMAGE_KINDS.map((item) => (
@@ -1407,7 +1932,9 @@ function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
                   className="rounded-md border border-border bg-background px-2 py-1 text-xs"
                   value={draft.caption}
                   placeholder="配文"
-                  onChange={(event) => setDrafts({ ...drafts, [image.id]: { ...draft, caption: event.target.value } })}
+                  onChange={(event) =>
+                    setDrafts({ ...drafts, [image.id]: { ...draft, caption: event.target.value } })
+                  }
                 />
                 <div className="flex gap-2">
                   <button
@@ -1415,7 +1942,10 @@ function ImagesPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run
                     className="rounded border border-border px-2 py-1 text-xs hover:bg-surface-strong"
                     onClick={() =>
                       void run(async () => {
-                        await editor.updateImage(image.id, { kind: draft.kind, caption: draft.caption });
+                        await editor.updateImage(image.id, {
+                          kind: draft.kind,
+                          caption: draft.caption,
+                        });
                       }, '图片已更新')
                     }
                   >
@@ -1449,7 +1979,19 @@ export interface FeaturedDraftPayload {
   rows: Recommendation[];
 }
 
-function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+function FeaturedPanel({
+  snapshot,
+  run,
+  editor,
+  visibleIds = null,
+  focus = null,
+}: {
+  snapshot: DBSnapshot;
+  run: Run;
+  editor: Editor;
+  visibleIds?: Set<string> | null;
+  focus?: { id: string; token: number } | null;
+}) {
   const services = useServices();
   const databaseId = services.library.current()?.databaseId ?? '';
   const store = useDraftStore(databaseId);
@@ -1466,8 +2008,14 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
   const pick = (type: 'article' | 'series', id: string) => {
     setTargetType(type);
     setTargetId(id);
-    const entry = snapshot.featured.find((item) => item.targetType === type && item.targetId === id);
-    setRows(entry && entry.recommendations.length > 0 ? entry.recommendations : [{ author: '', text: '' }]);
+    const entry = snapshot.featured.find(
+      (item) => item.targetType === type && item.targetId === id,
+    );
+    setRows(
+      entry && entry.recommendations.length > 0
+        ? entry.recommendations
+        : [{ author: '', text: '' }],
+    );
   };
 
   const startDraft = () => {
@@ -1489,6 +2037,27 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
     () => ({ targetType, targetId, rows }),
     [targetType, targetId, rows],
   );
+  const visibleFeatured = visibleIds
+    ? snapshot.featured.filter((entry) => visibleIds.has(`${entry.targetType}:${entry.targetId}`))
+    : snapshot.featured;
+
+  useFocusJump(focus, (id) => {
+    const [targetType, ...rest] = id.split(':');
+    const targetId = rest.join(':');
+    if ((targetType === 'article' || targetType === 'series') && targetId) {
+      setTargetType(targetType);
+      setTargetId(targetId);
+      const entry = snapshot.featured.find(
+        (item) => item.targetType === targetType && item.targetId === targetId,
+      );
+      setRows(
+        entry && entry.recommendations.length > 0
+          ? entry.recommendations
+          : [{ author: '', text: '' }],
+      );
+    }
+  });
+
   const { error: draftError } = useDraftAutosave({
     store,
     draftId: box.draftId,
@@ -1508,13 +2077,19 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
           <span
             key={draft.id}
             className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
-              box.draftId === draft.id ? 'border-accent bg-accent-soft text-accent' : 'border-border'
+              box.draftId === draft.id
+                ? 'border-accent bg-accent-soft text-accent'
+                : 'border-border'
             }`}
           >
             <button type="button" onClick={() => openDraft(draft.id)}>
               草稿：{draft.label}
             </button>
-            <button type="button" aria-label={`删除草稿 ${draft.label}`} onClick={() => box.discard(draft.id)}>
+            <button
+              type="button"
+              aria-label={`删除草稿 ${draft.label}`}
+              onClick={() => box.discard(draft.id)}
+            >
               ×
             </button>
           </span>
@@ -1526,23 +2101,33 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
         </p>
       ) : null}
       <ul className="flex flex-col divide-y divide-border rounded-xl border border-border bg-surface/60">
-        {snapshot.featured.length === 0 ? (
-          <li className="px-4 py-8 text-center text-sm text-muted-foreground">还没有推荐语。</li>
+        {visibleFeatured.length === 0 ? (
+          <li className="px-4 py-8 text-center text-sm text-muted-foreground">
+            {visibleIds ? '没有匹配的推荐语。' : '还没有推荐语。'}
+          </li>
         ) : null}
-        {snapshot.featured.map((entry) => {
+        {visibleFeatured.map((entry) => {
           const title =
             entry.targetType === 'article'
               ? snapshot.articles.find((article) => article.id === entry.targetId)?.title
               : snapshot.series.find((series) => series.id === entry.targetId)?.title;
           return (
-            <li key={`${entry.targetType}:${entry.targetId}`} className="flex items-start gap-3 px-3 py-2 text-sm">
+            <li
+              key={`${entry.targetType}:${entry.targetId}`}
+              className="flex items-start gap-3 px-3 py-2 text-sm"
+            >
               <div className="min-w-0 flex-1">
                 <p className="truncate font-medium">{title ?? `${entry.targetId}（目标缺失）`}</p>
                 <p className="text-xs text-muted-foreground">
-                  {entry.targetType === 'article' ? '文章' : '系列'} · {entry.recommendations.length} 条推荐语
+                  {entry.targetType === 'article' ? '文章' : '系列'} ·{' '}
+                  {entry.recommendations.length} 条推荐语
                 </p>
               </div>
-              <button type="button" className={buttonClass} onClick={() => pick(entry.targetType, entry.targetId)}>
+              <button
+                type="button"
+                className={buttonClass}
+                onClick={() => pick(entry.targetType, entry.targetId)}
+              >
                 编辑
               </button>
               <button
@@ -1568,7 +2153,9 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
           const cleaned = rows
             .map((row) => ({ author: row.author?.trim() ?? '', text: row.text.trim() }))
             .filter((row) => row.text.length > 0)
-            .map((row) => (row.author ? { author: row.author, text: row.text } : { text: row.text }));
+            .map((row) =>
+              row.author ? { author: row.author, text: row.text } : { text: row.text },
+            );
           if (!targetId || cleaned.length === 0) return;
           void run(async () => {
             await editor.saveFeatured(targetType, targetId, cleaned);
@@ -1593,7 +2180,11 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
             </select>
           </Field>
           <Field label="目标">
-            <select className={inputClass} value={targetId} onChange={(event) => pick(targetType, event.target.value)}>
+            <select
+              className={inputClass}
+              value={targetId}
+              onChange={(event) => pick(targetType, event.target.value)}
+            >
               <option value="">请选择</option>
               {options.map((option) => (
                 <option key={option.id} value={option.id}>
@@ -1610,15 +2201,27 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
             <div key={index} className="flex gap-2">
               <input
                 className={`${inputClass} sm:w-40`}
-              value={row.author ?? ''}
+                value={row.author ?? ''}
                 placeholder="推荐人"
-                onChange={(event) => setRows(rows.map((item, i) => (i === index ? { ...item, author: event.target.value } : item)))}
+                onChange={(event) =>
+                  setRows(
+                    rows.map((item, i) =>
+                      i === index ? { ...item, author: event.target.value } : item,
+                    ),
+                  )
+                }
               />
               <input
                 className={inputClass}
                 value={row.text}
                 placeholder="推荐语"
-                onChange={(event) => setRows(rows.map((item, i) => (i === index ? { ...item, text: event.target.value } : item)))}
+                onChange={(event) =>
+                  setRows(
+                    rows.map((item, i) =>
+                      i === index ? { ...item, text: event.target.value } : item,
+                    ),
+                  )
+                }
               />
               <button
                 type="button"
@@ -1630,7 +2233,11 @@ function FeaturedPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: R
               </button>
             </div>
           ))}
-          <button type="button" className={buttonClass} onClick={() => setRows([...rows, { author: '', text: '' }])}>
+          <button
+            type="button"
+            className={buttonClass}
+            onClick={() => setRows([...rows, { author: '', text: '' }])}
+          >
             添加一条
           </button>
         </div>
@@ -1647,12 +2254,40 @@ export interface CreditsDraftPayload {
   rows: CreditsEntry[];
 }
 
-function CreditsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Run; editor: Editor }) {
+type CreditsRow = CreditsEntry & { key: string };
+
+const newCreditsKey = (): string => `credit-${Math.random().toString(36).slice(2, 10)}`;
+const withCreditsKeys = (entries: readonly CreditsEntry[]): CreditsRow[] =>
+  entries.map((entry) => ({ ...entry, key: newCreditsKey() }));
+
+function CreditsPanel({
+  snapshot,
+  run,
+  editor,
+  visibleIds = null,
+  focus = null,
+}: {
+  snapshot: DBSnapshot;
+  run: Run;
+  editor: Editor;
+  visibleIds?: Set<string> | null;
+  focus?: { id: string; token: number } | null;
+}) {
   const services = useServices();
   const databaseId = services.library.current()?.databaseId ?? '';
   const store = useDraftStore(databaseId);
   const box = useDraftBox<CreditsDraftPayload>(store, 'credits');
-  const [rows, setRows] = useState<CreditsEntry[]>(() => snapshot.credits.map((entry) => ({ ...entry })));
+  // 行需要稳定的 React key：数组中用下标做 key，删除/上移时输入框状态会串行
+  const [rows, setRows] = useState<CreditsRow[]>(() => withCreditsKeys(snapshot.credits));
+  // 鸣谢是"整表编辑"：过滤会让保存丢掉未显示的行，所以搜索时只高亮命中行、不裁剪表单
+  const matched = (index: number): boolean => !visibleIds || visibleIds.has(`credits:${index}`);
+
+  useFocusJump(focus, (id) => {
+    const index = id.slice('credits:'.length);
+    document
+      .querySelector(`[data-credits-index="${index}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  });
 
   const move = (index: number, delta: number) => {
     const next = [...rows];
@@ -1666,7 +2301,7 @@ function CreditsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
     const draft = box.open(id);
     if (!draft) return;
     const payload = draft.payload as CreditsDraftPayload | undefined;
-    setRows(payload?.rows.length ? payload.rows : [{ name: '' }]);
+    setRows(withCreditsKeys(payload?.rows.length ? payload.rows : [{ name: '' }]));
   };
 
   const draftPayload = useMemo<CreditsDraftPayload>(() => ({ rows }), [rows]);
@@ -1704,7 +2339,7 @@ function CreditsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
           className={buttonClass}
           onClick={() => {
             box.start();
-            setRows([{ name: '' }]);
+            setRows(withCreditsKeys([{ name: '' }]));
           }}
         >
           新建鸣谢草稿
@@ -1713,13 +2348,19 @@ function CreditsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
           <span
             key={draft.id}
             className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
-              box.draftId === draft.id ? 'border-accent bg-accent-soft text-accent' : 'border-border'
+              box.draftId === draft.id
+                ? 'border-accent bg-accent-soft text-accent'
+                : 'border-border'
             }`}
           >
             <button type="button" onClick={() => openDraft(draft.id)}>
               {draft.label}
             </button>
-            <button type="button" aria-label={`删除草稿 ${draft.label}`} onClick={() => box.discard(draft.id)}>
+            <button
+              type="button"
+              aria-label={`删除草稿 ${draft.label}`}
+              onClick={() => box.discard(draft.id)}
+            >
               ×
             </button>
           </span>
@@ -1731,37 +2372,74 @@ function CreditsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
         </p>
       ) : null}
       <p className="text-xs text-muted-foreground">顺序即展示顺序，用 ↑↓ 调整。</p>
+      {visibleIds ? (
+        <p className="text-xs text-muted-foreground">
+          搜索中：仅高亮匹配的鸣谢行；鸣谢是整表编辑，保存仍会写入全部行。
+        </p>
+      ) : null}
       {rows.map((row, index) => (
-        <div key={index} className="grid gap-2 sm:grid-cols-[10rem_8rem_minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <div
+          key={row.key}
+          data-credits-index={index}
+          className={`grid gap-2 sm:grid-cols-[10rem_8rem_minmax(0,1fr)_minmax(0,1fr)_auto] ${
+            matched(index) && visibleIds ? 'rounded-lg ring-2 ring-[var(--ring)]' : ''
+          }`}
+        >
           <input
             className={inputClass}
             value={row.name}
             placeholder="名字"
-            onChange={(event) => setRows(rows.map((item, i) => (i === index ? { ...item, name: event.target.value } : item)))}
+            onChange={(event) =>
+              setRows(
+                rows.map((item, i) => (i === index ? { ...item, name: event.target.value } : item)),
+              )
+            }
           />
           <input
             className={inputClass}
             value={row.role ?? ''}
             placeholder="角色"
-            onChange={(event) => setRows(rows.map((item, i) => (i === index ? { ...item, role: event.target.value } : item)))}
+            onChange={(event) =>
+              setRows(
+                rows.map((item, i) => (i === index ? { ...item, role: event.target.value } : item)),
+              )
+            }
           />
           <input
             className={inputClass}
             value={row.link ?? ''}
             placeholder="链接"
-            onChange={(event) => setRows(rows.map((item, i) => (i === index ? { ...item, link: event.target.value } : item)))}
+            onChange={(event) =>
+              setRows(
+                rows.map((item, i) => (i === index ? { ...item, link: event.target.value } : item)),
+              )
+            }
           />
           <input
             className={inputClass}
             value={row.note ?? ''}
             placeholder="备注"
-            onChange={(event) => setRows(rows.map((item, i) => (i === index ? { ...item, note: event.target.value } : item)))}
+            onChange={(event) =>
+              setRows(
+                rows.map((item, i) => (i === index ? { ...item, note: event.target.value } : item)),
+              )
+            }
           />
           <div className="flex gap-1">
-            <button type="button" className={buttonClass} onClick={() => move(index, -1)} aria-label="上移">
+            <button
+              type="button"
+              className={buttonClass}
+              onClick={() => move(index, -1)}
+              aria-label="上移"
+            >
               ↑
             </button>
-            <button type="button" className={buttonClass} onClick={() => move(index, 1)} aria-label="下移">
+            <button
+              type="button"
+              className={buttonClass}
+              onClick={() => move(index, 1)}
+              aria-label="下移"
+            >
               ↓
             </button>
             <button
@@ -1776,7 +2454,11 @@ function CreditsPanel({ snapshot, run, editor }: { snapshot: DBSnapshot; run: Ru
         </div>
       ))}
       <div className="flex items-center gap-2">
-        <button type="button" className={buttonClass} onClick={() => setRows([...rows, { name: '' }])}>
+        <button
+          type="button"
+          className={buttonClass}
+          onClick={() => setRows([...rows, { name: '', key: newCreditsKey() }])}
+        >
           添加一行
         </button>
         <button type="submit" className={primaryClass}>

@@ -51,3 +51,33 @@ export async function writeDatabaseDir(io: DbIo, dir: string, files: TextFile[])
     await atomicWriteText(io, io.join(dir, file.path), file.text);
   }
 }
+
+/**
+ * 删除目标目录里已不在本次序列化结果中的实体文件。
+ *
+ * 写入是"覆盖式"的：删掉的文章/系列/图片如果不清理，重启后 `readDatabaseDir`
+ * 会把旧文件读回来（表现为"删了又出现"、计数回退）。
+ */
+export async function pruneDatabaseDir(
+  io: DbIo,
+  dir: string,
+  keep: ReadonlySet<string>,
+): Promise<void> {
+  const roots: string[] = [LAYOUT.articlesDir, LAYOUT.seriesDir];
+  const imagesRoot = io.join(dir, LAYOUT.imagesDir);
+  if (await io.fs.exists(imagesRoot)) {
+    for (const entry of await io.fs.listDir(imagesRoot)) {
+      if (entry.isDirectory) roots.push(`${LAYOUT.imagesDir}/${entry.name}`);
+    }
+  }
+
+  for (const root of roots) {
+    const full = io.join(dir, root);
+    if (!(await io.fs.exists(full))) continue;
+    for (const entry of await io.fs.listDir(full)) {
+      if (entry.isDirectory) continue;
+      const relative = `${root}/${entry.name}`;
+      if (!keep.has(relative)) await io.fs.remove(io.join(full, entry.name));
+    }
+  }
+}

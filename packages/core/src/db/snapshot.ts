@@ -9,6 +9,7 @@ import type {
   Series,
   Tag,
 } from '@tpr/schema';
+import { computeCounts } from './normalize.js';
 
 export interface IdMaps {
   authors: Map<string, Author>;
@@ -34,7 +35,8 @@ export interface DBSnapshot {
 export function toSnapshot(raw: RawDatabase): DBSnapshot {
   const articles: ArticleMeta[] = raw.articles.map(({ content: _content, ...meta }) => meta);
   return {
-    manifest: raw.manifest,
+    // counts 以数组长度为准：旧 workspace 的 manifest 可能停在导入时的数字
+    manifest: { ...raw.manifest, counts: computeCounts(raw) },
     authors: raw.authors,
     tags: raw.tags,
     images: raw.images,

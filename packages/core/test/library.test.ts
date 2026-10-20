@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { createLibrary } from '../src/db/library.js';
 import { ioFor } from '../src/db/workspace.js';
 import { serializeDatabase, writeDatabaseDir } from '../src/db/write.js';
+import { createEditor } from '../src/editor/index.js';
 
 const markdownFor = (db: RawDatabase): Map<string, string> =>
   new Map(db.articles.map((a) => [a.id, `# ${a.title}\n\n正文内容：${a.id}\n`]));
@@ -129,5 +130,33 @@ describe('library: 导入 / 持久化 / 导出 round-trip', () => {
     expect(outcome.snapshot.articles.length).toBe(1);
     expect(outcome.snapshot.series.length).toBe(0);
     expect(outcome.report.warnings.some((w) => w.code === 'W_DANGLING_SERIES')).toBe(false);
+  });
+
+  it('counts-after-edit: 编辑后 manifest.counts 随数组更新，重启后仍正确', async () => {
+    const db = makeDatabase();
+    const { bytes } = await packDatabase(db, '/seed');
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const library = createLibrary(platform);
+    await library.importBytes(bytes);
+    const editor = createEditor(platform, library);
+
+    const before = library.snapshot()?.manifest.counts;
+    await editor.saveTag({ category: 'character', name: '计数测试标签' });
+    await editor.saveAuthor({ canonicalName: '计数测试作者', aliases: [] });
+    await editor.deleteArticle(db.articles[0]?.id ?? '');
+
+    const after = library.snapshot();
+    expect(after?.manifest.counts.tags).toBe((before?.tags ?? 0) + 1);
+    expect(after?.manifest.counts.authors).toBe((before?.authors ?? 0) + 1);
+    expect(after?.manifest.counts.articles).toBe((before?.articles ?? 0) - 1);
+    expect(after?.manifest.counts.tags).toBe(after?.tags.length);
+    expect(after?.manifest.counts.authors).toBe(after?.authors.length);
+    expect(after?.manifest.counts.articles).toBe(after?.articles.length);
+    expect(after?.manifest.counts.series).toBe(after?.series.length);
+
+    // 落盘后重新打开仍然一致（旧 workspace 也不能显示旧计数）
+    const reopened = await createLibrary(platform).restore();
+    expect(reopened?.manifest.counts.tags).toBe(after?.manifest.counts.tags);
+    expect(reopened?.manifest.counts.articles).toBe(after?.manifest.counts.articles);
   });
 });

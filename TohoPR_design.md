@@ -685,6 +685,7 @@ export type Counts = Record<
 ```
 
 - 导出一律重算（`recount(snapshot)`）；导入只比对、不符记 `W_COUNT_MISMATCH`，以实际实体数为准。
+- **写入也要回写**（Goal 21 修复）：`computeCounts` 返回新对象、不改入参，早先 `library.save*` 只调用不赋值，导致编辑器增删后 `manifest.counts` 仍是导入时的旧值。现在两处双保险：写盘前 `draft.manifest.counts = computeCounts(draft)`；读盘时 `toSnapshot` 再用 `{ ...raw.manifest, counts: computeCounts(raw) }` 兜底，旧库/手工改坏的库也能显示正确数字。UI 不直接信 `manifest.counts`，首页与统计一律数数组长度。
 
 ---
 
@@ -1003,6 +1004,7 @@ $APPDATA/com.touhou.peachreader/          ← 桌面端 = %APPDATA%\com.touhou.p
 - **编辑器草稿箱（Goal 16）不在文件系统里**：存在 WebView 的 `localStorage`，键为 `tpr:drafts:v1:{databaseId}`，值为 `DraftEnvelope[]`（`{v:1,id,kind,label,updatedAt,payload}`）。按库隔离；最多 50 条（超出丢最旧）、单条 payload 上限 1.5 M 字符；写入失败（配额/过大）在表单里显示"草稿未保存"横幅，但**不阻断保存实体**。草稿不随数据库导出，换机不迁移。
 - 收藏（Goal 7）落在 `user/{databaseId}.json`：`favorites.articles` / `favorites.series` 为 id 数组，按加入时间倒序。数据库被重新导入导致某条消失时，读取时过滤并记 `stale`（Goal 7 要求"自动清理或标记失效"，选**标记失效**：保留 id，UI 显示灰色"已失效"）。
 - 同一 `databaseId` 重复导入 = **覆盖**（先备份再换名）；不同 id = 新增一个库，可在 `/settings` 切换。
+- **删除实体必须删文件**（Goal 21 修复）：此前只重写 JSON，被删文章/系列/图片的 `.md` 与二进制仍留在 `workspace/{databaseId}/`，`restore()` 重新扫目录时会把它们读回来（表现为「删掉的条目重启后复活」）。现在 `writeDatabaseDir` 之后调 `pruneDatabaseDir(io, dir, keep)`，`keep` = 本次写出的文本文件路径 ∪ `draft.filePaths`（**必须含图片二进制**，否则封面会被误删）；它遍历 `articles/`、`series/` 与 `images/` 的每个子目录（cover/illustration/…），删掉不在集合里的文件，不碰根部的 `manifest.json`/`featured.json`/`credits.json` 等。`applyEdit` 与合并导入共用这条落盘路径，因此两者都受保护。
 
 ### 9.2 写入协议：tmp + rename
 
@@ -1500,6 +1502,15 @@ export function DropZone({ onFile, accept = '.tpr,.zip', disabled, children }: D
 
 - **`TagLinks` 含 `<Link>`，调用方不得把它放进另一个 `<Link>`/`<button>` 里**（HTML 不允许 `<a>` 套 `<a>`，React 会警告且点击行为不可预期）。列表卡片因此改成"封面链接 + 标题链接 + 标签链接"三个并列元素，而不是整卡一个 `<Link>`。
 - `TagPicker` 的「新建」走 `editor.saveTag`：按 `category` + 归一化名称/别名判重，命中已有标签时复用其 id（返回 `created=false`），不会重复建同一个标签。
+
+**编辑器全实体搜索（Goal 21）**：`apps/desktop/src/editor/search.ts` 是纯函数模块，`searchEditor(snapshot, rawQuery, limitPerKind = 6)` 返回 `EditorSearchResult | null`（空白查询返回 `null`，UI 据此关闭下拉）。
+
+- 覆盖全部七类实体：文章、系列、作者、标签、图片、推荐语、鸣谢；每个 `EditorSearchHit` 带 `{ kind, id, label, detail? }`，`label` 直接给下拉显示，`detail` 放系列位置、标签类别、别名、图片类型等辅助信息。
+- 匹配规则：NFKC 归一化 + 小写 + 按空白切词 + 去重，每个词都要命中（AND 子串）；标题、简介、作者名/别名、角色/情节标签名、图片 caption/id/类型、推荐语正文与推荐人、鸣谢 name/role/note 都算 haystack。
+- **明确不搜正文**：正文动辄上千字，逐键扫描会卡输入框，也会让"搜索"变成全文检索；正文检索留给第 11 章的独立搜索页。
+- 推荐语与鸣谢的 id 是合成 id（`${targetType}:${targetId}` 与 `credits:${index}`），因为这两类没有实体主键；`ids` 供列表面板过滤用，`totals` 是过滤前的全量计数（`limitPerKind` 只截断 `hits`，不影响 `totals`/`ids`）。
+- UI 侧（`EditorPage`）：搜索框常驻在标签页上方，↑↓ 选择、Enter 打开、Esc 关闭；`onMouseDown preventDefault` 防止输入框失焦导致下拉先关。选中后切到对应标签页并定位：列表按 `visibleIds` 过滤、目标项用 `focus: { kind, id, token }` 选中并 `scrollIntoView`；标签页在搜索时忽略类别筛选（否则会出现"列表空但右侧打开"）；鸣谢是整表编辑，搜索只高亮匹配行、保存仍写全部行。
+- 草稿（未保存的新建内容）不参与搜索，仍显示在左侧草稿列表；不做拼音/模糊匹配，不跨库。
 
 ### 13.3 路由（D18）
 
@@ -2105,6 +2116,15 @@ Goal 20 追加记录（统一更新两版：一条命令 + 运行方式识别）
 - **冷启动 IPC 竞态**：WebView2 先渲染、Tauri IPC 后可用，冷启动后前 5–8 秒 `invoke('app_info')` 一直 pending（同一进程里稍后直接调用又能成功，说明不是路径或注册表问题）。`getAppRuntimeInfo` 因此带 `waitForInvoke(15s)` + 5 次重试（每次 5s 超时、间隔 800ms），面板在未返回前显示「读取中…」而不是「读取失败」；全部超时才降级并 `console.warn`。
 - 教训：多副本分发时，"更新"必须是一个给人用的一步操作，而不是一串给开发者看的命令；应用自身也要能回答"我是谁、从哪来、是不是最新"。
 
+Goal 21 追加记录（首页计数不更新 + 编辑器全实体搜索）：
+
+- **计数 bug 根因**：`packages/core/src/db/library.ts:122` 只写了 `computeCounts(draft);`，而 `computeCounts` 返回新对象、不修改入参（`packages/core/src/db/normalize.ts:28-38`），因此编辑器保存后 `manifest.counts` 仍是导入时的数字，首页「当前数据库」纹丝不动。修法是双保险：写入时 `draft.manifest.counts = computeCounts(draft)`；读取时 `packages/core/src/db/snapshot.ts:39` 用 `{ ...raw.manifest, counts: computeCounts(raw) }` 重算，旧库也能自愈。
+- **顺带修「删了又复活」**：落盘是覆盖式的，删除文章/系列/图片后旧文件仍留在 `workspace/{databaseId}/`，`restore()` 会把它们读回来。新增 `pruneDatabaseDir(io, dir, keep)`（`packages/core/src/db/write.ts:61-83`），在 `writeDatabaseDir` 后清理 `articles/`、`series/`、`images/*` 下不在 `keep` 的文件；`keep` 必须并上 `draft.filePaths`，否则图片二进制（不在 JSON 文本里）会被误删——`library.ts:149` 即 `new Set([...files.map((file) => file.path), ...draft.filePaths])`。首跑 core 测试 3 例失败（`edit.test.ts:179`、`export-fidelity.test.ts:139` 图片缺失、merge roundtrip），就是漏了图片路径。
+- **编辑器搜索**：新增 `apps/desktop/src/editor/search.ts`（纯函数，七类实体、AND 子串、不搜正文，接口见 §13.2）；`EditorPage` 加常驻搜索框与 combobox/listbox 语义（↑↓/Enter/Esc、`aria-activedescendant`）。选中命中后切标签页、按 `visibleIds` 过滤左侧列表、用 `focus` + `useFocusJump` 定位到具体条目。`useFocusJump` 用 ref 存回调、依赖只写 `[token, id]`——若把 `snapshot`/`box` 写进依赖，保存后的 `refresh()` 会重置正在编辑的表单。
+- **测试**：`apps/desktop/test/editor-search.test.ts` 14 例（七类命中、大小写、别名、标签类别、推荐语/鸣谢合成 id、AND 多词、全角空格、空查询 null、`limit` 与 `totals` 分离、结果顺序）；`packages/core/test/library.test.ts` 加 `counts-after-edit`（saveTag/saveAuthor/deleteArticle 后 counts 与数组长度一致，`restore()` 后仍一致）。合计 155 → **170**（platform 10 + schema 25 + core 100 + desktop 35）。
+- **E2E（CDP 9222，`.tmp/goal21-e2e.mjs`）**：首页标签数 2 → 新建「目标21计数标签」→ 3；`Page.reload` 后仍 3；杀进程重启后仍 3；删除该标签 → 回 2，重启仍 2。搜索「灵梦」下拉显示 文章·3/系列·1/标签·1 共 5 项，Enter 跳到文章页并打开《夹具系列第一篇》；查询时左侧列表 6 → 3，清空恢复 6。截图 `.tmp/goal21-home-added.png`、`.tmp/goal21-reload.png`、`.tmp/goal21-search.png`、`.tmp/goal21-jump.png`。
+- **教训**：凡是"计算结果返回新对象"的纯函数，调用处忘赋值不会报错、只会静默失效；这类"给人看的体检数字"必须在读和写两端都重算，UI 永远以数组长度为准。
+
 ---
 
 ## 附：文档自检
@@ -2118,6 +2138,6 @@ Goal 20 追加记录（统一更新两版：一条命令 + 运行方式识别）
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–20 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
+| Goal 1–21 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
 
 
