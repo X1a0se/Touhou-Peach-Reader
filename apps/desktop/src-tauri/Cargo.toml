@@ -1,6 +1,6 @@
 [package]
 name = "touhou-peach-reader"
-version = "0.1.3"
+version = "0.1.5"
 description = "东方同人阅读器"
 edition = "2021"
 rust-version = "1.77"
@@ -20,6 +20,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 walkdir = "2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
 
 [profile.release]
 codegen-units = 1

@@ -1,9 +1,9 @@
 import { createMemoryPlatform } from '@tpr/platform/memory';
 import { describe, expect, it } from 'vitest';
+import { DEFAULT_DATABASE_SOURCE, REPOSITORY_URL } from '../src/repo.js';
 import {
   DEFAULT_SETTINGS,
   DEFAULT_WALLPAPER,
-  applyMirrorPrefix,
   clampWallpaperBlur,
   clampWallpaperOpacity,
   createSettings,
@@ -21,17 +21,23 @@ describe('settings: 全局设置持久化（Goal 11）', () => {
     expect(settings.path).toBe('/app/settings.json');
   });
 
+  it('settings-default-source: 内置默认源指向本项目最新 Release', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const loaded = await createSettings(platform).load();
+    expect(loaded.defaultSource).toBe(DEFAULT_DATABASE_SOURCE);
+    expect(DEFAULT_DATABASE_SOURCE).toBe(`${REPOSITORY_URL}/releases/latest`);
+  });
+
   it('settings-roundtrip: 保存后重开服务仍能读回（重启保留）', async () => {
     const platform = createMemoryPlatform({ dataDir: '/app' });
     const first = createSettings(platform);
     await first.load();
-    await first.save({ defaultSource: 'example/tpr-db', theme: 'dark', mirrorPrefix: 'https://m/' });
+    await first.save({ defaultSource: 'example/tpr-db', theme: 'dark' });
 
     const second = createSettings(platform);
     const loaded = await second.load();
     expect(loaded.defaultSource).toBe('example/tpr-db');
     expect(loaded.theme).toBe('dark');
-    expect(loaded.mirrorPrefix).toBe('https://m/');
 
     const text = await platform.fs.readText('/app/settings.json');
     expect(JSON.parse(text).defaultSource).toBe('example/tpr-db');
@@ -48,7 +54,7 @@ describe('settings: 全局设置持久化（Goal 11）', () => {
     const loaded = await createSettings(wrongTypes).load();
     expect(loaded.theme).toBe('system');
     expect(loaded.language).toBe('zh-CN');
-    expect(loaded.defaultSource).toBe('');
+    expect(loaded.defaultSource).toBe(DEFAULT_DATABASE_SOURCE);
   });
 
   it('settings-reset: reset 删掉文件并回到默认值', async () => {
@@ -72,13 +78,6 @@ describe('settings: 全局设置持久化（Goal 11）', () => {
     expect(parsed?.language).toBe('ja-JP');
     expect(parsed?.defaultSource).toBe('  example/tpr-db  ');
     expect(parsed?.extractLimits).toEqual({ maxEntries: 100 });
-  });
-
-  it('applyMirrorPrefix: 与下载器共用同一拼装规则', () => {
-    expect(applyMirrorPrefix('https://github.com/a/b', '')).toBe('https://github.com/a/b');
-    expect(applyMirrorPrefix('https://github.com/a/b', 'https://m/gh')).toBe(
-      'https://m/gh/https://github.com/a/b',
-    );
   });
 });
 

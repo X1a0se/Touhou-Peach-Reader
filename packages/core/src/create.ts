@@ -41,6 +41,6 @@ export function createServices(platform: Platform): Services {
     editor: createEditor(platform, library),
     merge: createMergeService(platform, library),
     settings,
-    github: createGitHubService(platform, settings),
+    github: createGitHubService(platform),
   };
 }

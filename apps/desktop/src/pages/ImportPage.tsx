@@ -95,7 +95,7 @@ export function ImportPage() {
       <Panel>
         <h3 className="text-sm font-medium">从 GitHub 下载</h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          支持 `owner/repo`、仓库地址、release 地址或资产直链；下载走设置里的镜像前缀（如果填了）。
+          支持 `owner/repo`、仓库地址、release 地址或资产直链；默认已填好本项目的官方 Release。
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <input
@@ -103,7 +103,7 @@ export function ImportPage() {
             className="min-w-0 flex-1 rounded-lg border border-border bg-surface/60 px-3 py-2 font-mono text-sm outline-none transition-colors focus:border-accent focus:ring-2 focus:ring-[var(--ring)]"
             value={source}
             onChange={(event) => setSource(event.target.value)}
-            placeholder="example/tpr-db 或 https://github.com/example/tpr-db/releases/tag/v1.4.0"
+            placeholder="owner/repo 或 https://github.com/owner/repo/releases/latest"
           />
           <Button variant="primary" disabled={library.busy} onClick={() => void download()}>
             {library.busy ? '处理中…' : '下载并导入'}

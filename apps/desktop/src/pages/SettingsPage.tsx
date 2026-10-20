@@ -1,3 +1,4 @@
+import { DEFAULT_DATABASE_SOURCE, REPOSITORY_URL } from '@tpr/core';
 import type {
   PaletteId,
   SettingsPatch,
@@ -204,36 +205,29 @@ export function SettingsPage() {
   const { settings, ready, save } = useSettingsContext();
 
   const [source, setSource] = useState(settings.defaultSource);
-  const [mirror, setMirror] = useState(settings.mirrorPrefix);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [update, setUpdate] = useState<UpdateCheck | null>(null);
   const [runtime, setRuntime] = useState<AppRuntimeInfo | null>(null);
   const [runtimeLoading, setRuntimeLoading] = useState(true);
+  const [repoError, setRepoError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
-    const load = (): void => {
-      void getAppRuntimeInfo().then((info) => {
-        if (!alive) return;
-        setRuntimeLoading(false);
-        if (info) setRuntime(info);
-      });
-    };
-    load();
-    // 首次挂载可能早于 Tauri IPC 就绪，补一次重试（读到就停）。
-    const timer = setTimeout(load, 1500);
+    void getAppRuntimeInfo().then((info) => {
+      if (!alive) return;
+      setRuntimeLoading(false);
+      if (info) setRuntime(info);
+    });
     return () => {
       alive = false;
-      clearTimeout(timer);
     };
   }, []);
 
   useEffect(() => {
     if (!ready) return;
     setSource(settings.defaultSource);
-    setMirror(settings.mirrorPrefix);
   }, [ready]);
 
   const snapshot = library.snapshot;
@@ -246,6 +240,15 @@ export function SettingsPage() {
       setStatus('已保存');
     } catch (cause) {
       setError(describe(cause));
+    }
+  };
+
+  const openRepository = async (): Promise<void> => {
+    setRepoError(null);
+    try {
+      await services.platform.opener.openExternal(REPOSITORY_URL);
+    } catch (cause) {
+      setRepoError(describe(cause));
     }
   };
 
@@ -367,7 +370,10 @@ export function SettingsPage() {
       </Panel>
 
       <Panel className="grid gap-4">
-        <SectionHeading title="数据库源" description="「检查更新 / 重新下载」与导入页共用这个地址。" />
+        <SectionHeading
+          title="数据库源"
+          description="「检查更新 / 重新下载」与导入页共用这个地址；内置默认指向本项目的 GitHub 最新 Release。"
+        />
         <label className="grid gap-1 text-sm">
           <span className="font-medium">默认数据库源</span>
           <input
@@ -375,29 +381,23 @@ export function SettingsPage() {
             className={inputClass}
             value={source}
             onChange={(event) => setSource(event.target.value)}
-            placeholder="example/tpr-db 或 release 地址"
+            placeholder={DEFAULT_DATABASE_SOURCE}
             disabled={!ready}
           />
           <span className="text-xs text-muted-foreground">
-            `/import` 会预填这个地址。
+            `/import` 会预填这个地址；支持 `owner/repo`、仓库地址、release 地址与资产直链。
           </span>
         </label>
 
-        <label className="grid gap-1 text-sm">
-          <span className="font-medium">网络镜像前缀（可选）</span>
-          <input
-            aria-label="网络镜像前缀"
-            className={inputClass}
-            value={mirror}
-            onChange={(event) => setMirror(event.target.value)}
-            placeholder="https://mirror.example/gh/（留空 = 直连）"
-            disabled={!ready}
-          />
-          <span className="text-xs text-muted-foreground">只改下载地址，GitHub API 仍直连。</span>
-        </label>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="break-all font-mono">{DEFAULT_DATABASE_SOURCE}</span>
+          <Button size="sm" variant="ghost" disabled={!ready} onClick={() => setSource(DEFAULT_DATABASE_SOURCE)}>
+            恢复内置默认
+          </Button>
+        </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button variant="primary" onClick={() => void persist({ defaultSource: source, mirrorPrefix: mirror })}>
+          <Button variant="primary" onClick={() => void persist({ defaultSource: source })}>
             保存
           </Button>
           <Button disabled={checking} onClick={() => void checkUpdate()}>
@@ -423,6 +423,20 @@ export function SettingsPage() {
             </p>
           </div>
         )}
+      </Panel>
+
+      <Panel className="grid gap-3">
+        <SectionHeading title="项目仓库" description="源码、发布记录与问题反馈都在 GitHub 上。" />
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="primary" onClick={() => void openRepository()}>
+            喜欢就给个star⭐吧
+          </Button>
+          <span className="break-all font-mono text-xs text-muted-foreground">{REPOSITORY_URL}</span>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          遇到问题或想要新功能，欢迎到仓库提 Issue；如果它帮到了你，点一下 Star 就是最大的支持。
+        </p>
+        {repoError !== null && <p className="text-xs text-red-500">{repoError}</p>}
       </Panel>
 
       <Panel className="grid gap-3">

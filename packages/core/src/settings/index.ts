@@ -6,6 +6,7 @@
  */
 
 import type { Platform, ZipLimits } from '@tpr/platform';
+import { DEFAULT_DATABASE_SOURCE } from '../repo.js';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -39,10 +40,8 @@ export interface AppSettings {
   wallpapers: { home: WallpaperSettings; article: WallpaperSettings };
   /** 界面语言，v1 只有 zh-CN（见设计 U2） */
   language: string;
-  /** 默认数据库源（GitHub 仓库或 release 地址，空串 = 未设置） */
+  /** 默认数据库源（GitHub 仓库或 release 地址，空串 = 用户主动清空） */
   defaultSource: string;
-  /** 网络镜像前缀（如 `https://ghproxy.example/`，空串 = 直连） */
-  mirrorPrefix: string;
   /** 解压限额覆盖（默认取 design §7.4 的 512MB / 8GB / 20 万条 / 200 倍） */
   extractLimits?: Partial<ZipLimits>;
 }
@@ -52,8 +51,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   palette: 'peach',
   wallpapers: { home: { ...DEFAULT_WALLPAPER }, article: { ...DEFAULT_WALLPAPER } },
   language: 'zh-CN',
-  defaultSource: '',
-  mirrorPrefix: '',
+  defaultSource: DEFAULT_DATABASE_SOURCE,
 };
 
 const WALLPAPER_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -130,8 +128,7 @@ export function parseSettings(value: unknown): AppSettings | null {
       article: parseWallpaper(wallpapersSource.article),
     },
     language: asString(raw.language, 'zh-CN').slice(0, 32) || 'zh-CN',
-    defaultSource: asString(raw.defaultSource, '').slice(0, 2000),
-    mirrorPrefix: asString(raw.mirrorPrefix, '').slice(0, 2000),
+    defaultSource: asString(raw.defaultSource, DEFAULT_DATABASE_SOURCE).slice(0, 2000),
   };
   if (raw.extractLimits !== null && typeof raw.extractLimits === 'object' && !Array.isArray(raw.extractLimits)) {
     const limits = raw.extractLimits as Record<string, unknown>;
@@ -188,7 +185,6 @@ function sanitize(input: AppSettings): AppSettings {
     },
     language: input.language.trim() || 'zh-CN',
     defaultSource: input.defaultSource.trim(),
-    mirrorPrefix: input.mirrorPrefix.trim(),
   };
   if (input.extractLimits !== undefined && Object.keys(input.extractLimits).length > 0) {
     next.extractLimits = { ...input.extractLimits };
@@ -274,11 +270,4 @@ export function createSettings(platform: Platform): SettingsService {
       return current;
     },
   };
-}
-
-/** 镜像前缀拼装：空串 = 直连；有前缀 = `${prefix}/${原始 URL}` */
-export function applyMirrorPrefix(url: string, prefix: string): string {
-  const trimmed = prefix.trim();
-  if (trimmed.length === 0) return url;
-  return `${trimmed.replace(/\/+$/, '')}/${url}`;
 }

@@ -2,12 +2,10 @@
  * GitHub release 解析与下载（design §11.7 / Goal 11）。
  *
  * 只读公开仓库：release API + 资产直链，全部走 `INetwork`（浏览器 fetch / Tauri WebView），
- * 不新增 Rust 依赖。下载地址可套「镜像前缀」（设置项），API 默认直连。
+ * 不新增 Rust 依赖；API 与下载都直连。
  */
 
 import type { Platform } from '@tpr/platform';
-import type { SettingsService } from '../settings/index.js';
-import { applyMirrorPrefix } from '../settings/index.js';
 import type { GitHubRef } from './url.js';
 import { parseGitHubInput } from './url.js';
 
@@ -110,7 +108,6 @@ export function pickDatabaseAsset(assets: readonly GitHubAsset[]): GitHubAsset |
 
 export function createGitHubService(
   platform: Platform,
-  settings: SettingsService,
   options: GitHubServiceOptions = {},
 ): GitHubService {
   const apiBase = (options.apiBase ?? DEFAULT_API_BASE).replace(/\/+$/, '');
@@ -161,7 +158,6 @@ export function createGitHubService(
   }
 
   async function resolve(input: string): Promise<ResolvedRelease> {
-    await settings.load();
     return resolveRef(parseGitHubInput(input));
   }
 
@@ -181,7 +177,7 @@ export function createGitHubService(
         `数据库包 ${(asset.size / 1024 / 1024).toFixed(1)} MB 超过上限 ${(maxBytes / 1024 / 1024).toFixed(0)} MB`,
       );
     }
-    const url = applyMirrorPrefix(asset.url, settings.get().mirrorPrefix);
+    const url = asset.url;
     let bytes: Uint8Array;
     try {
       bytes = await platform.network.download(url, opts.onProgress);

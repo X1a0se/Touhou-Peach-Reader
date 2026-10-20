@@ -111,7 +111,7 @@ rustc -V && cargo -V
 | `raw.githubusercontent.com` | ❌ 连接被重置 | **禁止**用 raw 链接下载数据；一律走 `api.github.com` 拿 release asset 的 `browser_download_url` |
 | `ui.shadcn.com` | ✅ 200 | shadcn CLI 可用 |
 
-结论写入 §14/§16：网络实现必须能切换"直连 / 镜像前缀"，镜像地址作为 `/settings` 的一项，不硬编码任何第三方代理。
+结论写入 §14/§16：网络实现只走直连，不内置任何第三方代理或镜像前缀（没有可用的镜像站）。
 
 ### 1.4 平台假设（若不成立需回到文档）
 
@@ -989,7 +989,7 @@ export function migrateDatabase(
 
 ```
 $APPDATA/com.touhou.peachreader/          ← 桌面端 = %APPDATA%\com.touhou.peachreader
-├─ settings.json          全局：主题、配色、壁纸、语言、默认源、解压限额、网络镜像前缀
+├─ settings.json          全局：主题、配色、壁纸、语言、默认源、解压限额
 ├─ active.json            当前库指针：{ "databaseId": "db_…", "openedAt": "ISO" }
 ├─ wallpapers/            壁纸图片（`wp-{epoch_ms}.{png|jpg|jpeg|webp}`，≤20 MB，由 Rust 命令复制进来）
 ├─ workspace/
@@ -1500,10 +1500,10 @@ export function DropZone({ onFile, accept = '.tpr,.zip', disabled, children }: D
 | 组件 | 位置 | 职责 |
 |---|---|---|
 | `TagChip` / `tagChipClass` | `packages/ui/src/components/TagChip.tsx` | 纯展示芯片，按 `category` 上色（角色琥珀 / 情节翡翠 / 系列紫 / 其他灰）；**不含链接**，`@tpr/ui` 不依赖路由 |
-| `TagLinks` | `apps/desktop/src/components/TagLinks.tsx` | 芯片 + `<Link to="/search?q=名称">`，超过 `limit` 显示 `+N` |
+| `TagLinks` | `apps/desktop/src/components/TagLinks.tsx` | 芯片 + `<Link to="/search?q=名称">`，超过 `limit` 折叠为可点击的 `+N`，点击展开该卡片全部标签 |
 | `TagPicker` | `apps/desktop/src/components/TagPicker.tsx` | 编辑器里的标签选择器：过滤已有标签、勾选、输入新名称直接新建 |
 
-- **`TagLinks` 含 `<Link>`，调用方不得把它放进另一个 `<Link>`/`<button>` 里**（HTML 不允许 `<a>` 套 `<a>`，React 会警告且点击行为不可预期）。列表卡片因此改成"封面链接 + 标题链接 + 标签链接"三个并列元素，而不是整卡一个 `<Link>`。
+- **`TagLinks` 含 `<Link>`，调用方不得把它放进另一个 `<Link>`/`<button>` 里**（HTML 不允许 `<a>` 套 `<a>`，React 会警告且点击行为不可预期）。列表卡片因此改成"封面链接 + 标题链接 + 标签链接"三个并列元素，而不是整卡一个 `<Link>`。`TagLinks` 现在自身还含一个展开 `<button>`，同样不得嵌进 `<a>`/`<button>`。
 - `TagPicker` 的「新建」走 `editor.saveTag`：按 `category` + 归一化名称/别名判重，命中已有标签时复用其 id（返回 `created=false`），不会重复建同一个标签。
 
 **编辑器全实体搜索（Goal 21）**：`apps/desktop/src/editor/search.ts` 是纯函数模块，`searchEditor(snapshot, rawQuery, limitPerKind = 6)` 返回 `EditorSearchResult | null`（空白查询返回 `null`，UI 据此关闭下拉）。
@@ -1589,7 +1589,7 @@ assets: { kind: 'asset-protocol', toUrl: (abs) => convertFileSrc(abs) }
 |---|---|---|
 | `/` | 8 | 随机一篇、十连抽按钮 + 结果网格（可点击、可重抽、不足 10 组时提示） |
 | `/search` | 4 | 搜索框 + 6 个类别 tab + 结果列表（高亮片段） |
-| `/article/:id` | 5 | 标题/简介/正文/封面/插图（含配文）/作者（可展开别名）/tag/原出处；属系列时顶部"查看所属系列" |
+| `/article/:id` | 5 | 标题/简介/**标签（简介与正文之间）**/正文/封面/插图（含配文）/作者（可展开别名）/原出处；属系列时顶部"查看所属系列" |
 | `/series/:id` | 5 | 简介、状态 tag、按序文章列表 |
 | `/featured/short` `/featured/series` | 6 | 卡片 + **全部**推荐语；失效 target 显示"条目已失效" |
 | `/favorites` | 7 | 文章/系列两个 tab，可取消收藏 |
@@ -1833,7 +1833,7 @@ export function makeDatabase(over?: Partial<RawDatabase>): RawDatabase {
 | **2** 模型 | `pnpm --filter @tpr/schema test`（类型/schema 生成/校验码/迁移链 4 组） | 无 |
 | **3** 导入导出 | `pnpm --filter @tpr/core test -- -t import`（含 round-trip：导出→导入→逐字段深比较）、`pnpm --filter @tpr/core test -- -t zip-slip` | 拖 `.tpr` 到窗口能导入；重启应用后数据还在；导出文件重新导入无差异 |
 | **4** 搜索 | `pnpm --filter @tpr/core test -- -t search`（标题/正文/简介/别名/`#已完结`/空查/元字符/超长 8 组） | 输入即出结果（200 ms 防抖）；点结果跳详情；筛类别正确 |
-| **5** 详情页 | `pnpm --filter @tpr/core test -- -t series-order`、`pnpm --filter @tpr/ui test`（若有组件测试） | 文章页字段齐全、插图配文显示、别名可展开、系列跳转可用、原出处打开系统浏览器 |
+| **5** 详情页 | `pnpm --filter @tpr/core test -- -t series-order`、`pnpm --filter @tpr/ui test`（若有组件测试） | 文章页字段齐全、插图配文显示、别名可展开、系列跳转可用、原出处打开系统浏览器、标签位于简介与正文之间且页尾无重复 |
 | **6** 精选 | `pnpm --filter @tpr/core test -- -t featured`（多条推荐语全渲染、失效 target 降级） | 两个精选页的推荐语全部显示；删掉目标后显示"条目已失效"不白屏 |
 | **7** 收藏 | `pnpm --filter @tpr/core test -- -t favorites`（持久化、失效标记） | 收藏→重启仍在；两 tab；取消收藏即时生效 |
 | **8** 随机 | `pnpm --filter @tpr/core test -- -t random`（5 组用例，见 §12.4） | 十连抽网格、可点、可重抽、不足 10 组有提示 |
@@ -1861,7 +1861,7 @@ const FORBIDDEN = [/@tauri-apps\//, /window\.__TAURI__/, /\bconvertFileSrc\b/, /
 | R1 | TypeScript 7.0.2 与某些工具（vite/vitest 插件）不兼容 | 中 | 构建失败 | 版本回退到 `5.9.3`（唯一允许的回退，§2.3） | `tsc` 报未知选项或插件 peer 冲突 |
 | R2 | shadcn CLI 在 pnpm monorepo 里解析别名失败 | 中 | 组件装不进去 | 手工复制组件源码进 `components/ui/`（§13.1） | CLI 报 "no components.json" / 写到错误目录 |
 | R3 | 首次 `cargo build` 耗时超预期（5–15 min） | 高 | 开发节奏被打断 | 明确预算；先把 `pnpm dev:web` 跑通再等编译；不频繁 `cargo clean` | 超过 20 min 仍在编译 |
-| R4 | `raw.githubusercontent.com` 被重置 | 已发生 | 无法用 raw 链接下载 | 一律 `api.github.com`；下载走 `browser_download_url`；镜像前缀可配 | 连接重置 / 超时 |
+| R4 | `raw.githubusercontent.com` 被重置 | 已发生 | 无法用 raw 链接下载 | 一律 `api.github.com`；下载走 `browser_download_url`；直连 | 连接重置 / 超时 |
 | R5 | 2 GB 图库解压/打包爆内存 | 中 | 应用崩溃 | 桌面端 Rust 流式（64 KB 缓冲）；限额 8 GB/512 MB | 内存 > 1 GB |
 | R6 | 中文、空格、超长路径（工作目录本身含空格） | 高 | 文件读写失败 | 全程 `paths.join()`；用例覆盖含空格/中文/长名；单路径 ≤ 240 字符 | `ENOENT` 且路径看着"没错" |
 | R7 | Windows 文件被占用导致 rename 失败 | 中 | 导入/保存失败 | 暂存 + 换名 + 指数退避 5 次；失败提示关闭占用程序 | `EPERM`/`EACCES` on rename |
@@ -2013,13 +2013,13 @@ Goal 10 追加记录：
 Goal 11 追加记录：
 
 - **URL 解析是纯函数** `parseGitHubInput(input)`（`packages/core/src/github/url.ts`）：支持仓库首页、`/releases`、`/releases/latest`、`/releases/tag/{tag}`、资产直链、`owner/repo` 速记；非 github 域报 `E_GITHUB_HOST`，其余格式错误报 `E_GITHUB_URL`，错误类 `GitHubUrlError`（**故意不继承** `GitHubError`，调用方按类区分"地址错"和"网络错"）。
-- **API 直连、下载才套镜像**：`createGitHubService(platform, settings)` 的 `resolve` 打 `https://api.github.com/repos/{owner}/{repo}/releases/{latest|tags/{tag}}`，`download` 只对 `browser_download_url` 套 `applyMirrorPrefix`。理由：镜像通常只代理二进制，API 走镜像会破坏 JSON 语义；单测断言 api 未被镜像改写。
+- **API 与下载都直连**：`createGitHubService(platform)` 的 `resolve` 打 `https://api.github.com/repos/{owner}/{repo}/releases/{latest|tags/{tag}}`，`download` 直接下载 `browser_download_url`。不提供镜像前缀（没有可用的镜像站）。
 - **资产挑选**：`.tpr` 优先，其次 `.zip`（`pickDatabaseAsset`）；都没有报 `E_NO_ASSET` 并列出资产名。下载上限默认 256 MB（`E_TOO_LARGE`），避免把内存打满。
 - **版本比较**：`checkUpdate` 把 tag 与 `manifest.version` 都去掉前缀 `v` 再比；tag 可能带仓库前缀（如 `tauri-v3.0.0`），此时只会判为"不同版本"，不会误判为相同。
-- **设置文件** `settings.json`（`createSettings`）：`{ theme, language, defaultSource, mirrorPrefix, extractLimits }`；宽容解析（坏字段逐个回退默认值，整份坏 JSON 回退全默认），写盘 tmp+rename；`settings.path` 直接暴露给设置页展示。core **不依赖 zod**，手写 `parseSettings`。
+- **设置文件** `settings.json`（`createSettings`）：`{ theme, language, defaultSource, extractLimits }`；宽容解析（坏字段逐个回退默认值，整份坏 JSON 回退全默认），写盘 tmp+rename；`settings.path` 直接暴露给设置页展示。core **不依赖 zod**，手写 `parseSettings`；`defaultSource` 缺省/坏值回退到内置 GitHub Release 地址。
 - **主题三档**：`SettingsProvider` 在 `<html>` 上挂/去 `dark` 类，`system` 档监听 `prefers-color-scheme` 变化；切换即时生效并落盘。
-- **页面**：`/import`（DropZone + 原生拖拽 + GitHub 地址下载，默认源从设置预填）、`/credits`（`credits.json` 渲染，外链走 `IOpener`）、`/settings`（默认源、镜像前缀、主题、检查更新、重新下载并导入）。导航加到 10 项并改成 `flex-wrap`。
-- 单测 `test/github.test.ts`（9 个）+ `test/settings.test.ts`（6 个），core 76 passed；真机 CDP 13 项断言全过，其中真实调用 GitHub API 两次（`tauri-apps/tauri` 检查更新、`cli/cli` 解析 release 并验证 `.zip` 兜底），下载链路用注入的假 network 验证镜像前缀与导入闭环。
+- **页面**：`/import`（DropZone + 原生拖拽 + GitHub 地址下载，默认源从设置预填）、`/credits`（`credits.json` 渲染，外链走 `IOpener`）、`/settings`（默认源 + 恢复内置默认、主题、检查更新、重新下载并导入、项目仓库入口）。导航加到 10 项并改成 `flex-wrap`。
+- 单测 `test/github.test.ts` + `test/settings.test.ts` 覆盖 URL 解析、资产挑选、版本比较、设置持久化与内置默认源；真机 CDP 13 项断言全过，其中真实调用 GitHub API 两次（`tauri-apps/tauri` 检查更新、`cli/cli` 解析 release 并验证 `.zip` 兜底），下载链路用注入的假 network 验证导入闭环。
 - 截图：`.tmp/goal11-settings.png`（深色设置页）、`.tmp/goal11-credits.png`、`.tmp/goal11-import.png`。
 
 Goal 12 追加记录：
@@ -2135,6 +2135,20 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 - **测试**：新增 `packages/core/test/export-subset.test.ts` 5 例（all 保留未引用标签/作者/图片/空系列推荐语、includeCredits、部分导出词表全量而图片/系列/推荐语闭包、悬空引用告警）；`packages/core/test/export-fidelity.test.ts` 加 2 例真 zip 往返（全库保留未挂接标签/作者并重导入仍在、单篇导出保留词表且不带无关封面）。修复前 `all-keeps-unreferenced` 与 `partial-keeps-vocabulary` 为红，修复后 **177 全绿**（platform 10 + schema 25 + core 107 + desktop 35）。
 - **教训**：同一入口同时承担"完整备份"和"部分分享"时必须分叉；闭包适合"能被独立打开的最小集"，库级词表（作者/标签）不属于闭包，不能按引用裁剪。
 
+标签交互调整记录（+N 展开 / 详情页标签上移）：
+
+- **`TagLinks` 的 `+N` 改为按钮**：`apps/desktop/src/components/TagLinks.tsx` 里用组件内 `useState` 控制展开，点击后 `shown` 取全量、`+N` 卸载；7 个调用点（`/articles` 文章库、首页最近文章、系列目录、搜索结果、精选、收藏、十连抽）一次生效，标签芯片仍跳 `/search?q=名称`。
+- **详情页标签上移**：`apps/desktop/src/pages/ArticlePage.tsx` 把标签 section 从插图之后移到简介卡与正文卡之间，顺序为「简介卡 → 错误横幅 → 标签 → 正文 → 插图」；详情页仍全量展示，不显示 `+N`。
+- **验证方式**：`corepack pnpm typecheck`、`corepack pnpm test`、`corepack pnpm build:web`；人工确认列表卡片点击 `+N` 展开且不跳转、详情页标签位置正确（夹具每篇仅 2 个标签，验收前需在编辑器补到 4 个以上）。
+- **取舍**：展开是单向的，不提供「收起」；展开状态只属于当前卡片实例，列表按实体 id 作 key，筛选/搜索不会串状态。
+
+## Goal 22 追加记录：公开发布与默认数据库源
+
+- **仓库即默认源**：仓库地址收敛到 `packages/core/src/repo.ts`（`REPOSITORY_URL` / `DEFAULT_DATABASE_SOURCE`），设置页「项目仓库」按钮与 `DEFAULT_SETTINGS.defaultSource` 都从它派生；默认源用 `https://github.com/X1a0se/Touhou-Peach-Reader/releases/latest`，同一个 Release 里放安装包、免安装 exe 与 `.tpr`，`pickDatabaseAsset()` 自动挑数据库。
+- **移除镜像前缀**：`AppSettings.mirrorPrefix`、`applyMirrorPrefix()`、设置页输入框与相关单测全部删除；旧 `settings.json` 里的该字段由宽容解析忽略，下次保存自动消失。`createGitHubService(platform)` 不再需要 `SettingsService`，API 与下载都直连。
+- **发布约定**：Release 标签 = 数据库版本（首个版本 `v1.0.0`，数据库 manifest `1.0.0`），应用版本独立（0.1.5，见「设置 → 关于」）；这样 `checkUpdate` 的 tag/manifest 比较语义不变，不会误报「有新版本」。
+- **设置页**：数据库源下方展示内置默认地址并提供「恢复内置默认」；新增「项目仓库」面板与「喜欢就给个star⭐吧」按钮（`IOpener.openExternal`，失败时面板内报错）。
+
 ---
 
 ## 附：文档自检
@@ -2148,6 +2162,6 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–21 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复已追加） |
+| Goal 1–22 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复与公开发布已追加） |
 
 
