@@ -191,6 +191,19 @@ export function ArticlePage() {
           </p>
         )}
 
+        {view.characterTags.length > 0 || view.plotTags.length > 0 ? (
+          <section className="flex flex-col gap-2">
+            <h2 className="text-sm font-medium text-muted-foreground">标签</h2>
+            <div className="flex flex-wrap gap-2">
+              {[...view.characterTags, ...view.plotTags].map((tag) => (
+                <Link key={tag.id} to={`/search?q=${encodeURIComponent(tag.name)}`}>
+                  <TagChip name={tag.name} category={tag.category} />
+                </Link>
+              ))}
+            </div>
+          </section>
+        ) : null}
+
         <Panel className="p-6">
           {bodyError ? (
             <p className="text-sm text-red-600 dark:text-red-300">正文文件缺失或无法读取：{bodyError}</p>
@@ -221,19 +234,6 @@ export function ArticlePage() {
                 ) : null}
               </figure>
             ))}
-          </section>
-        ) : null}
-
-        {view.characterTags.length > 0 || view.plotTags.length > 0 ? (
-          <section className="flex flex-col gap-2">
-            <h2 className="text-sm font-medium text-muted-foreground">标签</h2>
-            <div className="flex flex-wrap gap-2">
-              {[...view.characterTags, ...view.plotTags].map((tag) => (
-                <Link key={tag.id} to={`/search?q=${encodeURIComponent(tag.name)}`}>
-                  <TagChip name={tag.name} category={tag.category} />
-                </Link>
-              ))}
-            </div>
           </section>
         ) : null}
       </article>

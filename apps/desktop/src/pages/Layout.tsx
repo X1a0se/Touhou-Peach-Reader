@@ -1,8 +1,9 @@
 import { VersionBadge, cn } from '@tpr/ui';
 import { Suspense } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
-import { useServices } from '../context.js';
+import { BackButton } from '../components/BackButton.js';
 import { WallpaperLayer } from '../components/WallpaperLayer.js';
+import { useServices } from '../context.js';
 
 const NAV = [
   { to: '/', label: '首页' },
@@ -30,6 +31,7 @@ export function Layout() {
       <header className="sticky top-0 z-30 border-b border-border bg-background/75 backdrop-blur-md">
         <div className="mx-auto flex max-w-6xl flex-col gap-2.5 px-6 pt-3 pb-2">
           <div className="flex items-center gap-3">
+            {location.pathname === '/' ? null : <BackButton />}
             <span
               aria-hidden
               className="grid h-9 w-9 place-items-center rounded-xl border border-border bg-accent-soft text-lg shadow-sm"

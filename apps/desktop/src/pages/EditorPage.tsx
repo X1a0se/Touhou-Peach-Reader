@@ -15,10 +15,12 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArticleOrderPicker } from '../components/ArticleOrderPicker.js';
 import { AuthorPicker } from '../components/AuthorPicker.js';
 import { DraftList } from '../components/DraftList.js';
+import { ImageFilePicker } from '../components/ImageFilePicker.js';
 import { SeriesPicker } from '../components/SeriesPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
 import { useServices } from '../context.js';
 import type { DraftStore } from '../editor/drafts.js';
+import { IMAGE_ACCEPT, validateImageFile } from '../editor/images.js';
 import {
   EDITOR_KIND_LABEL,
   EDITOR_KINDS,
@@ -87,6 +89,7 @@ function coverOptionLabel(image: ImageAsset): string {
 /**
  * 封面字段：下拉选库里已有图片，或直接上传一张（Goal 17）。
  * 上传会立即写成 `kind='cover'` 的 ImageAsset，并自动选中，省掉“先去图片标签页再回来”的两步。
+ * 按钮做成主按钮并显示缩略图，让「选封面」在文章表单里也一眼可见。
  */
 function CoverField({
   images,
@@ -101,8 +104,20 @@ function CoverField({
   const { refresh } = useLibraryContext();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const selected = images.find((image) => image.id === value);
+  const loaded = services.library.current();
+  const previewUrl =
+    selected && loaded
+      ? services.platform.assets.toUrl(services.platform.paths.join(loaded.dir, selected.file))
+      : '';
 
   const upload = async (file: File): Promise<void> => {
+    const invalid = validateImageFile(file);
+    if (invalid !== null) {
+      setMessage(invalid);
+      return;
+    }
     setBusy(true);
     setMessage(null);
     try {
@@ -123,9 +138,16 @@ function CoverField({
   return (
     <div className="flex flex-col gap-1.5">
       <span className={labelClass}>封面</span>
-      <div className="flex gap-2">
+      <div className="flex items-center gap-2">
+        {previewUrl !== '' ? (
+          <img
+            src={previewUrl}
+            alt={selected?.caption ?? '当前封面'}
+            className="h-10 w-10 shrink-0 rounded-md border border-border object-cover"
+          />
+        ) : null}
         <select
-          className={inputClass}
+          className={`${inputClass} min-w-0 flex-1`}
           value={value}
           onChange={(event) => onChange(event.target.value)}
         >
@@ -136,22 +158,27 @@ function CoverField({
             </option>
           ))}
         </select>
-        <label
-          className={`${buttonClass} flex shrink-0 cursor-pointer items-center px-3 ${busy ? 'pointer-events-none opacity-50' : ''}`}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => inputRef.current?.click()}
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {busy ? '上传中…' : '上传封面'}
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
-            className="hidden"
-            disabled={busy}
-            onChange={(event) => {
-              const file = event.target.files?.[0];
-              event.target.value = '';
-              if (file) void upload(file);
-            }}
-          />
-        </label>
+          <span aria-hidden>🖼️</span>
+          {busy ? '上传中…' : value === '' ? '选择封面图片' : '更换封面图片'}
+        </button>
+        <input
+          ref={inputRef}
+          type="file"
+          accept={IMAGE_ACCEPT}
+          className="hidden"
+          disabled={busy}
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (file) void upload(file);
+          }}
+        />
       </div>
       <span className="text-xs text-muted-foreground">
         {message ??
@@ -1829,6 +1856,7 @@ function ImagesPanel({
   const services = useServices();
   const [kind, setKind] = useState<ImageKind>('cover');
   const [caption, setCaption] = useState('');
+  const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [drafts, setDrafts] = useState<Record<string, { kind: ImageKind; caption: string }>>({});
   const loaded = services.library.current();
@@ -1847,48 +1875,57 @@ function ImagesPanel({
   return (
     <div className="flex flex-col gap-5">
       <form
-        className="grid gap-3 rounded-xl border border-border bg-surface/60 p-4 sm:grid-cols-[minmax(0,1fr)_10rem_minmax(0,1fr)_auto] sm:items-end"
+        className="grid gap-4 rounded-xl border border-accent/30 bg-accent-soft/20 p-4"
         onSubmit={(event) => {
           event.preventDefault();
-          const input = event.currentTarget.querySelector<HTMLInputElement>('input[type=file]');
-          const file = input?.files?.[0];
           if (!file) return;
           setBusy(true);
           void run(async () => {
             const bytes = new Uint8Array(await file.arrayBuffer());
             const ext = file.name.split('.').pop() ?? 'bin';
             await editor.saveImage({ bytes, ext, kind, caption });
-            if (input) input.value = '';
+            setFile(null);
+            setCaption('');
           }, '图片已上传').finally(() => setBusy(false));
-          setCaption('');
         }}
       >
-        <Field label="图片文件">
-          <input type="file" accept="image/*" className="text-sm" />
-        </Field>
-        <Field label="类型">
-          <select
-            className={inputClass}
-            value={kind}
-            onChange={(event) => setKind(event.target.value as ImageKind)}
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-foreground">新增图片</h3>
+          <span className="text-xs text-muted-foreground">
+            上传后会出现在下方列表，可继续修改类型与配文。
+          </span>
+        </div>
+        <ImageFilePicker file={file} disabled={busy} onChange={setFile} />
+
+        <div className="grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)_auto] sm:items-end">
+          <Field label="类型">
+            <select
+              className={inputClass}
+              value={kind}
+              onChange={(event) => setKind(event.target.value as ImageKind)}
+            >
+              {IMAGE_KINDS.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="配文">
+            <input
+              className={inputClass}
+              value={caption}
+              onChange={(event) => setCaption(event.target.value)}
+            />
+          </Field>
+          <button
+            type="submit"
+            className={`${primaryClass} disabled:cursor-not-allowed`}
+            disabled={busy || file === null}
           >
-            {IMAGE_KINDS.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </Field>
-        <Field label="配文">
-          <input
-            className={inputClass}
-            value={caption}
-            onChange={(event) => setCaption(event.target.value)}
-          />
-        </Field>
-        <button type="submit" className={primaryClass} disabled={busy}>
-          上传
-        </button>
+            {busy ? '上传中…' : '上传图片'}
+          </button>
+        </div>
       </form>
 
       <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

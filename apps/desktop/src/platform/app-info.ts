@@ -99,7 +99,7 @@ export interface RuntimeInfoOptions {
   gapMs?: number;
 }
 
-export async function getAppRuntimeInfo(options: RuntimeInfoOptions = {}): Promise<AppRuntimeInfo | null> {
+async function loadAppRuntimeInfo(options: RuntimeInfoOptions = {}): Promise<AppRuntimeInfo | null> {
   const { waitMs = 15_000, attempts = 5, timeoutMs = 5_000, gapMs = 800 } = options;
   if (!(await waitForInvoke(waitMs))) return null;
   // 冷启动时 WebView2 可能先渲染、Tauri IPC 后可用：前几秒 invoke 会一直
@@ -126,4 +126,25 @@ export async function getAppRuntimeInfo(options: RuntimeInfoOptions = {}): Promi
   }
   console.warn('[app-info] 读取运行时信息失败', lastError);
   return null;
+}
+
+/**
+ * 运行时信息按进程缓存：设置页反复挂载、快速切页都只读一次。
+ * 读取失败不缓存，下次挂载还能重试；成功结果直到应用重启才失效。
+ */
+let runtimeInfoPromise: Promise<AppRuntimeInfo | null> | null = null;
+
+export function getAppRuntimeInfo(
+  options: RuntimeInfoOptions = {},
+): Promise<AppRuntimeInfo | null> {
+  runtimeInfoPromise ??= loadAppRuntimeInfo(options).then((value) => {
+    if (value === null) runtimeInfoPromise = null;
+    return value;
+  });
+  return runtimeInfoPromise;
+}
+
+/** 测试专用：清空缓存，下次重新读取。 */
+export function resetAppRuntimeInfoCache(): void {
+  runtimeInfoPromise = null;
 }
