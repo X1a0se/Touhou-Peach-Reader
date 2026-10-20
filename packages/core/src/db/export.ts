@@ -1,16 +1,15 @@
 import type { Platform } from '@tpr/platform';
-import {
-  type Counts,
-  type Issue,
-  type RawDatabase,
-} from '@tpr/schema';
-import { computeCounts } from './normalize.js';
+import type { Counts, Issue, RawDatabase } from '@tpr/schema';
 import type { ContentStore } from './content-store.js';
-import { MANIFEST_LAST, type DbIo } from './layout.js';
-import { serializeDatabase } from './write.js';
+import { MANIFEST_LAST } from './layout.js';
+import { computeCounts } from './normalize.js';
 import { DB_LAYOUT, removeTree } from './workspace.js';
+import { serializeDatabase } from './write.js';
 
-/** 导出闭包的选择器（design §7.6）。优先级：all > series > articles。 */
+/**
+ * 导出选择器（design §7.6）。优先级：all > series > articles。
+ * `all` 是完整备份；其余选择走引用闭包（作者/标签例外，始终全量）。
+ */
 export interface ExportSelection {
   all?: boolean;
   articles?: string[];
@@ -32,7 +31,11 @@ export interface ExportResult {
   fileName: string;
 }
 
-const skipped = (message: string, entity: Issue['entity'] = 'article', entityId?: string): Issue => ({
+const skipped = (
+  message: string,
+  entity: Issue['entity'] = 'article',
+  entityId?: string,
+): Issue => ({
   code: 'W_EXPORT_SKIPPED',
   severity: 'warning',
   entity,
@@ -45,28 +48,50 @@ export function selectSubset(
   selection: ExportSelection,
 ): { db: RawDatabase; warnings: Issue[] } {
   const warnings: Issue[] = [];
-  const all = selection.all === true;
+  const credits = selection.includeCredits === false ? [] : db.credits;
+
+  // B0：全库导出是完整备份，所有集合原样带走，不做引用闭包裁剪。
+  // 否则新建后还没挂到文章上的标签/作者会在这里被过滤掉，导入方永远看不到。
+  if (selection.all === true) {
+    return {
+      db: {
+        manifest: {
+          ...db.manifest,
+          counts: computeCounts({ ...db, credits }),
+          updatedAt: new Date().toISOString(),
+        },
+        authors: db.authors,
+        tags: db.tags,
+        images: db.images,
+        articles: db.articles,
+        series: db.series,
+        featured: db.featured,
+        credits,
+      },
+      warnings,
+    };
+  }
+
   const byArticle = new Map(db.articles.map((a) => [a.id, a]));
   const bySeries = new Map(db.series.map((s) => [s.id, s]));
 
   const picked = new Set<string>();
-  if (all) {
-    for (const article of db.articles) picked.add(article.id);
-  } else {
-    for (const id of selection.articles ?? []) {
-      if (byArticle.has(id)) picked.add(id);
-      else warnings.push(skipped(`文章 ${id} 不存在，已跳过`, 'article', id));
+  for (const id of selection.articles ?? []) {
+    if (byArticle.has(id)) picked.add(id);
+    else warnings.push(skipped(`文章 ${id} 不存在，已跳过`, 'article', id));
+  }
+  for (const id of selection.series ?? []) {
+    const series = bySeries.get(id);
+    if (!series) {
+      warnings.push(skipped(`系列 ${id} 不存在，已跳过`, 'series', id));
+      continue;
     }
-    for (const id of selection.series ?? []) {
-      const series = bySeries.get(id);
-      if (!series) {
-        warnings.push(skipped(`系列 ${id} 不存在，已跳过`, 'series', id));
-        continue;
-      }
-      for (const articleId of series.articleIds) {
-        if (byArticle.has(articleId)) picked.add(articleId);
-        else warnings.push(skipped(`系列「${series.title}」引用了不存在的文章 ${articleId}`, 'series', id));
-      }
+    for (const articleId of series.articleIds) {
+      if (byArticle.has(articleId)) picked.add(articleId);
+      else
+        warnings.push(
+          skipped(`系列「${series.title}」引用了不存在的文章 ${articleId}`, 'series', id),
+        );
     }
   }
 
@@ -95,28 +120,31 @@ export function selectSubset(
     if (item.coverImageId !== undefined) imageIds.add(item.coverImageId);
   }
 
-  const authors = db.authors.filter((a) => authorIds.has(a.id));
-  const tags = db.tags.filter((t) => tagIds.has(t.id));
+  // B1：作者与标签是库级词表，部分导出也全量带走（否则"新建未挂接"的标签会丢）；
+  // B3：图片体积大，仍只打包被闭包直接引用的。
+  const authors = db.authors;
+  const tags = db.tags;
   const images = db.images.filter((i) => imageIds.has(i.id));
 
-  if (authors.length !== authorIds.size) warnings.push(skipped('部分作者引用无法解析', 'author'));
-  if (tags.length !== tagIds.size) warnings.push(skipped('部分标签引用无法解析', 'tag'));
-  if (images.length !== imageIds.size) warnings.push(skipped('部分图片引用无法解析', 'image'));
+  // 全量词表下不能再用"长度差"判断缺失，逐个 id 检查引用是否存在
+  const authorSet = new Set(db.authors.map((a) => a.id));
+  const tagSet = new Set(db.tags.map((t) => t.id));
+  const imageSet = new Set(db.images.map((i) => i.id));
+  if ([...authorIds].some((id) => !authorSet.has(id)))
+    warnings.push(skipped('部分作者引用无法解析', 'author'));
+  if ([...tagIds].some((id) => !tagSet.has(id)))
+    warnings.push(skipped('部分标签引用无法解析', 'tag'));
+  if ([...imageIds].some((id) => !imageSet.has(id)))
+    warnings.push(skipped('部分图片引用无法解析', 'image'));
 
   // B4：featured 只导出 target 落在闭包内的条目
   const featured = db.featured.filter((entry) =>
-    entry.targetType === 'article' ? picked.has(entry.targetId) : series.some((s) => s.id === entry.targetId),
+    entry.targetType === 'article'
+      ? picked.has(entry.targetId)
+      : series.some((s) => s.id === entry.targetId),
   );
 
-  const counts = computeCounts({
-    authors,
-    tags,
-    images,
-    articles,
-    series,
-    featured,
-    credits: selection.includeCredits === false ? [] : db.credits,
-  });
+  const counts = computeCounts({ authors, tags, images, articles, series, featured, credits });
 
   const subset: RawDatabase = {
     manifest: { ...db.manifest, counts, updatedAt: new Date().toISOString() },
@@ -126,8 +154,8 @@ export function selectSubset(
     articles,
     series,
     featured,
-    // B5：鸣谢永远全量导出
-    credits: selection.includeCredits === false ? [] : db.credits,
+    // B5：鸣谢默认全量导出
+    credits,
   };
   return { db: subset, warnings };
 }
@@ -151,7 +179,6 @@ export async function exportDatabase(
   source: ExportSource,
   selection: ExportSelection,
 ): Promise<ExportResult> {
-  const io: DbIo = { fs: platform.fs, join: (...parts) => platform.paths.join(...parts) };
   const { db, warnings } = selectSubset(source.db, selection);
 
   const markdown = new Map<string, string>();

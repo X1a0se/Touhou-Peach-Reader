@@ -881,13 +881,16 @@ export interface ImportResult {
 
 | 编号 | 规则 |
 |---|---|
-| B1 | 文章集合 = 用户选中集；被引用且存在的 `authorIds`/`translatorIds`/tag/图片一并带走；缺失的引用不补、不报错 |
+| B0 | `all: true` 是**完整备份**：全部 authors/tags/images/articles/series/featured/credits 原样导出，只重算 `manifest.counts` 与 `updatedAt`，不做引用闭包裁剪 |
+| B1 | 部分导出：文章集合 = 用户选中集；**作者与标签始终全量导出**（库级词表，未挂接的也带走）；图片按 B3；缺失的引用不补，记 `W_EXPORT_SKIPPED` 警告 |
 | B2 | 系列**只在其全部文章都被包含时**才导出，且 `articleIds` 保持原顺序。只导出系列中一篇时，该篇保留 `seriesId`，导入端产生 `W_DANGLING_SERIES`（可接受的降级，避免造出"残缺系列"） |
-| B3 | 图片只打包被选中文章/系列直接引用的那些，未被引用的不导出 |
+| B3 | 部分导出时图片只打包被选中文章/系列直接引用的那些，未被引用的不导出（全库备份按 B0 全带） |
 | B4 | `featured.json` 只导出 target 落在导出集内的条目（推荐语全带） |
-| B5 | `credits.json` 永远全量导出（体积极小，且是署名义务） |
+| B5 | `credits.json` 默认全量导出（`includeCredits: false` 时清空并计入 counts） |
 | B6 | 导出**不做** schema 降级，`schemaVersion` 恒为 `CURRENT_SCHEMA_VERSION` |
 | B7 | `manifest.counts` 重算；`databaseId` 沿用当前库；`updatedAt` 取导出时刻 |
+
+> 取舍：标签/作者是库级词表，体积小、跨库通用，用户新建后往往还没来得及挂文章，"导出即备份"的预期要求它们全量跟随；图片是大文件，部分导出按引用收窄，避免单篇导出变成整库拷贝。`all: true` 走独立分支，保证「导出全库」就是完整备份。
 
 ### 7.7 导出 API
 
@@ -895,7 +898,7 @@ export interface ImportResult {
 export interface ExportSelection {
   articles?: string[];          // 省略 = 不导出文章
   series?: string[];            // 省略 = 仅按 B2 自动补齐
-  all?: boolean;                // true = 全库（优先级最高）
+  all?: boolean;                // true = 全库完整备份（优先级最高，不走闭包）
   includeCredits?: boolean;     // 默认 true
 }
 export interface ExportResult {
@@ -2125,6 +2128,13 @@ Goal 21 追加记录（首页计数不更新 + 编辑器全实体搜索）：
 - **E2E（CDP 9222，`.tmp/goal21-e2e.mjs`）**：首页标签数 2 → 新建「目标21计数标签」→ 3；`Page.reload` 后仍 3；杀进程重启后仍 3；删除该标签 → 回 2，重启仍 2。搜索「灵梦」下拉显示 文章·3/系列·1/标签·1 共 5 项，Enter 跳到文章页并打开《夹具系列第一篇》；查询时左侧列表 6 → 3，清空恢复 6。截图 `.tmp/goal21-home-added.png`、`.tmp/goal21-reload.png`、`.tmp/goal21-search.png`、`.tmp/goal21-jump.png`。
 - **教训**：凡是"计算结果返回新对象"的纯函数，调用处忘赋值不会报错、只会静默失效；这类"给人看的体检数字"必须在读和写两端都重算，UI 永远以数组长度为准。
 
+Goal 21 后续修复（导出丢失未挂接标签）：
+
+- **现象**：用户在编辑器新建标签（还没挂到任何文章）→ 导出 → 导入后标签消失。导入端没问题（`packages/core/src/db/read.ts:124` 整表读 `tags.json`，`normalizeDatabase` 不裁实体），损失发生在导出：旧 `selectSubset` 无论 `all` 还是选中导出，都只按文章/系列引用收集标签/作者再过滤（`packages/core/src/db/export.ts` 旧 98-99 行），未被引用的实体直接被扔掉。
+- **修法**：`all: true` 走 B0 完整备份分支（全量集合，仅重算 counts/updatedAt）；部分导出的作者/标签改为全量（库级词表），图片仍按 B3 闭包；悬空引用警告由"长度差"改为逐 id 检查存在性（全量词表下长度差恒等，旧判断会失效）。
+- **测试**：新增 `packages/core/test/export-subset.test.ts` 5 例（all 保留未引用标签/作者/图片/空系列推荐语、includeCredits、部分导出词表全量而图片/系列/推荐语闭包、悬空引用告警）；`packages/core/test/export-fidelity.test.ts` 加 2 例真 zip 往返（全库保留未挂接标签/作者并重导入仍在、单篇导出保留词表且不带无关封面）。修复前 `all-keeps-unreferenced` 与 `partial-keeps-vocabulary` 为红，修复后 **177 全绿**（platform 10 + schema 25 + core 107 + desktop 35）。
+- **教训**：同一入口同时承担"完整备份"和"部分分享"时必须分叉；闭包适合"能被独立打开的最小集"，库级词表（作者/标签）不属于闭包，不能按引用裁剪。
+
 ---
 
 ## 附：文档自检
@@ -2138,6 +2148,6 @@ Goal 21 追加记录（首页计数不更新 + 编辑器全实体搜索）：
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–21 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式 |
+| Goal 1–21 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复已追加） |
 
 

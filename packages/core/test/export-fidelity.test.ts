@@ -22,7 +22,9 @@ async function openDatabase(): Promise<Packed> {
   const db = makeDatabase();
   const seed = createMemoryPlatform({ dataDir: '/seed' });
   const io = ioFor(seed);
-  const markdown = new Map(db.articles.map((article) => [article.id, `# ${article.title}\n\n正文：${article.id}\n`]));
+  const markdown = new Map(
+    db.articles.map((article) => [article.id, `# ${article.title}\n\n正文：${article.id}\n`]),
+  );
   await writeDatabaseDir(io, '/seed', serializeDatabase(db, markdown));
   for (const image of db.images) {
     const path = seed.paths.join('/seed', image.file);
@@ -39,7 +41,11 @@ async function openDatabase(): Promise<Packed> {
 }
 
 /** 解包导出的字节，返回「包内相对路径 → 文本」；二进制文件用 latin1 占位。 */
-async function unpack(platform: MemoryPlatform, bytes: Uint8Array, dir: string): Promise<Map<string, string>> {
+async function unpack(
+  platform: MemoryPlatform,
+  bytes: Uint8Array,
+  dir: string,
+): Promise<Map<string, string>> {
   const zipPath = `${dir}.tpr`;
   await platform.fs.mkdir(dir);
   await platform.fs.writeBytes(zipPath, bytes);
@@ -123,10 +129,12 @@ describe('export: 导出物必须是编辑后的状态（Goal 19）', () => {
     const exported = await library.export({ all: true });
     const files = await unpack(platform, exported.bytes, '/unpack/first');
 
-    const articleJson = parseJson<{ title: string; summary: string; characterTagIds: string[]; coverImageId?: string }>(
-      files,
-      `articles/${short.id}.json`,
-    );
+    const articleJson = parseJson<{
+      title: string;
+      summary: string;
+      characterTagIds: string[];
+      coverImageId?: string;
+    }>(files, `articles/${short.id}.json`);
     expect(articleJson.title).toBe('改过的标题');
     expect(articleJson.summary).toBe('改过的简介');
     expect(articleJson.characterTagIds).toEqual([characterTag.id]);
@@ -138,7 +146,10 @@ describe('export: 导出物必须是编辑后的状态（Goal 19）', () => {
     expect(seriesJson.articleIds).toEqual(reversed);
     expect(files.has(`images/cover/${coverId}.png`)).toBe(true);
 
-    const manifest = parseJson<{ counts: Record<string, number>; updatedAt: string }>(files, 'manifest.json');
+    const manifest = parseJson<{ counts: Record<string, number>; updatedAt: string }>(
+      files,
+      'manifest.json',
+    );
     expect(manifest.counts['articles']).toBe(exported.counts.articles);
     expect(manifest.counts['articles']).toBe(library.snapshot()?.articles.length);
     expect(manifest.updatedAt).not.toBe(db.manifest.updatedAt);
@@ -150,7 +161,8 @@ describe('export: 导出物必须是编辑后的状态（Goal 19）', () => {
       JSON.stringify(value, (_key, item: unknown) => {
         if (item === null || typeof item !== 'object' || Array.isArray(item)) return item;
         const sorted: Record<string, unknown> = {};
-        for (const key of Object.keys(item).sort()) sorted[key] = (item as Record<string, unknown>)[key];
+        for (const key of Object.keys(item).sort())
+          sorted[key] = (item as Record<string, unknown>)[key];
         return sorted;
       });
     const strip = (snapshot: typeof reimported.snapshot): string =>
@@ -188,5 +200,48 @@ describe('export: 导出物必须是编辑后的状态（Goal 19）', () => {
 
     const manifest = parseJson<{ counts: Record<string, number> }>(files, 'manifest.json');
     expect(manifest.counts['articles']).toBe((before.articles.length ?? 0) - 1);
+  });
+
+  it('export-all-keeps-unused: 未挂接的标签与作者也进完整备份', async () => {
+    const { platform, library, editor } = await openDatabase();
+    const tagId = await editor.saveTag({ category: 'general', name: '未挂接标签' });
+    const authorId = await editor.saveAuthor({ canonicalName: '未挂接作者', aliases: [] });
+
+    const exported = await library.export({ all: true });
+    const files = await unpack(platform, exported.bytes, '/unpack/unused');
+
+    const tags = parseJson<{ id: string; name: string }[]>(files, 'tags.json');
+    const authors = parseJson<{ id: string }[]>(files, 'authors.json');
+    expect(tags.map((tag) => tag.id)).toContain(tagId);
+    expect(authors.map((author) => author.id)).toContain(authorId);
+
+    const manifest = parseJson<{ counts: Record<string, number> }>(files, 'manifest.json');
+    expect(manifest.counts['tags']).toBe(tags.length);
+    expect(manifest.counts['authors']).toBe(authors.length);
+
+    const outcome = await createLibrary(
+      createMemoryPlatform({ dataDir: '/fresh-unused' }),
+    ).importBytes(exported.bytes);
+    expect(outcome.snapshot.tags.some((tag) => tag.id === tagId)).toBe(true);
+    expect(outcome.snapshot.authors.some((author) => author.id === authorId)).toBe(true);
+  });
+
+  it('export-partial-keeps-vocabulary: 单篇导出仍带全库标签/作者，图片按引用收窄', async () => {
+    const { platform, library, editor } = await openDatabase();
+    const before = library.snapshot();
+    if (!before) throw new Error('导入失败');
+    const short = before.articles.find((article) => article.type === 'short');
+    const cover = before.images.find((image) => image.kind === 'cover');
+    if (!short || !cover) throw new Error('夹具结构不符合预期');
+
+    const tagId = await editor.saveTag({ category: 'general', name: '单篇导出标签' });
+    const exported = await library.export({ articles: [short.id] });
+    const files = await unpack(platform, exported.bytes, '/unpack/partial');
+
+    const tags = parseJson<{ id: string }[]>(files, 'tags.json');
+    expect(tags.map((tag) => tag.id)).toContain(tagId);
+    expect(files.has(`articles/${short.id}.json`)).toBe(true);
+    // 短篇没有封面：其它文章/系列的封面图片不随部分导出进包
+    expect(files.has(`images/cover/${cover.id}.webp`)).toBe(false);
   });
 });
