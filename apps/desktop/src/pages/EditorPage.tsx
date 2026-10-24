@@ -1,5 +1,10 @@
 import type { DBSnapshot, Editor } from '@tpr/core';
-import { articleSeriesPosition } from '@tpr/core';
+import {
+  articleSeriesPosition,
+  DOCUMENT_ACCEPT,
+  importDocument,
+  validateDocumentFile,
+} from '@tpr/core';
 import type {
   ArticleMeta,
   CreditsEntry,
@@ -20,6 +25,7 @@ import { SeriesPicker } from '../components/SeriesPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
 import { useServices } from '../context.js';
 import type { DraftStore } from '../editor/drafts.js';
+import { formatBytes, prepareImageUpload, uploadNotice } from '../editor/image-upload.js';
 import { IMAGE_ACCEPT, validateImageFile } from '../editor/images.js';
 import {
   EDITOR_KIND_LABEL,
@@ -31,6 +37,7 @@ import {
 } from '../editor/search.js';
 import { useDraftAutosave, useDraftBox, useDraftStore } from '../editor/useDraft.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
+import { useSettingsContext } from '../settings/SettingsProvider.js';
 
 type Tab = 'articles' | 'series' | 'authors' | 'tags' | 'images' | 'featured' | 'credits';
 
@@ -62,6 +69,7 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
+    // biome-ignore lint/a11y/noLabelWithoutControl: Field 的控件由 children 传入，label 会自然包裹
     <label className="flex flex-col gap-1.5">
       <span className={labelClass}>{label}</span>
       {children}
@@ -102,6 +110,7 @@ function CoverField({
 }) {
   const services = useServices();
   const { refresh } = useLibraryContext();
+  const { settings, ready: settingsReady } = useSettingsContext();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -121,13 +130,17 @@ function CoverField({
     setBusy(true);
     setMessage(null);
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      const ext = file.name.split('.').pop() ?? 'bin';
+      const prepared = await prepareImageUpload(file, settings.compressImages);
       const caption = file.name.replace(/\.[^.]+$/, '');
-      const id = await services.editor.saveImage({ bytes, ext, kind: 'cover', caption });
+      const id = await services.editor.saveImage({
+        bytes: prepared.bytes,
+        ext: prepared.ext,
+        kind: 'cover',
+        caption,
+      });
       await refresh();
       onChange(id);
-      setMessage(`已上传并选中：${file.name}`);
+      setMessage(uploadNotice(prepared, file.name, '已上传并选中'));
     } catch (error) {
       setMessage(`上传失败：${errorText(error)}`);
     } finally {
@@ -160,7 +173,7 @@ function CoverField({
         </select>
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || !settingsReady}
           onClick={() => inputRef.current?.click()}
           className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
         >
@@ -172,7 +185,7 @@ function CoverField({
           type="file"
           accept={IMAGE_ACCEPT}
           className="hidden"
-          disabled={busy}
+          disabled={busy || !settingsReady}
           onChange={(event) => {
             const file = event.target.files?.[0];
             event.target.value = '';
@@ -255,16 +268,24 @@ export function EditorPage() {
     if (event.key === 'Escape') setSearchOpen(false);
   };
 
-  const run = async (action: () => Promise<void>, done: string): Promise<void> => {
+  const run = async (action: () => Promise<void>, done: string | (() => string)): Promise<void> => {
     setError(null);
     setNotice(null);
     try {
       await action();
       await refresh();
-      setNotice(done);
+      setNotice(typeof done === 'function' ? done() : done);
     } catch (cause) {
       setError(errorText(cause));
     }
+  };
+
+  /** 系列目录点击文章标题：切到「文章」页并复用 focus 机制打开该文章表单 */
+  const openArticleFromSeries = (id: string): void => {
+    setTab('articles');
+    setError(null);
+    setNotice(null);
+    setFocus({ kind: 'articles', id, token: Date.now() });
   };
 
   return (
@@ -410,6 +431,7 @@ export function EditorPage() {
           editor={services.editor}
           visibleIds={search ? search.ids.series : null}
           focus={focus?.kind === 'series' ? focus : null}
+          onOpenArticle={openArticleFromSeries}
         />
       ) : null}
       {tab === 'authors' ? (
@@ -461,7 +483,7 @@ export function EditorPage() {
   );
 }
 
-type Run = (action: () => Promise<void>, done: string) => Promise<void>;
+type Run = (action: () => Promise<void>, done: string | (() => string)) => Promise<void>;
 
 /**
  * 搜索跳转：只在 focus.token 变化时执行一次。
@@ -807,6 +829,9 @@ function ArticleForm({
   );
   const [sourceUrl, setSourceUrl] = useState(draft?.sourceUrl ?? initial?.sourceUrl ?? '');
   const [busy, setBusy] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
+  const documentInputRef = useRef<HTMLInputElement | null>(null);
 
   const draftPayload = useMemo<ArticleDraftPayload | null>(
     () =>
@@ -847,6 +872,31 @@ function ArticleForm({
     payload: draftPayload,
     enabled: !initial && Boolean(draftId && draftStore),
   });
+
+  /** 导入 .txt / .docx：替换正文；正文非空时先确认（受控 textarea 的 Ctrl+Z 不可靠） */
+  const importDocumentFile = (file: File): void => {
+    const invalid = validateDocumentFile(file);
+    if (invalid !== null) {
+      setImportNotice(invalid);
+      return;
+    }
+    if (content !== null && content.trim() !== '') {
+      if (!window.confirm('正文已有内容，导入会替换当前正文，确定？')) return;
+    }
+    setImportBusy(true);
+    setImportNotice(null);
+    void importDocument(file)
+      .then((result) => {
+        setContent(result.text);
+        const notice = result.notices.length > 0 ? `；${result.notices.join('；')}` : '';
+        const size = formatBytes(result.bytes);
+        setImportNotice(
+          `已导入 ${file.name}：${result.format.toUpperCase()} · ${result.paragraphs} 段 · ${size}${notice}`,
+        );
+      })
+      .catch((error: unknown) => setImportNotice(`导入失败：${errorText(error)}`))
+      .finally(() => setImportBusy(false));
+  };
 
   const initialId = initial?.id ?? null;
   const hasDraft = Boolean(draft);
@@ -943,18 +993,43 @@ function ArticleForm({
         />
       </Field>
 
-      <Field
-        label="正文（Markdown）"
-        hint="保存后写到 articles/{id}.md；编辑元数据时不会覆盖正文。"
-      >
+      <div className="flex flex-col gap-1.5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className={labelClass}>正文（Markdown）</span>
+          <button
+            type="button"
+            className={buttonClass}
+            disabled={importBusy || content === null}
+            onClick={() => documentInputRef.current?.click()}
+          >
+            <span aria-hidden>📄</span> {importBusy ? '导入中…' : '导入 .txt / .docx'}
+          </button>
+          <input
+            ref={documentInputRef}
+            type="file"
+            accept={DOCUMENT_ACCEPT}
+            className="hidden"
+            disabled={importBusy || content === null}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = '';
+              if (file) importDocumentFile(file);
+            }}
+          />
+        </div>
         <textarea
+          aria-label="正文（Markdown）"
           className={`${inputClass} font-mono`}
           rows={12}
           value={content ?? ''}
           onChange={(event) => setContent(event.target.value)}
           placeholder={content === null ? '正在读取正文…' : '# 标题\n\n正文…'}
         />
-      </Field>
+        <span className="text-xs text-muted-foreground">
+          {importNotice ??
+            '保存后写到 articles/{id}.md；编辑元数据时不会覆盖正文。导入的 .txt / .docx 只取纯文字（不含图片与表格样式）。'}
+        </span>
+      </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
@@ -1060,12 +1135,14 @@ function SeriesPanel({
   editor,
   visibleIds = null,
   focus = null,
+  onOpenArticle,
 }: {
   snapshot: DBSnapshot;
   run: Run;
   editor: Editor;
   visibleIds?: Set<string> | null;
   focus?: { id: string; token: number } | null;
+  onOpenArticle?: ((id: string) => void) | undefined;
 }) {
   const services = useServices();
   const databaseId = services.library.current()?.databaseId ?? '';
@@ -1160,6 +1237,7 @@ function SeriesPanel({
           draft={draftPayload}
           draftId={box.draftId}
           draftStore={store}
+          onOpenArticle={onOpenArticle}
           onCancel={closeForm}
           onSubmit={async (draft) => {
             await run(async () => {
@@ -1195,6 +1273,7 @@ function SeriesForm({
   draft,
   draftId,
   draftStore,
+  onOpenArticle,
   onSubmit,
   onCancel,
   onDelete,
@@ -1204,6 +1283,7 @@ function SeriesForm({
   draft?: SeriesDraftPayload | null;
   draftId?: string | null;
   draftStore?: DraftStore | null;
+  onOpenArticle?: ((id: string) => void) | undefined;
   onSubmit(draft: Parameters<Editor['saveSeries']>[0]): Promise<void>;
   onCancel(): void;
   onDelete?: (() => Promise<void>) | undefined;
@@ -1349,6 +1429,7 @@ function SeriesForm({
         articles={snapshot.articles}
         value={articleIds}
         onChange={setArticleIds}
+        onOpenArticle={onOpenArticle}
       />
 
       <AuthorPicker
@@ -1652,6 +1733,7 @@ function TagsPanel({
     aliases: string;
   } | null>(null);
   const [filter, setFilter] = useState<'all' | TagCategory>('all');
+  const [merging, setMerging] = useState(false);
   // 搜索期间忽略类别筛选：否则命中项可能被 filter 挡掉，列表显示为空但右侧已打开
   const list = visibleIds
     ? snapshot.tags.filter((tag) => visibleIds.has(tag.id))
@@ -1659,11 +1741,13 @@ function TagsPanel({
 
   const startNew = () => {
     box.start();
+    setMerging(false);
     setEditing({ category: 'character', name: '', aliases: '' });
   };
   const openDraft = (id: string) => {
     const draft = box.open(id);
     if (!draft) return;
+    setMerging(false);
     const payload = (draft.payload as TagDraftPayload | undefined) ?? {
       category: 'character',
       name: '',
@@ -1682,6 +1766,7 @@ function TagsPanel({
   useFocusJump(focus, (id) => {
     const tag = snapshot.tags.find((item) => item.id === id);
     if (tag) {
+      setMerging(false);
       setEditing({
         id: tag.id,
         category: tag.category,
@@ -1705,6 +1790,17 @@ function TagsPanel({
       <div className="flex flex-col gap-3">
         <button type="button" className={primaryClass} onClick={startNew}>
           新建标签
+        </button>
+        <button
+          type="button"
+          className={buttonClass}
+          onClick={() => {
+            setMerging(true);
+            setEditing(null);
+            box.close();
+          }}
+        >
+          合并标签…
         </button>
         <DraftList
           drafts={box.drafts}
@@ -1731,14 +1827,15 @@ function TagsPanel({
           items={list}
           empty="没有匹配的标签。"
           selectedId={editing?.id ?? null}
-          onSelect={(tag: Tag) =>
+          onSelect={(tag: Tag) => {
+            setMerging(false);
             setEditing({
               id: tag.id,
               category: tag.category,
               name: tag.name,
               aliases: tag.aliases?.join('，') ?? '',
-            })
-          }
+            });
+          }}
           render={(tag) => (
             <>
               <span className="truncate">{tag.name}</span>
@@ -1750,7 +1847,14 @@ function TagsPanel({
         />
       </div>
 
-      {editing ? (
+      {merging ? (
+        <MergeTagsForm
+          snapshot={snapshot}
+          run={run}
+          editor={editor}
+          onDone={() => setMerging(false)}
+        />
+      ) : editing ? (
         <form
           className="flex flex-col gap-4 rounded-xl border border-border bg-surface/60 p-4"
           onSubmit={(event) => {
@@ -1838,6 +1942,136 @@ function TagsPanel({
   );
 }
 
+const TAG_CATEGORIES: readonly TagCategory[] = ['character', 'plot', 'series', 'general'];
+
+/**
+ * 标签合并面板（编辑器「标签」页）。
+ * 同类别限制由 core 的 editor.mergeTags 兜底；这里只负责选目标、勾源与确认。
+ */
+function MergeTagsForm({
+  snapshot,
+  run,
+  editor,
+  onDone,
+}: {
+  snapshot: DBSnapshot;
+  run: Run;
+  editor: Editor;
+  onDone(): void;
+}) {
+  const [targetId, setTargetId] = useState('');
+  const [sourceIds, setSourceIds] = useState<string[]>([]);
+  const target = snapshot.tags.find((tag) => tag.id === targetId) ?? null;
+  const candidates = target
+    ? snapshot.tags.filter((tag) => tag.id !== target.id && tag.category === target.category)
+    : [];
+  const selected = candidates.filter((tag) => sourceIds.includes(tag.id));
+
+  const submit = (): void => {
+    if (!target || selected.length === 0) return;
+    const names = selected.map((tag) => `「${tag.name}」`).join('、');
+    if (
+      !window.confirm(
+        `将 ${names} 合并到「${target.name}」？\n\n源标签会被删除，名称与别名并入目标标签，所有文章/系列引用改指目标标签。`,
+      )
+    ) {
+      return;
+    }
+    void run(async () => {
+      await editor.mergeTags(
+        selected.map((tag) => tag.id),
+        target.id,
+      );
+    }, `已合并 ${selected.length} 个标签到「${target.name}」`);
+    onDone();
+  };
+
+  return (
+    <div className="flex flex-col gap-4 rounded-xl border border-border bg-surface/60 p-4">
+      <div className="flex flex-col gap-1">
+        <h3 className="text-sm font-medium">合并标签</h3>
+        <p className="text-xs text-muted-foreground">
+          把同一类别的多个标签合并到一个目标标签：名称与别名并入目标，文章/系列的引用改指目标，源标签随后删除。操作不可撤销。
+        </p>
+      </div>
+
+      <Field label="目标标签">
+        <select
+          className={inputClass}
+          value={targetId}
+          aria-label="合并目标标签"
+          onChange={(event) => {
+            setTargetId(event.target.value);
+            setSourceIds([]);
+          }}
+        >
+          <option value="">请选择目标标签</option>
+          {TAG_CATEGORIES.map((category) => {
+            const tags = snapshot.tags.filter((tag) => tag.category === category);
+            if (tags.length === 0) return null;
+            return (
+              <optgroup key={category} label={TAG_CATEGORY_LABEL[category] ?? category}>
+                {tags.map((tag) => (
+                  <option key={tag.id} value={tag.id}>
+                    {tag.name}
+                    {tag.aliases && tag.aliases.length > 0 ? `（${tag.aliases.join('、')}）` : ''}
+                  </option>
+                ))}
+              </optgroup>
+            );
+          })}
+        </select>
+      </Field>
+
+      <div className="flex flex-col gap-1.5">
+        <span className={labelClass}>要合并到目标的标签</span>
+        {target === null ? (
+          <p className="text-xs text-muted-foreground">先选择目标标签。</p>
+        ) : candidates.length === 0 ? (
+          <p className="text-xs text-muted-foreground">该类别没有其他标签可合并。</p>
+        ) : (
+          <div className="flex max-h-56 flex-col gap-1 overflow-auto rounded-lg border border-border bg-surface/40 p-2">
+            {candidates.map((tag) => (
+              <label key={tag.id} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  aria-label={`合并「${tag.name}」`}
+                  checked={sourceIds.includes(tag.id)}
+                  onChange={(event) =>
+                    setSourceIds((prev) =>
+                      event.target.checked ? [...prev, tag.id] : prev.filter((id) => id !== tag.id),
+                    )
+                  }
+                />
+                <span className="min-w-0 truncate">{tag.name}</span>
+                {tag.aliases && tag.aliases.length > 0 ? (
+                  <span className="truncate text-[11px] text-muted-foreground">
+                    （{tag.aliases.join('、')}）
+                  </span>
+                ) : null}
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className={primaryClass}
+          disabled={!target || selected.length === 0}
+          onClick={submit}
+        >
+          合并 {selected.length} 个标签
+        </button>
+        <button type="button" className={buttonClass} onClick={onDone}>
+          取消
+        </button>
+      </div>
+    </div>
+  );
+}
+
 const IMAGE_KINDS: ImageKind[] = ['cover', 'illustration', 'captioned', 'other'];
 
 function ImagesPanel({
@@ -1854,10 +2088,13 @@ function ImagesPanel({
   focus?: { id: string; token: number } | null;
 }) {
   const services = useServices();
+  const { settings, ready: settingsReady, save } = useSettingsContext();
   const [kind, setKind] = useState<ImageKind>('cover');
   const [caption, setCaption] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const [savingCompress, setSavingCompress] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, { kind: ImageKind; caption: string }>>({});
   const loaded = services.library.current();
   const toUrl = (file: string) =>
@@ -1872,6 +2109,18 @@ function ImagesPanel({
       ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   });
 
+  const changeCompress = async (checked: boolean): Promise<void> => {
+    setSavingCompress(true);
+    setSettingsError(null);
+    try {
+      await save({ compressImages: checked });
+    } catch (error) {
+      setSettingsError(`保存开关失败：${errorText(error)}`);
+    } finally {
+      setSavingCompress(false);
+    }
+  };
+
   return (
     <div className="flex flex-col gap-5">
       <form
@@ -1879,14 +2128,24 @@ function ImagesPanel({
         onSubmit={(event) => {
           event.preventDefault();
           if (!file) return;
+          const uploading = file;
+          let done = '图片已上传';
           setBusy(true);
-          void run(async () => {
-            const bytes = new Uint8Array(await file.arrayBuffer());
-            const ext = file.name.split('.').pop() ?? 'bin';
-            await editor.saveImage({ bytes, ext, kind, caption });
-            setFile(null);
-            setCaption('');
-          }, '图片已上传').finally(() => setBusy(false));
+          void run(
+            async () => {
+              const prepared = await prepareImageUpload(uploading, settings.compressImages);
+              await editor.saveImage({
+                bytes: prepared.bytes,
+                ext: prepared.ext,
+                kind,
+                caption,
+              });
+              done = uploadNotice(prepared, uploading.name);
+              setFile(null);
+              setCaption('');
+            },
+            () => done,
+          ).finally(() => setBusy(false));
         }}
       >
         <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -1895,7 +2154,30 @@ function ImagesPanel({
             上传后会出现在下方列表，可继续修改类型与配文。
           </span>
         </div>
-        <ImageFilePicker file={file} disabled={busy} onChange={setFile} />
+        <label className="flex items-start justify-between gap-4 rounded-lg border border-border bg-surface/60 px-3 py-2.5">
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="text-sm font-medium text-foreground">压缩上传图片</span>
+            <span className="text-xs text-muted-foreground">
+              开启后 PNG/JPEG 会转成 WebP（最长边 2560），GIF/WebP 保持原样；关闭后按原图保存。
+            </span>
+            {settingsError ? (
+              <span className="text-xs text-destructive">{settingsError}</span>
+            ) : null}
+          </span>
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label="压缩上传图片"
+            aria-checked={settings.compressImages}
+            className="mt-1 h-5 w-5 shrink-0 accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+            checked={settings.compressImages}
+            disabled={!settingsReady || savingCompress}
+            onChange={(event) => {
+              void changeCompress(event.target.checked);
+            }}
+          />
+        </label>
+        <ImageFilePicker file={file} disabled={busy || !settingsReady} onChange={setFile} />
 
         <div className="grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)_auto] sm:items-end">
           <Field label="类型">
@@ -1921,7 +2203,7 @@ function ImagesPanel({
           <button
             type="submit"
             className={`${primaryClass} disabled:cursor-not-allowed`}
-            disabled={busy || file === null}
+            disabled={busy || file === null || !settingsReady}
           >
             {busy ? '上传中…' : '上传图片'}
           </button>
@@ -2235,6 +2517,7 @@ function FeaturedPanel({
         <div className="flex flex-col gap-2">
           <span className={labelClass}>推荐语（可多条，可只填文本）</span>
           {rows.map((row, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: 推荐语行按顺序编辑，只追加/删除
             <div key={index} className="flex gap-2">
               <input
                 className={`${inputClass} sm:w-40`}

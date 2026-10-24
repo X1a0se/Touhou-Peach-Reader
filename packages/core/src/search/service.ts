@@ -4,12 +4,24 @@
  * 索引是懒构建的：第一次搜索或显式 `ready()` 时建好；库的 `revision` 变了就重建。
  * 结果里的片段优先来自正文（只在命中正文时读），否则退回简介，最后才读正文前 20 篇。
  */
-import type { DBSnapshot } from '../db/snapshot.js';
+
 import type { Library } from '../db/library.js';
+import type { DBSnapshot } from '../db/snapshot.js';
+import { articleSeriesPosition } from '../db/view.js';
 import { buildSearchIndex } from './build.js';
-import { type FilterKind, type HitKind, type SearchEngine, type SearchHit } from './engine.js';
+import type { FilterKind, HitKind, SearchEngine, SearchHit } from './engine.js';
 import { parseQuery } from './parse-query.js';
-import { type SnippetPart, buildSnippets } from './snippet.js';
+import { buildSnippets, type SnippetPart } from './snippet.js';
+
+export interface SearchSeriesRef {
+  id: string;
+  title: string;
+  status: 'ongoing' | 'completed';
+  /** 文章在系列目录中的 1 基编号 */
+  index: number;
+  /** 系列目录总篇数 */
+  total: number;
+}
 
 export interface SearchItem {
   kind: HitKind;
@@ -21,6 +33,8 @@ export interface SearchItem {
   matchedFields: string[];
   badges: string[];
   snippets: SnippetPart[][];
+  /** 仅文章条目有：所属系列与篇号，供结果页按系列折叠 */
+  series?: SearchSeriesRef;
 }
 
 export interface SearchResponse {
@@ -35,7 +49,10 @@ export interface SearchResponse {
 export interface SearchService {
   /** 构建/重建索引；并发调用共享同一次构建。 */
   ready(): Promise<void>;
-  search(query: string, opts?: { filter?: FilterKind; limit?: number }): Promise<SearchResponse>;
+  search(
+    query: string,
+    opts?: { filter?: FilterKind; limit?: number; tags?: readonly string[] },
+  ): Promise<SearchResponse>;
   /** 强制下次搜索重建索引（导入/编辑后调用）。 */
   invalidate(): void;
   readonly indexSize: number;
@@ -103,7 +120,14 @@ export function createSearchService(library: Library): SearchService {
     }
     if (hit.kind === 'tag') {
       const tag = snap.maps.tags.get(hit.id);
-      const label = tag?.category === 'character' ? '角色' : tag?.category === 'plot' ? '情节' : tag?.category === 'series' ? '系列' : '主题';
+      const label =
+        tag?.category === 'character'
+          ? '角色'
+          : tag?.category === 'plot'
+            ? '情节'
+            : tag?.category === 'series'
+              ? '系列'
+              : '主题';
       return [label];
     }
     return ['作者'];
@@ -136,6 +160,19 @@ export function createSearchService(library: Library): SearchService {
     }
   };
 
+  const seriesRefFor = (hit: SearchHit, snap: DBSnapshot): SearchSeriesRef | undefined => {
+    if (hit.kind !== 'article') return undefined;
+    const position = articleSeriesPosition(snap, hit.id);
+    if (!position) return undefined;
+    return {
+      id: position.series.id,
+      title: position.series.title,
+      status: position.series.status,
+      index: position.index,
+      total: position.series.articleIds.length,
+    };
+  };
+
   const snippetsFor = async (
     hit: SearchHit,
     snap: DBSnapshot,
@@ -160,7 +197,7 @@ export function createSearchService(library: Library): SearchService {
 
   const search = async (
     query: string,
-    opts: { filter?: FilterKind; limit?: number } = {},
+    opts: { filter?: FilterKind; limit?: number; tags?: readonly string[] } = {},
   ): Promise<SearchResponse> => {
     await ready();
     const snap = snapshot;
@@ -170,7 +207,11 @@ export function createSearchService(library: Library): SearchService {
 
     const started = performance.now();
     const limit = opts.limit ?? 50;
-    const searchOptions = opts.filter ? { filter: opts.filter, limit } : { limit };
+    const searchOptions = {
+      ...(opts.filter ? { filter: opts.filter } : {}),
+      ...(opts.tags && opts.tags.length > 0 ? { tags: opts.tags } : {}),
+      limit,
+    };
     const hits = engine.search(query, searchOptions);
     const parsed = parseQuery(query);
     const terms = [...parsed.phrases, ...parsed.terms].filter((term) => term.length > 0);
@@ -182,18 +223,21 @@ export function createSearchService(library: Library): SearchService {
         hit.kind === 'article' && index >= BODY_READ_LIMIT
           ? []
           : await snippetsFor(hit, snap, terms);
+      const series = seriesRefFor(hit, snap);
       items.push({
         kind: hit.kind,
         id: hit.id,
         title,
         subtitle: truncate(subtitle, SNIPPET_LIMIT),
-        updatedAt: hit.kind === 'article'
-          ? (snap.maps.articles.get(hit.id)?.updatedAt ?? snap.manifest.updatedAt)
-          : snap.manifest.updatedAt,
+        updatedAt:
+          hit.kind === 'article'
+            ? (snap.maps.articles.get(hit.id)?.updatedAt ?? snap.manifest.updatedAt)
+            : snap.manifest.updatedAt,
         score: hit.score,
         matchedFields: hit.matchedFields,
         badges: badgesFor(hit, snap),
         snippets,
+        ...(series ? { series } : {}),
       });
     }
 

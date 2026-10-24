@@ -42,6 +42,8 @@ export interface AppSettings {
   language: string;
   /** 默认数据库源（GitHub 仓库或 release 地址，空串 = 用户主动清空） */
   defaultSource: string;
+  /** 上传图片时是否在浏览器端压缩（Goal 25；默认开启，减少数据库体积） */
+  compressImages: boolean;
   /** 解压限额覆盖（默认取 design §7.4 的 512MB / 8GB / 20 万条 / 200 倍） */
   extractLimits?: Partial<ZipLimits>;
 }
@@ -52,6 +54,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   wallpapers: { home: { ...DEFAULT_WALLPAPER }, article: { ...DEFAULT_WALLPAPER } },
   language: 'zh-CN',
   defaultSource: DEFAULT_DATABASE_SOURCE,
+  compressImages: true,
 };
 
 const WALLPAPER_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -78,7 +81,9 @@ export function clampWallpaperBlur(value: unknown): number {
 }
 
 function asPalette(value: unknown): PaletteId {
-  return (PALETTE_IDS as readonly string[]).includes(String(value)) ? (value as PaletteId) : 'peach';
+  return (PALETTE_IDS as readonly string[]).includes(String(value))
+    ? (value as PaletteId)
+    : 'peach';
 }
 
 function parseWallpaper(value: unknown): WallpaperSettings {
@@ -129,8 +134,16 @@ export function parseSettings(value: unknown): AppSettings | null {
     },
     language: asString(raw.language, 'zh-CN').slice(0, 32) || 'zh-CN',
     defaultSource: asString(raw.defaultSource, DEFAULT_DATABASE_SOURCE).slice(0, 2000),
+    compressImages:
+      typeof raw.compressImages === 'boolean'
+        ? raw.compressImages
+        : DEFAULT_SETTINGS.compressImages,
   };
-  if (raw.extractLimits !== null && typeof raw.extractLimits === 'object' && !Array.isArray(raw.extractLimits)) {
+  if (
+    raw.extractLimits !== null &&
+    typeof raw.extractLimits === 'object' &&
+    !Array.isArray(raw.extractLimits)
+  ) {
     const limits = raw.extractLimits as Record<string, unknown>;
     const parsed: Partial<ZipLimits> = {};
     const entries = asLimit(limits.maxEntries);
@@ -185,6 +198,10 @@ function sanitize(input: AppSettings): AppSettings {
     },
     language: input.language.trim() || 'zh-CN',
     defaultSource: input.defaultSource.trim(),
+    compressImages:
+      typeof input.compressImages === 'boolean'
+        ? input.compressImages
+        : DEFAULT_SETTINGS.compressImages,
   };
   if (input.extractLimits !== undefined && Object.keys(input.extractLimits).length > 0) {
     next.extractLimits = { ...input.extractLimits };
@@ -215,7 +232,10 @@ export function createSettings(platform: Platform): SettingsService {
     try {
       parsed = JSON.parse(text);
     } catch {
-      return { settings: { ...DEFAULT_SETTINGS }, warning: '设置文件不是合法 JSON，已使用默认设置' };
+      return {
+        settings: { ...DEFAULT_SETTINGS },
+        warning: '设置文件不是合法 JSON，已使用默认设置',
+      };
     }
     const result = parseSettings(parsed);
     if (result === null) {

@@ -212,6 +212,70 @@ pub fn create_from_dir(
     Ok(serde_json::json!({"entries": files.len(), "bytes": bytes}))
 }
 
+/// 把目录直接写成目标文件：先写同目录 `.partial`，成功后 rename 覆盖。
+/// 失败时删除 partial，旧目标保持原样（Windows 的 rename 是替换语义）。
+fn create_from_dir_to(
+    dir_path: &str,
+    target_path: &str,
+    order: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let target = Path::new(target_path);
+    let parent = target
+        .parent()
+        .ok_or_else(|| "EINVAL: 目标路径没有父目录".to_string())?;
+    let file_name = target
+        .file_name()
+        .ok_or_else(|| "EINVAL: 目标路径没有文件名".to_string())?;
+    let partial = parent.join(format!("{}.partial", file_name.to_string_lossy()));
+
+    let result = create_from_dir(dir_path, &partial.to_string_lossy(), order);
+    match result {
+        Ok(value) => {
+            if let Err(error) = fs::rename(&partial, target) {
+                let _ = fs::remove_file(&partial);
+                return Err(format!("EIO: 无法替换目标文件：{error}"));
+            }
+            Ok(value)
+        }
+        Err(error) => {
+            let _ = fs::remove_file(&partial);
+            Err(error)
+        }
+    }
+}
+
+/// 校验用户保存对话框选定的目标：绝对路径、.tpr 后缀、父目录已存在且不是目录本身。
+/// 这是唯一允许写 app data 之外的命令，因此不创建任何目录。
+fn resolve_export_target(candidate: &str) -> Result<PathBuf, String> {
+    let target = PathBuf::from(candidate);
+    if !target.is_absolute() {
+        return Err("EINVAL: 导出文件需要绝对路径".to_string());
+    }
+    let has_tpr_ext = target
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("tpr"))
+        .unwrap_or(false);
+    if !has_tpr_ext {
+        return Err("EINVAL: 导出文件必须以 .tpr 结尾".to_string());
+    }
+    if target.is_dir() {
+        return Err("EINVAL: 目标是一个目录，请选择 .tpr 文件".to_string());
+    }
+    let parent = target
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or_else(|| "EINVAL: 目标路径没有父目录".to_string())?;
+    if !parent.is_dir() {
+        return Err("ENOENT: 目标目录不存在".to_string());
+    }
+    let parent = parent.canonicalize().map_err(|e| format!("EIO: {e}"))?;
+    let name = target
+        .file_name()
+        .ok_or_else(|| "EINVAL: 目标路径没有文件名".to_string())?;
+    Ok(parent.join(name))
+}
+
 #[tauri::command]
 pub async fn zip_extract_all(
     app: AppHandle,
@@ -247,4 +311,113 @@ pub async fn zip_create_from_dir(
     })
     .await
     .map_err(|e| format!("EIO: {e}"))?
+}
+
+/// 导出直写：源目录必须在 app data 内；目标来自系统保存对话框，可以指向任意位置。
+#[tauri::command]
+pub async fn zip_create_from_dir_to(
+    app: AppHandle,
+    dir_path: String,
+    target_path: String,
+    order: Option<Vec<String>>,
+) -> Result<serde_json::Value, String> {
+    let root = app_data(&app)?;
+    let dir = ensure_within(&root, &dir_path, false)?;
+    let target = resolve_export_target(&target_path)?;
+    if target.starts_with(&dir) {
+        return Err("EINVAL: 导出目标不能位于打包源目录内".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        create_from_dir_to(
+            &dir.to_string_lossy(),
+            &target.to_string_lossy(),
+            order.unwrap_or_else(|| vec!["manifest.json".to_string()]),
+        )
+    })
+    .await
+    .map_err(|e| format!("EIO: {e}"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_base(tag: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        // 不使用系统 temp：该目录在本机测试进程里可能被 ACL 拒绝；target/ 随构建目录可写。
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("test-tmp")
+            .join(format!("tpr-zip-{tag}-{}-{nanos}", std::process::id()))
+    }
+
+    fn write_source(src: &Path) {
+        fs::create_dir_all(src.join("articles")).unwrap();
+        fs::write(src.join("manifest.json"), b"{}").unwrap();
+        fs::write(src.join("articles/a.json"), b"{\"id\":\"a\"}").unwrap();
+    }
+
+    #[test]
+    fn create_from_dir_to_writes_and_replaces_target() {
+        let base = temp_base("replace");
+        let src = base.join("src");
+        write_source(&src);
+        let target = base.join("out.tpr");
+        fs::write(&target, b"old").unwrap();
+
+        let result = create_from_dir_to(
+            &src.to_string_lossy(),
+            &target.to_string_lossy(),
+            vec!["manifest.json".to_string()],
+        )
+        .unwrap();
+        assert_eq!(result["entries"].as_u64(), Some(2));
+        assert!(!base.join("out.tpr.partial").exists());
+
+        let file = File::open(&target).unwrap();
+        let mut archive = ZipArchive::new(file).unwrap();
+        assert_eq!(archive.len(), 2);
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().unwrap().to_string())
+            .collect();
+        assert!(names.contains(&"manifest.json".to_string()));
+        assert!(names.contains(&"articles/a.json".to_string()));
+        drop(archive);
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn create_from_dir_to_cleans_partial_when_replace_fails() {
+        let base = temp_base("failure");
+        let src = base.join("src");
+        write_source(&src);
+        let target = base.join("out.tpr");
+        // 目标已存在且是目录：rename 必然失败；helper 必须删掉 partial，保留目标。
+        fs::create_dir_all(&target).unwrap();
+
+        let result = create_from_dir_to(
+            &src.to_string_lossy(),
+            &target.to_string_lossy(),
+            vec!["manifest.json".to_string()],
+        );
+        assert!(result.is_err());
+        assert!(target.is_dir());
+        assert!(!base.join("out.tpr.partial").exists());
+        fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn resolve_export_target_rejects_non_tpr_and_missing_parent() {
+        let base = temp_base("target");
+        fs::create_dir_all(&base).unwrap();
+        assert!(resolve_export_target(&base.join("out.zip").to_string_lossy()).is_err());
+        assert!(resolve_export_target(&base.join("missing/out.tpr").to_string_lossy()).is_err());
+        let resolved = resolve_export_target(&base.join("out.tpr").to_string_lossy()).unwrap();
+        assert_eq!(resolved.file_name().unwrap(), "out.tpr");
+        fs::remove_dir_all(&base).ok();
+    }
 }

@@ -62,6 +62,11 @@ export interface IZip {
   extractBytes(bytes: Uint8Array, destDir: string, opts?: { limits?: Partial<ZipLimits> }): Promise<ZipExtractResult>;
   /** 把目录打成 zip；order 里的条目最后写入（manifest.json 用） */
   createFromDir(dirPath: string, zipPath: string, opts?: { order?: string[] }): Promise<ZipCreateResult>;
+  /**
+   * 把目录直接写成目标 zip（桌面端用于导出：ZIP 字节不回传 JS）。
+   * 语义与 createFromDir 相同，只是命名强调目标由调用方选定。
+   */
+  createFromDirTo(dirPath: string, targetPath: string, opts?: { order?: string[] }): Promise<ZipCreateResult>;
 }
 
 export interface IAppPaths {

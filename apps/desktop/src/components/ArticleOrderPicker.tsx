@@ -5,13 +5,15 @@ export interface ArticleOrderPickerProps {
   articles: readonly ArticleMeta[];
   value: string[];
   onChange(next: string[]): void;
+  /** 点击目录标题时跳转；不传则标题保持纯展示 */
+  onOpenArticle?: ((id: string) => void) | undefined;
 }
 
 /**
  * 系列目录编辑器：编号即 `articleIds` 的顺序。
  * 不用拖拽（键盘可用的上移/下移足够，也避免新增依赖）。
  */
-export function ArticleOrderPicker({ articles, value, onChange }: ArticleOrderPickerProps) {
+export function ArticleOrderPicker({ articles, value, onChange, onOpenArticle }: ArticleOrderPickerProps) {
   const [filter, setFilter] = useState('');
 
   const byId = new Map(articles.map((article) => [article.id, article]));
@@ -41,7 +43,7 @@ export function ArticleOrderPicker({ articles, value, onChange }: ArticleOrderPi
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-muted-foreground">目录（编号即文章顺序）</span>
+        <span className="text-xs font-medium text-muted-foreground">目录（编号即文章顺序，点标题跳到文章编辑）</span>
         <span className="text-xs text-muted-foreground">{value.length} 篇</span>
       </div>
 
@@ -58,9 +60,21 @@ export function ArticleOrderPicker({ articles, value, onChange }: ArticleOrderPi
                 <span className="w-7 shrink-0 font-mono text-xs text-muted-foreground">
                   {String(index + 1).padStart(2, '0')}
                 </span>
-                <span className={`min-w-0 flex-1 truncate ${article ? '' : 'text-destructive'}`}>
-                  {article?.title ?? `缺失的文章 ${id}`}
-                </span>
+                {article && onOpenArticle ? (
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 truncate text-left underline-offset-2 hover:text-accent hover:underline"
+                    aria-label={`打开《${article.title}》`}
+                    title="在「文章」页打开"
+                    onClick={() => onOpenArticle(article.id)}
+                  >
+                    {article.title}
+                  </button>
+                ) : (
+                  <span className={`min-w-0 flex-1 truncate ${article ? '' : 'text-destructive'}`}>
+                    {article?.title ?? `缺失的文章 ${id}`}
+                  </span>
+                )}
                 <button
                   type="button"
                   className="rounded border border-border px-1.5 text-xs disabled:opacity-40"

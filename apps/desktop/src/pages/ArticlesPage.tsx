@@ -1,5 +1,10 @@
 import type { ArticleMeta } from '@tpr/schema';
-import { articleSeriesPosition, resolveTags } from '@tpr/core';
+import {
+  type ArticleListRow,
+  type DBSnapshot,
+  groupArticlesBySeries,
+  resolveTags,
+} from '@tpr/core';
 import { Button, EmptyState, SectionHeading, cn } from '@tpr/ui';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
@@ -20,11 +25,154 @@ const TYPE_LABEL: Record<ArticleMeta['type'], string> = {
   'series-entry': '系列',
 };
 
+const STATUS_LABEL: Record<string, string> = {
+  ongoing: '连载中',
+  completed: '已完结',
+};
+
+function ArticleCard({
+  article,
+  position,
+  snapshot,
+  toUrl,
+}: {
+  article: ArticleMeta;
+  position: number | null;
+  snapshot: DBSnapshot | null;
+  toUrl: (file: string) => string;
+}) {
+  const series = article.seriesId ? snapshot?.maps.series.get(article.seriesId) : undefined;
+  const cover = article.coverImageId ? snapshot?.maps.images.get(article.coverImageId) : undefined;
+  const tags = snapshot ? resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds]) : [];
+
+  return (
+    <li className="group flex flex-col overflow-hidden rounded-xl border border-border bg-surface/70 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md">
+      <Link
+        to={`/article/${article.id}`}
+        className="flex h-44 items-center justify-center overflow-hidden bg-muted/40"
+        aria-label={`阅读《${article.title}》`}
+      >
+        {cover ? (
+          <img
+            src={toUrl(cover.file)}
+            alt={cover.caption ?? article.title}
+            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
+            loading="lazy"
+          />
+        ) : (
+          <span className="text-xs text-muted-foreground">无封面</span>
+        )}
+      </Link>
+
+      <div className="flex flex-1 flex-col gap-2 p-4">
+        <div className="flex items-center gap-2 text-[0.68rem] text-muted-foreground">
+          <span
+            className={cn(
+              'rounded-full px-2 py-0.5 font-medium',
+              article.type === 'short'
+                ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+                : 'bg-violet-500/10 text-violet-700 dark:text-violet-300',
+            )}
+          >
+            {TYPE_LABEL[article.type]}
+          </span>
+          {position ? (
+            <span className="rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent">
+              第 {position} 篇
+            </span>
+          ) : null}
+          {series ? (
+            <Link to={`/series/${series.id}`} className="truncate hover:text-accent">
+              {series.title}
+            </Link>
+          ) : null}
+          <span className="ml-auto shrink-0">{article.updatedAt.slice(0, 10)}</span>
+        </div>
+
+        <Link
+          to={`/article/${article.id}`}
+          className="truncate text-sm font-medium group-hover:text-accent"
+        >
+          {article.title}
+        </Link>
+        {article.summary ? (
+          <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">{article.summary}</p>
+        ) : null}
+
+        <TagLinks tags={tags} className="mt-auto pt-1" />
+      </div>
+    </li>
+  );
+}
+
+function ArticleSeriesGroup({
+  row,
+  snapshot,
+  toUrl,
+  expanded,
+  onToggle,
+}: {
+  row: Extract<ArticleListRow, { kind: 'group' }>;
+  snapshot: DBSnapshot;
+  toUrl: (file: string) => string;
+  expanded: boolean;
+  onToggle(): void;
+}) {
+  const panelId = `library-series-${row.series.id}`;
+
+  return (
+    <section className="flex flex-col gap-3 rounded-xl border border-border bg-surface/60 p-3 shadow-sm backdrop-blur-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded-full bg-violet-500/10 px-2 py-0.5 text-[0.68rem] font-medium text-violet-700 dark:text-violet-300">
+          系列
+        </span>
+        <span className="rounded-full border border-border px-2 py-0.5 text-[0.68rem] text-muted-foreground">
+          {STATUS_LABEL[row.series.status] ?? row.series.status}
+        </span>
+        <Link
+          to={`/series/${row.series.id}`}
+          className="truncate text-sm font-medium hover:text-accent"
+        >
+          {row.series.title}
+        </Link>
+        <span className="text-xs text-muted-foreground">共 {row.items.length} 篇</span>
+        <Button
+          size="sm"
+          variant="secondary"
+          className="ml-auto shrink-0"
+          aria-expanded={expanded}
+          aria-controls={panelId}
+          onClick={onToggle}
+        >
+          {expanded ? '收起' : `展开 ${row.items.length} 篇`}
+        </Button>
+      </div>
+
+      <ul
+        id={panelId}
+        hidden={!expanded}
+        className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+      >
+        {row.items.map((item) => (
+          <ArticleCard
+            key={item.article.id}
+            article={item.article}
+            position={item.position}
+            snapshot={snapshot}
+            toUrl={toUrl}
+          />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function ArticlesPage() {
   const services = useServices();
   const { snapshot, status } = useLibraryContext();
   const [query, setQuery] = useState('');
   const [type, setType] = useState<TypeFilter>('all');
+  const [expandedSeries, setExpandedSeries] = useState<ReadonlySet<string>>(() => new Set());
 
   const loaded = services.library.current();
   const toUrl = (file: string): string =>
@@ -47,12 +195,26 @@ export function ArticlesPage() {
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : a.id.localeCompare(b.id)));
   }, [snapshot, query, type]);
 
+  const rows = useMemo(
+    () => (snapshot ? groupArticlesBySeries(snapshot, articles) : []),
+    [snapshot, articles],
+  );
+
+  const toggleSeries = (id: string): void => {
+    setExpandedSeries((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   return (
     <div className="flex flex-col gap-5">
       <SectionHeading
         eyebrow="浏览"
         title="文章库"
-        description={`共 ${snapshot?.articles.length ?? 0} 篇；点标签可按该标签搜索，点击封面或标题进入详情。`}
+        description={`共 ${snapshot?.articles.length ?? 0} 篇；同一系列 ≥2 篇会自动折叠，可展开；点标签可按该标签搜索，点击封面或标题进入详情。`}
       />
 
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -101,74 +263,29 @@ export function ArticlesPage() {
       )}
 
       <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {articles.map((article) => {
-          const series = article.seriesId ? snapshot?.maps.series.get(article.seriesId) : undefined;
-          const position = snapshot ? articleSeriesPosition(snapshot, article.id) : null;
-          const cover = article.coverImageId ? snapshot?.maps.images.get(article.coverImageId) : undefined;
-          const tags = snapshot ? resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds]) : [];
-
-          return (
-            <li
-              key={article.id}
-              className="group flex flex-col overflow-hidden rounded-xl border border-border bg-surface/70 shadow-sm backdrop-blur-sm transition-shadow hover:shadow-md"
-            >
-              <Link
-                to={`/article/${article.id}`}
-                className="flex h-44 items-center justify-center overflow-hidden bg-muted/40"
-                aria-label={`阅读《${article.title}》`}
-              >
-                {cover ? (
-                  <img
-                    src={toUrl(cover.file)}
-                    alt={cover.caption ?? article.title}
-                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
-                    loading="lazy"
+        {snapshot
+          ? rows.map((row) =>
+              row.kind === 'article' ? (
+                <ArticleCard
+                  key={row.item.article.id}
+                  article={row.item.article}
+                  position={row.item.position}
+                  snapshot={snapshot}
+                  toUrl={toUrl}
+                />
+              ) : (
+                <li key={`series:${row.series.id}`} className="col-span-full">
+                  <ArticleSeriesGroup
+                    row={row}
+                    snapshot={snapshot}
+                    toUrl={toUrl}
+                    expanded={expandedSeries.has(row.series.id)}
+                    onToggle={() => toggleSeries(row.series.id)}
                   />
-                ) : (
-                  <span className="text-xs text-muted-foreground">无封面</span>
-                )}
-              </Link>
-
-              <div className="flex flex-1 flex-col gap-2 p-4">
-                <div className="flex items-center gap-2 text-[0.68rem] text-muted-foreground">
-                  <span
-                    className={cn(
-                      'rounded-full px-2 py-0.5 font-medium',
-                      article.type === 'short'
-                        ? 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                        : 'bg-violet-500/10 text-violet-700 dark:text-violet-300',
-                    )}
-                  >
-                    {TYPE_LABEL[article.type]}
-                  </span>
-                  {position ? (
-                    <span className="rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent">
-                      第 {position.index} 篇
-                    </span>
-                  ) : null}
-                  {series ? (
-                    <Link to={`/series/${series.id}`} className="truncate hover:text-accent">
-                      {series.title}
-                    </Link>
-                  ) : null}
-                  <span className="ml-auto shrink-0">{article.updatedAt.slice(0, 10)}</span>
-                </div>
-
-                <Link
-                  to={`/article/${article.id}`}
-                  className="truncate text-sm font-medium group-hover:text-accent"
-                >
-                  {article.title}
-                </Link>
-                {article.summary ? (
-                  <p className="line-clamp-2 text-xs leading-5 text-muted-foreground">{article.summary}</p>
-                ) : null}
-
-                <TagLinks tags={tags} className="mt-auto pt-1" />
-              </div>
-            </li>
-          );
-        })}
+                </li>
+              ),
+            )
+          : null}
       </ul>
     </div>
   );

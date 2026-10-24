@@ -24,11 +24,14 @@ export interface ExportSource {
   contents: ContentStore;
 }
 
-export interface ExportResult {
-  bytes: Uint8Array;
+export interface ExportSummary {
   counts: Counts;
   warnings: Issue[];
   fileName: string;
+}
+
+export interface ExportResult extends ExportSummary {
+  bytes: Uint8Array;
 }
 
 const skipped = (
@@ -173,12 +176,30 @@ const safeName = (name: string): string =>
     .trim()
     .slice(0, 60) || 'touhou-peach';
 
-/** 生成可下载的 `.tpr` 字节（design §7.6 / §9.4）。 */
-export async function exportDatabase(
+const fileNameFor = (name: string, at: string): string => `${safeName(name)}-${at}.tpr`;
+
+/** 给保存对话框的默认文件名：{库名}-{yyyyMMdd-HHmm}.tpr。 */
+export function suggestExportFileName(databaseName: string): string {
+  return fileNameFor(databaseName, stamp());
+}
+
+interface PreparedExport {
+  dir: string;
+  stamp: string;
+  name: string;
+  counts: Counts;
+  warnings: Issue[];
+}
+
+/**
+ * 把选中的实体写入 exports 下的临时工作目录。
+ * 失败时清理临时目录；调用方负责在打包完成后清理（或直写后清理）。
+ */
+async function prepareExport(
   platform: Platform,
   source: ExportSource,
   selection: ExportSelection,
-): Promise<ExportResult> {
+): Promise<PreparedExport> {
   const { db, warnings } = selectSubset(source.db, selection);
 
   const markdown = new Map<string, string>();
@@ -191,8 +212,13 @@ export async function exportDatabase(
     }
   }
 
-  const workDir = platform.paths.join(platform.paths.dataDir, DB_LAYOUT.exportsDir, stamp());
-  const zipPath = `${workDir}.tpr`;
+  const at = stamp();
+  // 同分钟并发导出时，纯 timestamp 目录会互相覆盖；加随机后缀避免串包。
+  const workDir = platform.paths.join(
+    platform.paths.dataDir,
+    DB_LAYOUT.exportsDir,
+    `${at}-${Date.now().toString(36)}`,
+  );
   try {
     for (const file of serializeDatabase(db, markdown)) {
       const path = platform.paths.join(workDir, file.path);
@@ -211,17 +237,73 @@ export async function exportDatabase(
       await platform.fs.mkdir(platform.paths.dirname(to));
       await platform.fs.copy(from, to);
     }
+    return { dir: workDir, stamp: at, name: db.manifest.name, counts: db.manifest.counts, warnings };
+  } catch (error) {
+    await removeTree(platform, workDir);
+    throw error;
+  }
+}
 
-    await platform.zip.createFromDir(workDir, zipPath, { order: [...MANIFEST_LAST] });
+/**
+ * 目标路径落在本次临时工作目录内时拒绝：否则 finally 的清理会把用户目标删掉。
+ * Windows（tauri）路径不区分大小写。
+ */
+function isInside(parent: string, child: string, caseInsensitive: boolean): boolean {
+  const normalize = (value: string): string => value.replace(/\\/g, '/').replace(/\/+$/, '');
+  let base = normalize(parent);
+  let target = normalize(child);
+  if (caseInsensitive) {
+    base = base.toLowerCase();
+    target = target.toLowerCase();
+  }
+  return target === base || target.startsWith(`${base}/`);
+}
+
+/** 生成可下载的 `.tpr` 字节（design §7.6 / §9.4）。 */
+export async function exportDatabase(
+  platform: Platform,
+  source: ExportSource,
+  selection: ExportSelection,
+): Promise<ExportResult> {
+  const prepared = await prepareExport(platform, source, selection);
+  const zipPath = `${prepared.dir}.tpr`;
+  try {
+    await platform.zip.createFromDir(prepared.dir, zipPath, { order: [...MANIFEST_LAST] });
     const bytes = await platform.fs.readBytes(zipPath);
     return {
       bytes,
-      counts: db.manifest.counts,
-      warnings,
-      fileName: `${safeName(db.manifest.name)}-${stamp()}.tpr`,
+      counts: prepared.counts,
+      warnings: prepared.warnings,
+      fileName: fileNameFor(prepared.name, prepared.stamp),
     };
   } finally {
-    await removeTree(platform, workDir);
+    await removeTree(platform, prepared.dir);
     await removeTree(platform, zipPath);
+  }
+}
+
+/**
+ * 直接把导出包写到 targetPath（桌面端正常路径：ZIP 字节不经过 JS）。
+ * 失败时清理临时工作目录；Rust 侧用同目录 .partial + rename 保证旧目标不被破坏。
+ */
+export async function exportDatabaseToPath(
+  platform: Platform,
+  source: ExportSource,
+  selection: ExportSelection,
+  targetPath: string,
+): Promise<ExportSummary> {
+  const prepared = await prepareExport(platform, source, selection);
+  try {
+    if (isInside(prepared.dir, targetPath, platform.kind === 'tauri')) {
+      throw new Error('不能把导出文件写进本次导出的临时目录');
+    }
+    await platform.zip.createFromDirTo(prepared.dir, targetPath, { order: [...MANIFEST_LAST] });
+    return {
+      counts: prepared.counts,
+      warnings: prepared.warnings,
+      fileName: platform.paths.basename(targetPath),
+    };
+  } finally {
+    await removeTree(platform, prepared.dir);
   }
 }

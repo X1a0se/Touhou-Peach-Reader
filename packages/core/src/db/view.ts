@@ -116,6 +116,34 @@ export function articleSeriesPosition(
   return position >= 0 ? { series, index: position + 1 } : null;
 }
 
+/**
+ * 文章在同一系列里的上一篇 / 下一篇。
+ *
+ * 顺序与系列详情页一致：以 series.articleIds 为准、缺失的文章直接跳过。
+ * 文章没有系列、系列不存在、或文章不在目录里时返回 null，调用方不渲染导航。
+ */
+export interface ArticleNeighbors {
+  series: Series;
+  previous: ArticleMeta | null;
+  next: ArticleMeta | null;
+}
+
+export function getArticleNeighbors(snapshot: DBSnapshot, articleId: string): ArticleNeighbors | null {
+  const article = snapshot.maps.articles.get(articleId);
+  const series = article?.seriesId ? snapshot.maps.series.get(article.seriesId) : undefined;
+  if (!series) return null;
+
+  const ordered = compact(series.articleIds.map((id) => snapshot.maps.articles.get(id) ?? null));
+  const index = ordered.findIndex((item) => item.id === articleId);
+  if (index < 0) return null;
+
+  return {
+    series,
+    previous: ordered[index - 1] ?? null,
+    next: ordered[index + 1] ?? null,
+  };
+}
+
 export function getArticleView(snapshot: DBSnapshot, id: string, opts: ViewOptions): ArticleView | null {
   const article = snapshot.maps.articles.get(id);
   if (!article) return null;

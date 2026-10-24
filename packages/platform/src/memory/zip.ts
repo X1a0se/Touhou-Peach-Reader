@@ -68,6 +68,14 @@ export class FflateZip implements IZip {
     return { entries, bytes: total, rejected };
   }
 
+  async createFromDirTo(
+    dirPath: string,
+    targetPath: string,
+    opts?: { order?: string[] },
+  ): Promise<ZipCreateResult> {
+    return this.createFromDir(dirPath, targetPath, opts);
+  }
+
   async createFromDir(
     dirPath: string,
     zipPath: string,

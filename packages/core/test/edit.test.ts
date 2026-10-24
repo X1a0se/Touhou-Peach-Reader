@@ -1,6 +1,6 @@
 import { createMemoryPlatform } from '@tpr/platform/memory';
 import type { RawDatabase } from '@tpr/schema';
-import { makeDatabase } from '@tpr/schema/testing';
+import { makeDatabase, makeTag } from '@tpr/schema/testing';
 import { describe, expect, it } from 'vitest';
 import { ioFor } from '../src/db/workspace.js';
 import { serializeDatabase, writeDatabaseDir } from '../src/db/write.js';
@@ -10,13 +10,13 @@ import { getFeaturedCards } from '../src/db/featured.js';
 import type { DBSnapshot } from '../src/db/snapshot.js';
 import { articleSeriesPosition } from '../src/db/view.js';
 
-async function openDatabase(): Promise<{
+async function openDatabase(source: RawDatabase = makeDatabase()): Promise<{
   platform: ReturnType<typeof createMemoryPlatform>;
   library: Library;
   editor: Editor;
   db: RawDatabase;
 }> {
-  const db = makeDatabase();
+  const db = source;
   const seed = createMemoryPlatform({ dataDir: '/seed' });
   const io = ioFor(seed);
   const markdown = new Map(db.articles.map((article) => [article.id, `# ${article.title}\n\n正文：${article.id}\n`]));
@@ -404,5 +404,145 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
         plotTagIds: series.plotTagIds,
       }),
     ).rejects.toThrow('E_SERIES_ORDER');
+  });
+});
+
+describe('editor: 合并标签', () => {
+  function mergeFixture() {
+    const db = makeDatabase();
+    const target = db.tags.find((tag) => tag.category === 'character');
+    expect(target).toBeTruthy();
+    if (!target) throw new Error('夹具缺少角色标签');
+    const sourceA = makeTag({ category: 'character', name: '魔理沙', aliases: ['Marisa'] });
+    const sourceB = makeTag({ category: 'character', name: '黑白' });
+    db.tags = [...db.tags, sourceA, sourceB];
+
+    const article = db.articles.find((item) => item.title === '系列第一篇');
+    const series = db.series[0];
+    const short = db.articles.find((item) => item.type === 'short');
+    expect(article && series && short).toBeTruthy();
+    if (!article || !series || !short) throw new Error('夹具缺文章或系列');
+
+    article.characterTagIds = [...article.characterTagIds, sourceA.id, sourceB.id];
+    series.characterTagIds = [...series.characterTagIds, sourceA.id];
+    short.characterTagIds = [sourceB.id];
+    return { db, target, sourceA, sourceB, articleId: article.id, seriesId: series.id, shortId: short.id };
+  }
+
+  it('merge-tags-batch: 批量合并同类别标签，别名与引用都落到目标标签并持久化', async () => {
+    const fixture = mergeFixture();
+    const beforeArticle = fixture.db.articles.find((item) => item.id === fixture.articleId);
+    const beforeUpdatedAt = beforeArticle?.updatedAt;
+    const { platform, library, editor } = await openDatabase(fixture.db);
+
+    await editor.mergeTags([fixture.sourceA.id, fixture.sourceB.id], fixture.target.id);
+
+    const snapshot = library.snapshot();
+    expect(snapshot).toBeTruthy();
+    if (!snapshot) return;
+
+    expect(
+      snapshot.tags.some((tag) => tag.id === fixture.sourceA.id || tag.id === fixture.sourceB.id),
+    ).toBe(false);
+    const target = snapshot.tags.find((tag) => tag.id === fixture.target.id);
+    expect(target?.name).toBe(fixture.target.name);
+    expect(target?.aliases).toEqual(expect.arrayContaining(['魔理沙', 'Marisa', '黑白']));
+
+    const article = snapshot.articles.find((item) => item.id === fixture.articleId);
+    expect(article?.characterTagIds.filter((id) => id === fixture.target.id)).toHaveLength(1);
+    expect(article?.characterTagIds).not.toContain(fixture.sourceA.id);
+    expect(article?.characterTagIds).not.toContain(fixture.sourceB.id);
+    expect(article?.updatedAt).toBe(beforeUpdatedAt);
+
+    const series = snapshot.series.find((item) => item.id === fixture.seriesId);
+    expect(series?.characterTagIds).toContain(fixture.target.id);
+    expect(series?.characterTagIds).not.toContain(fixture.sourceA.id);
+
+    const short = snapshot.articles.find((item) => item.id === fixture.shortId);
+    expect(short?.characterTagIds).toEqual([fixture.target.id]);
+
+    const restored = createLibrary(platform);
+    await restored.restore();
+    const restoredTarget = restored.snapshot()?.tags.find((tag) => tag.id === fixture.target.id);
+    expect(restoredTarget?.aliases).toEqual(expect.arrayContaining(['魔理沙', 'Marisa', '黑白']));
+    const restoredShort = restored.snapshot()?.articles.find((item) => item.id === fixture.shortId);
+    expect(restoredShort?.characterTagIds).toEqual([fixture.target.id]);
+  });
+
+  it('merge-tags-category-field: 源引用在错误数组里时归位到目标类别数组', async () => {
+    const db = makeDatabase();
+    const target = db.tags.find((tag) => tag.category === 'character');
+    const source = makeTag({ category: 'character', name: '黑白' });
+    expect(target).toBeTruthy();
+    if (!target) return;
+    db.tags = [...db.tags, source];
+
+    const article = db.articles.find((item) => item.title === '系列第一篇');
+    expect(article).toBeTruthy();
+    if (!article) return;
+    article.plotTagIds = [...article.plotTagIds, source.id];
+
+    const { library, editor } = await openDatabase(db);
+    await editor.mergeTags([source.id], target.id);
+
+    const saved = library.snapshot()?.articles.find((item) => item.id === article.id);
+    expect(saved?.characterTagIds).toContain(target.id);
+    expect(saved?.plotTagIds).not.toContain(target.id);
+    expect(saved?.plotTagIds).not.toContain(source.id);
+  });
+
+  it('merge-tags-general: 通用标签可合并；仍被引用时拒绝且库不变', async () => {
+    const db = makeDatabase();
+    const source = makeTag({ category: 'general', name: '日常' });
+    const target = makeTag({ category: 'general', name: '轻松', aliases: ['治愈'] });
+    db.tags = [...db.tags, source, target];
+
+    const first = await openDatabase(db);
+    await first.editor.mergeTags([source.id], target.id);
+    const merged = first.library.snapshot()?.tags ?? [];
+    expect(merged.some((tag) => tag.id === source.id)).toBe(false);
+    expect(merged.find((tag) => tag.id === target.id)?.aliases).toEqual(
+      expect.arrayContaining(['日常', '治愈']),
+    );
+
+    const db2 = makeDatabase();
+    const source2 = makeTag({ category: 'general', name: '日常' });
+    const target2 = makeTag({ category: 'general', name: '轻松' });
+    db2.tags = [...db2.tags, source2, target2];
+    const article = db2.articles[0];
+    expect(article).toBeTruthy();
+    if (!article) return;
+    article.characterTagIds = [...article.characterTagIds, source2.id];
+
+    const second = await openDatabase(db2);
+    await expect(second.editor.mergeTags([source2.id], target2.id)).rejects.toThrow(
+      '该标签仍被文章或系列引用，不能合并到系列/通用标签',
+    );
+    expect(second.library.snapshot()?.tags.some((tag) => tag.id === source2.id)).toBe(true);
+  });
+
+  it('merge-tags-validation: 空源/自合并/源或目标不存在/跨类别都拒绝且库不变', async () => {
+    const db = makeDatabase();
+    const { library, editor } = await openDatabase(db);
+    const character = db.tags.find((tag) => tag.category === 'character');
+    const plot = db.tags.find((tag) => tag.category === 'plot');
+    expect(character && plot).toBeTruthy();
+    if (!character || !plot) return;
+    const before = library.snapshot()?.tags.length ?? 0;
+
+    await expect(editor.mergeTags([], character.id)).rejects.toThrow('请选择要合并的标签');
+    await expect(editor.mergeTags([character.id], character.id)).rejects.toThrow(
+      '不能把标签合并到自身',
+    );
+    await expect(editor.mergeTags(['t_ffffffffffffffff'], character.id)).rejects.toThrow(
+      '要合并的标签不存在',
+    );
+    await expect(editor.mergeTags([plot.id], character.id)).rejects.toThrow(
+      '只能合并同一类别的标签',
+    );
+    await expect(editor.mergeTags([character.id], 't_ffffffffffffffff')).rejects.toThrow(
+      '标签 t_ffffffffffffffff 不存在',
+    );
+    expect(library.snapshot()?.tags.length).toBe(before);
   });
 });

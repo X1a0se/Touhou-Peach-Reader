@@ -5,8 +5,28 @@
 
 mod commands;
 
+/// 免安装版把 WebView2 的配置放在 exe 同目录，避免系统级 WebView2 配置损坏时无法启动。
+///
+/// 只有可写目录才启用；安装版（Program Files）创建失败时回退到 WebView2 默认目录。
+fn configure_webview2_profile() {
+    if std::env::var_os("WEBVIEW2_USER_DATA_FOLDER").is_some() {
+        return;
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(dir) = exe.parent() else {
+        return;
+    };
+    let profile = dir.join("data").join("EBWebView");
+    if std::fs::create_dir_all(&profile).is_ok() {
+        std::env::set_var("WEBVIEW2_USER_DATA_FOLDER", profile);
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    configure_webview2_profile();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -24,8 +44,8 @@ pub fn run() {
             commands::fs::fs_copy,
             commands::zip::zip_extract_all,
             commands::zip::zip_create_from_dir,
+            commands::zip::zip_create_from_dir_to,
             commands::wallpaper::import_wallpaper,
-            commands::fs::save_export,
             commands::fs::stage_import,
             commands::app::app_info,
             commands::app::install_info,

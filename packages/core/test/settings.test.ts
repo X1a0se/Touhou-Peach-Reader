@@ -2,11 +2,11 @@ import { createMemoryPlatform } from '@tpr/platform/memory';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_DATABASE_SOURCE, REPOSITORY_URL } from '../src/repo.js';
 import {
-  DEFAULT_SETTINGS,
-  DEFAULT_WALLPAPER,
   clampWallpaperBlur,
   clampWallpaperOpacity,
   createSettings,
+  DEFAULT_SETTINGS,
+  DEFAULT_WALLPAPER,
   parseSettings,
   sanitizeWallpaperFile,
   wallpaperPath,
@@ -44,7 +44,10 @@ describe('settings: 全局设置持久化（Goal 11）', () => {
   });
 
   it('settings-corrupt: 坏 JSON / 坏字段回退默认值，不让启动失败', async () => {
-    const broken = createMemoryPlatform({ dataDir: '/app', files: { '/app/settings.json': '{oops' } });
+    const broken = createMemoryPlatform({
+      dataDir: '/app',
+      files: { '/app/settings.json': '{oops' },
+    });
     expect((await createSettings(broken).load()).theme).toBe('system');
 
     const wrongTypes = createMemoryPlatform({
@@ -78,6 +81,35 @@ describe('settings: 全局设置持久化（Goal 11）', () => {
     expect(parsed?.language).toBe('ja-JP');
     expect(parsed?.defaultSource).toBe('  example/tpr-db  ');
     expect(parsed?.extractLimits).toEqual({ maxEntries: 100 });
+  });
+});
+
+describe('settings: 图片压缩开关（Goal 25）', () => {
+  it('compress-default: 默认开启，旧设置缺字段也回退开启', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    expect((await createSettings(platform).load()).compressImages).toBe(true);
+
+    const legacy = createMemoryPlatform({
+      dataDir: '/app',
+      files: { '/app/settings.json': '{"theme":"dark"}' },
+    });
+    expect((await createSettings(legacy).load()).compressImages).toBe(true);
+  });
+
+  it('compress-roundtrip: 关闭后重启仍保持关闭', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const first = createSettings(platform);
+    await first.load();
+    await first.save({ compressImages: false });
+
+    const loaded = await createSettings(platform).load();
+    expect(loaded.compressImages).toBe(false);
+    expect(JSON.parse(await platform.fs.readText('/app/settings.json')).compressImages).toBe(false);
+  });
+
+  it('compress-parse: 非布尔值回退默认开启', () => {
+    expect(parseSettings({ compressImages: 'yes' })?.compressImages).toBe(true);
+    expect(parseSettings({ compressImages: false })?.compressImages).toBe(false);
   });
 });
 

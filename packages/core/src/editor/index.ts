@@ -21,6 +21,8 @@ import {
 } from '@tpr/schema';
 import type { Library } from '../db/library.js';
 
+export * from './document-import.js';
+
 export interface ArticleDraft {
   id?: string;
   type: 'short' | 'series-entry';
@@ -85,6 +87,8 @@ export interface Editor {
   deleteAuthor(id: string): Promise<void>;
   saveTag(draft: TagDraft): Promise<string>;
   deleteTag(id: string): Promise<void>;
+  /** 把同类别的一个或多个标签合并到目标标签；目标 id 不变，源标签被删除 */
+  mergeTags(sourceIds: readonly string[], targetId: string): Promise<void>;
   saveImage(draft: ImageDraft): Promise<string>;
   updateImage(id: string, patch: { kind?: ImageKind; caption?: string }): Promise<void>;
   deleteImage(id: string): Promise<void>;
@@ -101,6 +105,37 @@ function requireTitle(title: string, label: string): string {
   const value = trim(title);
   if (!value) throw new Error(`${label}标题不能为空`);
   return value;
+}
+
+interface TagRefs {
+  characterTagIds: string[];
+  plotTagIds: string[];
+}
+
+/**
+ * 标签合并时改写一个实体的两组标签引用。
+ * 目标类别是角色/情节时把目标归位到对应数组，避免同一标签同时出现在两组里；
+ * 目标类别是系列/通用时只移除源（调用方已保证此时实体没有源引用）。
+ * 返回该实体是否引用了任一源标签。
+ */
+function rewriteMergedTagRefs(refs: TagRefs, sources: ReadonlySet<string>, target: Tag): boolean {
+  const hadSource =
+    refs.characterTagIds.some((id) => sources.has(id)) ||
+    refs.plotTagIds.some((id) => sources.has(id));
+  if (!hadSource) return false;
+
+  let character = refs.characterTagIds.filter((id) => !sources.has(id));
+  let plot = refs.plotTagIds.filter((id) => !sources.has(id));
+  if (target.category === 'character') {
+    plot = plot.filter((id) => id !== target.id);
+    if (!character.includes(target.id)) character = [...character, target.id];
+  } else if (target.category === 'plot') {
+    character = character.filter((id) => id !== target.id);
+    if (!plot.includes(target.id)) plot = [...plot, target.id];
+  }
+  refs.characterTagIds = [...new Set(character)];
+  refs.plotTagIds = [...new Set(plot)];
+  return true;
 }
 
 export function createEditor(platform: Platform, library: Library): Editor {
@@ -315,6 +350,61 @@ export function createEditor(platform: Platform, library: Library): Editor {
           series.characterTagIds = series.characterTagIds.filter((tagId) => tagId !== id);
           series.plotTagIds = series.plotTagIds.filter((tagId) => tagId !== id);
         }
+      });
+    },
+
+    async mergeTags(sourceIds, targetId) {
+      const sources = [...new Set(sourceIds.map((id) => trim(id)).filter(Boolean))];
+      if (sources.length === 0) throw new Error('请选择要合并的标签');
+      if (sources.includes(targetId)) throw new Error('不能把标签合并到自身');
+
+      await library.applyEdit((db) => {
+        const target = db.tags.find((tag) => tag.id === targetId);
+        if (!target) throw new Error(`标签 ${targetId} 不存在`);
+
+        const sourceSet = new Set(sources);
+        const sourceTags = db.tags.filter((tag) => sourceSet.has(tag.id));
+        if (sourceTags.length !== sources.length) throw new Error('要合并的标签不存在');
+        if (sourceTags.some((tag) => tag.category !== target.category)) {
+          throw new Error('只能合并同一类别的标签');
+        }
+
+        // 系列/通用标签没有文章/系列挂接字段：若仍有引用，拒绝合并，避免静默丢数据
+        if (target.category !== 'character' && target.category !== 'plot') {
+          const referenced = (tagId: string): boolean =>
+            db.articles.some(
+              (article) =>
+                article.characterTagIds.includes(tagId) || article.plotTagIds.includes(tagId),
+            ) ||
+            db.series.some(
+              (series) =>
+                series.characterTagIds.includes(tagId) || series.plotTagIds.includes(tagId),
+            );
+          if (sources.some((id) => referenced(id))) {
+            throw new Error('该标签仍被文章或系列引用，不能合并到系列/通用标签');
+          }
+        }
+
+        // 源标签的名称与别名并入目标别名（归一化去重、不覆盖目标主名）
+        const targetKey = normalizeName(target.name);
+        const aliasKeys = new Set((target.aliases ?? []).map((alias) => normalizeName(alias)));
+        const aliases = [...(target.aliases ?? [])];
+        for (const source of sourceTags) {
+          for (const raw of [source.name, ...(source.aliases ?? [])]) {
+            const value = trim(raw);
+            const key = normalizeName(value);
+            if (!value || key === targetKey || aliasKeys.has(key)) continue;
+            aliasKeys.add(key);
+            aliases.push(value);
+          }
+        }
+        if (aliases.length > 0) target.aliases = aliases;
+        else delete target.aliases;
+
+        for (const article of db.articles) rewriteMergedTagRefs(article, sourceSet, target);
+        for (const series of db.series) rewriteMergedTagRefs(series, sourceSet, target);
+
+        db.tags = db.tags.filter((tag) => !sourceSet.has(tag.id));
       });
     },
 

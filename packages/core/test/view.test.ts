@@ -1,7 +1,7 @@
 import { makeArticle, makeAuthor, makeDatabase, makeImage, makeSeries, makeTag } from '@tpr/schema/testing';
 import { describe, expect, it } from 'vitest';
 import { toSnapshot } from '../src/db/snapshot.js';
-import { articleSeriesPosition, getArticleView, getSeriesView } from '../src/db/view.js';
+import { articleSeriesPosition, getArticleNeighbors, getArticleView, getSeriesView } from '../src/db/view.js';
 
 // 不用 node:path：core 的 tsconfig 不带 node 类型，测试里保持纯字符串拼接
 const join = (...parts: string[]): string => parts.join('/');
@@ -150,5 +150,69 @@ describe('articleSeriesPosition', () => {
       ),
     );
     expect(articleSeriesPosition(snapshot2, orphan.id)).toBeNull();
+  });
+});
+
+describe('getArticleNeighbors', () => {
+  it('按 articleIds 顺序返回前后篇，并跳过缺失文章', () => {
+    const { db } = fixture();
+    const snapshot = toSnapshot(db);
+
+    const second = getArticleNeighbors(snapshot, 'a_0000000000000002');
+    expect(second?.series.id).toBe('s_0000000000000001');
+    expect(second?.previous).toBeNull();
+    expect(second?.next?.id).toBe('a_0000000000000001');
+
+    const first = getArticleNeighbors(snapshot, 'a_0000000000000001');
+    expect(first?.previous?.id).toBe('a_0000000000000002');
+    expect(first?.next).toBeNull();
+  });
+
+  it('短篇、未知文章、目录外文章与未知系列都返回 null', () => {
+    const snapshot = toSnapshot(makeDatabase());
+    const short = snapshot.articles.find((article) => article.type === 'short');
+    expect(short).toBeTruthy();
+    if (!short) return;
+    expect(getArticleNeighbors(snapshot, short.id)).toBeNull();
+    expect(getArticleNeighbors(snapshot, 'a_ffffffffffffffff')).toBeNull();
+
+    const db = makeDatabase();
+    const series = db.series[0];
+    expect(series).toBeTruthy();
+    if (!series) return;
+    const orphan = makeArticle({
+      id: 'a_0000000000000003',
+      title: '目录外文章',
+      type: 'series-entry',
+      seriesId: series.id,
+    });
+    const snapshot2 = toSnapshot({ ...db, articles: [...db.articles, orphan] });
+    expect(getArticleNeighbors(snapshot2, orphan.id)).toBeNull();
+
+    const dangling = makeArticle({
+      id: 'a_0000000000000004',
+      title: '悬空系列文章',
+      type: 'series-entry',
+      seriesId: 's_ffffffffffffffff',
+    });
+    const snapshot3 = toSnapshot({ ...db, articles: [...db.articles, dangling] });
+    expect(getArticleNeighbors(snapshot3, dangling.id)).toBeNull();
+  });
+
+  it('单篇系列的前后篇都是 null', () => {
+    const db = makeDatabase();
+    const series = db.series[0];
+    expect(series).toBeTruthy();
+    if (!series) return;
+    const onlyId = series.articleIds[0];
+    expect(onlyId).toBeTruthy();
+    if (!onlyId) return;
+    db.series = [{ ...series, articleIds: [onlyId] }];
+    const snapshot = toSnapshot(db);
+
+    const neighbors = getArticleNeighbors(snapshot, onlyId);
+    expect(neighbors?.previous).toBeNull();
+    expect(neighbors?.next).toBeNull();
+    expect(neighbors?.series.id).toBe(series.id);
   });
 });

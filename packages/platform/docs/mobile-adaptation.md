@@ -27,7 +27,7 @@ apps/desktop ─┬─▶ @tpr/ui ──▶ @tpr/schema
 | 路由 | 沿用 `createHashRouter` | React Navigation，按 §4 映射 |
 | 打包 | `tauri android/ios build` | EAS / Gradle / Xcode |
 
-推荐 A：Rust 侧的 zip/fs 命令（含 zip-slip、符号链接、限额校验）与 `save_export` 都能直接编译到 Android/iOS，安全边界不用重写。
+推荐 A：Rust 侧的 zip/fs 命令（含 zip-slip、符号链接、限额校验）与 `zip_create_from_dir_to` 都能直接编译到 Android/iOS，安全边界不用重写。
 
 ## 3. 需要实现的接口（以路线 A 为主）
 
@@ -66,7 +66,7 @@ Rust `zip` crate 与 `walkdir` 都支持 Android/iOS。需要保留的三条硬�
 ### 3.5 `IOpener` 与 `IAssetUrls`
 
 - `IOpener.openExternal`：桌面是 `opener` 插件；移动端用 `@tauri-apps/plugin-opener` 的移动实现（Android Intent / iOS `UIApplication.open`）。
-- 导出/分享文件：桌面用 `dialog.save` + `save_export`；**移动端没有保存对话框**，需要新增 `share_file` 命令（Android `FileProvider` + `ACTION_SEND`，iOS `UIActivityViewController`），或在 `IOpener` 旁加一个 `IShare` 接口（推荐，语义更清楚）。
+- 导出/分享文件：桌面用 `dialog.save` + `zip_create_from_dir_to`（源目录在 app data 内，ZIP 不读回 JS）；**移动端没有保存对话框**，需要新增 `share_file` 命令（Android `FileProvider` + `ACTION_SEND`，iOS `UIActivityViewController`），或在 `IOpener` 旁加一个 `IShare` 接口（推荐，语义更清楚）。
 - `IAssetUrls`：桌面用 `asset:` 协议；移动端 Tauri 2 同样支持 `asset:`（`convertFileSrc`），把 scope 配成 app data 目录即可。
 
 ### 3.6 触摸与拖拽

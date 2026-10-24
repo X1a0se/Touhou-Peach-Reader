@@ -901,13 +901,27 @@ export interface ExportSelection {
   all?: boolean;                // true = 全库完整备份（优先级最高，不走闭包）
   includeCredits?: boolean;     // 默认 true
 }
-export interface ExportResult {
-  bytes: Uint8Array;
+export interface ExportSummary {
   counts: Counts;
   warnings: Issue[];            // 例如"3 个作者引用缺失，未打包"
-  fileName: string;             // `{name}-{yyyy.MM.dd}.tpr`（清理非法文件名字符）
+  fileName: string;             // `{name}-{yyyyMMdd-HHmm}.tpr`（清理非法文件名字符）
 }
+export interface ExportResult extends ExportSummary {
+  bytes: Uint8Array;
+}
+
+// 桌面端：先弹保存对话框，再由 Rust 直接把工作目录写成目标 .tpr（ZIP 字节不回传 JS）
+export function suggestExportFileName(databaseName: string): string;
+export function exportDatabaseToPath(
+  platform: Platform,
+  source: ExportSource,
+  selection: ExportSelection,
+  targetPath: string,
+): Promise<ExportSummary>;
 ```
+
+- `exportDatabase`（返回 bytes）保留给浏览器预览与测试；桌面端走 `Library.exportToPath`，避免 200 MB 级 ZIP 经 IPC 复制成 JS number 数组。
+- 导出文件名统一为 `{name}-{yyyyMMdd-HHmm}.tpr`；保存对话框只决定目标路径，目标父目录必须已存在。
 
 ---
 
@@ -1257,16 +1271,19 @@ const indexes = new Map(FIELD_NAMES.map((field) => [field, new Index({ tokenize:
 ```ts
 function search(query: string, opts: SearchOptions = {}): SearchHit[] {
   const parsed = parseQuery(query);                       // '#已完结 魔理沙' → {virtualTags:['v:completed'], terms:['魔理沙']}
-  if (isEmptyQuery(parsed)) return [];
+  const explicitTags = normalizeTagNames(opts.tags ?? []); // 结果页多选标签：归一化、去重
+  if (isEmptyQuery(parsed) && explicitTags.length === 0) return [];
   const tokens = queryTokens(parsed);                     // 见下：长 CJK 词拆二元组
-  const first = run(tokens, parsed, opts);
+  const requireTags = unique([...parsed.tagNames, ...explicitTags]); // 并集后 AND
+  const first = run(tokens, parsed, opts, requireTags);
   if (first.length > 0 || parsed.terms.length === 0) return first;
   // 第二段：只保留二元组，放宽召回（"输入错一个字也能找到"）
-  return run(bigramsOnly(tokens), parsed, opts);
+  return run(bigramsOnly(tokens), parsed, opts, requireTags);
 }
 ```
 
 - **查询串必须与索引端用同一套切分**：索引里 CJK 串存的是「整串 + 全部二元组」，所以查询里的长 CJK 词（如 3 字的「魔理沙」）要先拆成二元组再召回；否则这个 3 字 token 在索引中根本不存在，会漏掉最该命中的名字。
+- **多标签（Goal 25）**：`SearchOptions.tags` 接收结果页选中的标签名，与查询串里的 `#标签` 归一去重后取并集，再按 **AND** 过滤（`doc.tagNames` 必须包含全部标签）；只有标签、没有关键词也是合法查询。标签名含空格时无法用 `#` 语法表达，但可以通过多选传入。
 - 字段权重（后处理排序用）：`title ×3`、`people ×2.2`、`tags ×2`、`summary ×1.2`、`body ×1`；同分时 `updatedAt` 新的在前。
 - `parseQuery` 同时支持：`#系列文/#短篇文/#连载中/#已完结`、`#标签名`（任意 tag 名精确匹配）、普通关键词、`"精确短语"`（整串作为单 token 参与召回）。
 
@@ -1293,7 +1310,7 @@ export function buildSnippets(
 
 ### 11.7 结果页数据流（Goal 4）
 
-1. 输入变化 → 200 ms 防抖 → `searchStore.run(query, filter)`（带序号，丢弃过期响应）。
+1. 输入变化 → 200 ms 防抖 → `searchStore.run(query, filter, tags)`（带序号，丢弃过期响应）。
 2. 引擎返回 `rid` 列表 → 从快照取实体 → 文章/系列取 `summary` 做片段源；正文片段在**详情页**才读（搜索页只对前 20 条异步读 `articles/{id}.md` 并缓存，用于"正文命中"高亮）。
 3. 筛选类别映射：
 
@@ -1307,6 +1324,8 @@ export function buildSnippets(
 | 情节 | `tag-plot` | `kind='tag'` + `category='plot'` |
 
 4. 索引失效：快照 `revision` 变化后 500 ms 触发重建（全量但分块）；编辑单篇时可走 `remove+add` 增量，v1 不做增量、留给优化。
+5. **多标签筛选（Goal 25）**：筛选按钮下方可展开标签选择器，支持按名称/别名/分类搜索；选中标签按 AND 组合，与查询串里的 `#标签` 取并集。选择写入 URL 的重复 `tag` 参数（如 `/search?q=茶会&tag=红魔馆&tag=日常`），`q` 为空时省略，便于分享/后退恢复。标签选择器默认收起，只显示前 40 个匹配项并提示总数。
+6. **同系列折叠（Goal 25）**：core 的 `groupSearchItems` 只负责展示分组，不改引擎排名。同一系列命中 ≥2 篇文章时折叠为一行：组头取该系列所有命中里排名最高的一项（文章或系列实体）的位置，系列实体命中时吸收进组头，不再单独占行；组内文章保持原排名顺序。默认收起，展开后显示「第 N 篇」；只命中 1 篇或没有系列归属的文章保持原样。桌面端只调用 core 的分组函数，符合 §13.5。
 
 ### 11.8 性能预算与测试
 
@@ -1318,6 +1337,8 @@ export function buildSnippets(
 | 片段生成 | ≤ 5 ms / 篇 |
 
 测试用例（Goal 4 必过）：标题命中、正文命中、摘要命中、作者**别名**命中（"同一作者的另一个名字能搜到他全部作品"）、`#已完结` 命中全部已完结系列、空查询不崩、含 `.*` 等正则元字符的查询不崩、超长查询（10 KB）不卡死。
+
+Goal 25 追加：只有标签没有关键词可检索；两个标签必须同时满足（AND）；重复/大小写/空白归一化；标签名含空格时通过多选可命中；空查询且无标签仍返回空。系列分组只在同一系列 ≥2 篇时成组，组头位于最高排名项，系列实体被吸收，单篇与无系列条目保持原样且顺序不变。桌面纯函数测试覆盖标签选择归一化/去重、别名与分类搜索、40 条上限和展示名。
 
 ## 12. 随机与十连抽（`@tpr/core/random`）
 
@@ -1751,8 +1772,8 @@ async fn zip_extract_all(app: tauri::AppHandle, zip_path: String, dest_dir: Stri
 | `fs_read_bytes` / `fs_write_bytes` | `readBytes/writeBytes` | 仅用于 ≤ 8 MB 的小文件（图片哈希、上传落盘）；返回 `Vec<u8>` |
 | `fs_exists` / `fs_stat` / `fs_list_dir` / `fs_mkdir` / `fs_remove` / `fs_rename` / `fs_copy` | 同名方法 | 全部先过 `ensure_within(&app_data_dir, path)` |
 | `zip_extract_all` | `IZip.extractAll` | 用 `zip` crate 逐条流式复制（64 KB 缓冲）；拒 symlink、拒 `..`、限额（§5.5）；返回 `{entries, bytes, rejected}` |
-| `zip_create_from_dir` | `IZip.createFromDir` | `walkdir` 遍历 + `ZipWriter` DEFLATE；`manifest.json` 最后写 |
-| `save_export` | `apps/desktop/src/platform/files.ts` 的保存按钮 | **写 app data 之外**：目标路径来自系统保存对话框，只校验 `.tpr` 后缀、绝对路径、父目录存在；内部仍写 `*.tmp` 再 `rename` |
+| `zip_create_from_dir` | `IZip.createFromDir` | `walkdir` 遍历 + `ZipWriter` DEFLATE；`manifest.json` 最后写；用于浏览器/测试的字节导出 |
+| `zip_create_from_dir_to` | `IZip.createFromDirTo` / `exportDatabaseToPath` | **写 app data 之外**：源目录必须在 app data 内，目标来自系统保存对话框；校验绝对路径、`.tpr` 后缀、父目录存在；同目录写 `*.partial`，成功后 `rename` 覆盖，失败删 partial、保留旧目标 |
 | `stage_import` | `apps/desktop/src/platform/files.ts` 的 `stageTprFile` | **读 app data 之外**（Goal 18）：拖入 / 对话框选中的 `.tpr` 先复制到 `imports/staged-{ms}-{safe}.tpr`，后续解压与合并只碰 app data 内的路径；校验绝对路径、`.tpr` 后缀、常规文件、≤1 GB |
 | `app_info` | `apps/desktop/src/platform/app-info.ts` | 只读：返回 `{version, exePath, dataDir}`。`version` 取 `app.package_info()`（与 `tauri.conf.json` / `Cargo.toml` 同源）（Goal 19） |
 | `install_info` | `apps/desktop/src/platform/app-info.ts` | 只读：查 `HKCU\…\Uninstall\Touhou Peach Reader` 的 `InstallLocation` / `DisplayVersion`，返回 `{location, version}` 或 `null`；用于判断当前 exe 是安装版还是免安装版（Goal 20） |
@@ -1760,7 +1781,7 @@ async fn zip_extract_all(app: tauri::AppHandle, zip_path: String, dest_dir: Stri
 | `http_*` | — | **不实现**：网络走 JS `fetch`（见 14.5），避免把 reqwest/TLS 拖进首次编译 |
 
 - 除 `zip_*` 外，其余命令都在 `spawn_blocking` 里跑，避免阻塞 async runtime。
-- 外部路径的例外只有三条：`save_export`（写到用户选的位置）、`import_wallpaper`（读用户选的壁纸）、`stage_import`（把拖入/选中的 `.tpr` 复制进 app data）。三者都只服务"用户在对话框/拖拽里明确指定的单个文件"，并各自校验后缀、绝对路径与大小上限。
+- 外部路径的例外只有三条：`zip_create_from_dir_to`（把导出包写到用户选的位置）、`import_wallpaper`（读用户选的壁纸）、`stage_import`（把拖入/选中的 `.tpr` 复制进 app data）。三者都只服务"用户在对话框/拖拽里明确指定的单个文件"，并各自校验后缀、绝对路径与大小上限。旧 `save_export` 已删除，避免出现"ZIP 字节先回传 JS 再写盘"的第二条路径。
 - zip 9 的 API 细节（实测）：`entry.name()` 返回 `Result<Cow<str>, ZipError>`；`ZipFile<'_, R>` 带泛型参数，辅助函数要写成 `fn is_symlink<R: Read + ?Sized>(f: &ZipFile<'_, R>)`。
 - 错误统一 `Err("ECODE: 可读信息")` 字符串，TS 侧用一个 `mapNativeError()` 转成 `PlatformError`（§5.3）。改错误文案不会破坏分类，因为分类只看 `ECODE` 前缀。
 
@@ -2045,7 +2066,7 @@ Goal 14 追加记录（界面美化 + 5 套配色 + 主界面/文章页壁纸）
 
 - **设置模型**：`AppSettings` 增 `palette: 'peach'|'bamboo'|'moon'|'scarlet'|'ink'` 与 `wallpapers: { home, article }`（各 `{ file, opacity, blur }`）；`sanitizeWallpaperFile` 只接受 `[A-Za-z0-9][A-Za-z0-9._-]{0,127}` 且扩展名在白名单内，`clampWallpaperOpacity` 收敛到 0.1–1、`clampWallpaperBlur` 收敛到 0–20；`SettingsPatch` 让 `wallpapers` 支持只改一个槽（深合并），避免保存主题时把壁纸清空。
 - **平台接口**：新增 `IWallpaperStore { importFile, remove, toUrl }` 并挂到 `Platform.wallpapers`；内存实现把图片存 Map、`toUrl` 返回 data URL；桌面实现 `importFile` 走 Rust `import_wallpaper`、`toUrl` 走 `convertFileSrc($APPDATA/wallpapers/...)`。
-- **Rust `import_wallpaper`**：源路径可在 app data 之外（用户任意目录），但仍校验绝对路径、扩展名、≤20 MB、magic bytes；目标写 `wallpapers/wp-{epoch_ms}.{ext}`。这是继 `save_export` 之后第二个"读/写 app data 之外"的命令，二者都只服务对话框选中的单个文件。
+- **Rust `import_wallpaper`**：源路径可在 app data 之外（用户任意目录），但仍校验绝对路径、扩展名、≤20 MB、magic bytes；目标写 `wallpapers/wp-{epoch_ms}.{ext}`。这是继 `save_export`（Goal 24 后改为 `zip_create_from_dir_to`）之后第二个"读/写 app data 之外"的命令，二者都只服务对话框选中的单个文件。
 - **配色**：`styles.css` 定义 5 套 `[data-palette]` × 深浅 token，`SettingsProvider` 同时切 `class="dark"` 与 `data-palette`；10 组组合的对比度按"面板半透明、正文用 foreground"设计。
 - **组件层**：`Button / Panel / SectionHeading / EmptyState / StatTile` 五个原子件进 `@tpr/ui`；`Layout` 改粘性顶栏 + pill 导航；`Home / Articles / Article / Series / Search / Featured / Favorites / Import / Merge / Credits / Settings / 404` 全部重排，`Editor` 只机械换类名（表单逻辑未动）。
 - **壁纸层三个坑（都实测踩过）**：① `z-index:-1` 时被 `body` 背景盖住 → 把背景色与径向渐变移到 `html`、`body` 改 `transparent`；② 每页各自渲染一层会压住同页静态内容（正文发暗）→ 只在 `Layout` 渲染、按路由选槽；③ `Markdown` 组件早期写死 `text-neutral-900/800/600`、`bg-neutral-50` 等浅色假设 → 深色主题下正文近乎不可见，全部换成 `foreground / muted-foreground / border / muted` 语义 token。
@@ -2083,7 +2104,7 @@ Goal 17 追加记录（封面内联上传）：
 
 Goal 18 追加记录（修复：桌面/对话框路径导入被 app data 限制拦下）：
 
-- **现象**：用户从应用导出 `.tpr` 到桌面（`save_export` 允许外部路径），再拖回应用导入时横幅报 `EACCES: 路径越界（只允许 app data 目录）：\\?\C:\Users\…\Desktop\…tpr`。
+- **现象**：用户从应用导出 `.tpr` 到桌面（当时 `save_export` 允许外部路径；Goal 24 后由 `zip_create_from_dir_to` 承担），再拖回应用导入时横幅报 `EACCES: 路径越界（只允许 app data 目录）：\\?\C:\Users\…\Desktop\…tpr`。
 - **根因**：`library.importZip(path)` → `importDatabaseFromPath` → `platform.zip.extractAll(path, staging)`，而 Rust 的 `zip_extract_all` 仍先过 `ensure_within(app_data)`；拖拽与文件对话框给的正是 app data 之外的绝对路径。导出能成功、导入却失败，是两条路径的权限模型不一致（`save_export` 是例外，解压不是）。Goal 3 的 E2E 用 `importBytes` 与 app data 内路径，恰好绕过了这条分支。
 - **修法**：新增 Rust 命令 `stage_import(source_path) -> String`：校验绝对路径、`.tpr` 后缀、常规文件、≤1 GB，复制到 `$APPDATA/imports/staged-{ms}-{sanitized}.tpr` 并返回该路径。TS 侧 `stageTprFile()`（`apps/desktop/src/platform/files.ts`）调它；`useLibrary.importPath` 与 `MergePage.choose` 改为"先 staging → 再 import/prepare → finally 删除 staged 文件"。解压/合并命令一行未改，安全边界仍是"只碰 app data"。
 - **验证**：真机 CDP 直接拿用户桌面那份 `夹具数据库-20261019-2319.tpr` 调 `stage_import` → 返回 `%APPDATA%\com.touhou.peachreader\imports\staged-….tpr`，`library.importZip(staged)` 导入成功（5 篇文章）、`fs_remove` 清理成功；非 `.tpr` 返回 `EINVAL: 只支持 .tpr 文件`，不存在的路径返回 `ENOENT`。
@@ -2149,6 +2170,45 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 - **发布约定**：Release 标签 = 数据库版本（首个版本 `v1.0.0`，数据库 manifest `1.0.0`），应用版本独立（0.1.5，见「设置 → 关于」）；这样 `checkUpdate` 的 tag/manifest 比较语义不变，不会误报「有新版本」。
 - **设置页**：数据库源下方展示内置默认地址并提供「恢复内置默认」；新增「项目仓库」面板与「喜欢就给个star⭐吧」按钮（`IOpener.openExternal`，失败时面板内报错）。
 
+## Goal 23 追加记录：数据库重命名
+
+- **入口**：设置页底部新增「当前数据库」面板（`apps/desktop/src/pages/SettingsPage.tsx`），复用 `useLibraryContext` 的 `snapshot`；输入框 `aria-label="数据库名称"`、`maxLength=200`，主按钮「保存名称」/「保存中…」，成功后显示「数据库名称已保存」，失败显示红字。保存调用 `services.library.rename(name)`，再 `library.refresh()`，首页「当前数据库」、设置页与导出文件名立即使用新名称。
+- **服务层**：`packages/core/src/db/library.ts` 的 `Library` 增加 `rename(name: string): Promise<void>`；`trim()` 后为空抛「数据库名称不能为空」，超过 200 抛「数据库名称不能超过 200 个字符」；复用 `applyEdit` 的串行写队列（抽成 `persist` / `enqueueEdit`），只改 `draft.manifest.name`，**不动** `databaseId`、目录与文章内容。
+- **内存同步坑**：落盘后把 `current.db.manifest.name` 同步进快照。原 `persist` 只同步 `counts/updatedAt`，不同步名称会导致「保存成功但首页仍旧名」——界面读的是 `current.db`，不是磁盘。
+- **导出**：`packages/core/src/db/export.ts` 的 `safeName(db.manifest.name)` 已按名称生成文件名，改名后导出文件名随之变化；非法字符替换、空白压缩、60 字符截断与空名回落逻辑不变。
+- **测试**：`packages/core/test/library.test.ts` 新增 2 例（core 107 例中包含）：改名（含 trim）后 `snapshot.name`、编辑后名称不回退、导出 `fileName` 前缀、`restore()` 后仍保持；空名与 201 字符被拒、原 name/updatedAt 不变、200 字符可保存。
+- **验证**：`corepack pnpm typecheck`、`corepack pnpm check`（182 全绿）；0.1.6 安装版 CDP 实测：设置页改名「雾雨图书馆」→ 提示保存成功 → 首页「当前数据库」显示新名 → `Page.reload` 后仍在 → 改回「夹具数据库」；磁盘 `manifest.json` 同步。截图 `.tmp/goal23-rename-home.png`。
+- **发布**：0.1.6 已用 GUI 安装器覆盖安装（本机 NSIS 静默 `/S` 在此环境 exit 1 且不落盘，属安装器/环境问题，不是本次代码）；`scripts/release.mjs install()` 补上安装后 `exeVersion` 校验，版本不符即失败，避免再假报「已安装」。`dist/portable` 与 `D:\Touhou Peach Reader Portable` 已刷新为 0.1.6。
+- **教训**：改名不是只写磁盘；`current.db` 是界面读的快照，任何 `manifest` 字段变更都必须在 `persist` 里同步，否则「保存成功但界面不变」。
+
+## Goal 24 追加记录：导出直写（0.1.7）
+
+- **现象**：230 MB 的库点「导出全库 .tpr」后白屏，但 exports 下已留下完整 223 MB ZIP。根因不是打包失败，而是 `exportDatabase` 把整包 ZIP 经 `fs_read_bytes` 读成 `number[]`，再 `Uint8Array.from` + `Array.from`，223 MB 变成约 2.23 亿个 JS number，渲染进程必然 OOM。
+- **API**：`packages/core/src/db/export.ts` 抽出 `prepareExport`，新增 `exportDatabaseToPath` / `suggestExportFileName` / `ExportSummary`；`Library.exportToPath(selection, targetPath)` 直写，不读回 ZIP。`exportDatabase` 的 bytes 语义保留给浏览器与测试。
+- **平台/Rust**：`IZip.createFromDirTo`；Rust `zip_create_from_dir_to` 校验源目录在 app data 内、目标为绝对路径且父目录存在，先写同目录 `*.partial`，成功后 `fs::rename` 覆盖；删除 `save_export`。
+- **UI**：`apps/desktop/src/platform/files.ts` 的 `saveTprFile` 拆成 `pickTprSavePath` + `downloadTprFile`；`useLibrary.exportSelection` 在 Tauri 下先选路径再调 `library.exportToPath`，浏览器预览仍走字节下载。三个导出入口共用该函数。
+- **保护**：目标落在本次临时工作目录内时 core 直接拒绝并清理，避免 `finally` 删掉用户目标；临时目录名带 `Date.now()` 后缀，避免同分钟并发导出互相覆盖。
+- **测试**：core 新增 `export-direct`（目标存在、未对目标调用 `readBytes`、临时目录清空、重新导入）；platform 新增 `createFromDirTo`；Rust 新增 3 例（成功替换、替换失败删 partial、目标校验）。`corepack pnpm typecheck`、`corepack pnpm test`、`cargo test --lib` 全绿。
+- **版本**：0.1.7；发布后验证大库导出、三个入口、取消保存与失败场景。
+
+## Goal 25 追加记录：图片压缩开关、多标签搜索、同系列折叠
+
+- **图片压缩开关**：`AppSettings.compressImages`（默认 `true`）随 `settings.json` 持久化，不进数据库包、不参与导出/合并；`parseSettings` 与 `sanitize` 只接受布尔值，旧设置缺字段或类型错误时回退 `true`。编辑器「图片」页在文件选择器上方提供 `role="switch"` 开关，保存失败在开关旁显示红字；封面内联上传与图片页都先读同一设置。
+- **压缩策略**：新增 `apps/desktop/src/editor/image-upload.ts`，只处理 PNG/JPEG：`createImageBitmap` + canvas 把最长边缩到 2560，`canvas.toBlob('image/webp', 0.85)`；GIF/WebP 或压缩失败、非 WebP 输出、收益不足（< 2048 字节或 < 5%）时保留原图。压缩后扩展名统一 `webp`，提示会写明「已压缩 X → Y」或保留原图的原因；不追溯已上传图片。core 的 `saveImage` API 不变，压缩完全在桌面端浏览器能力内完成。
+- **多标签搜索**：`SearchOptions.tags` 与查询串里的 `#标签` 归一化、去重后取并集，按 AND 过滤；只有标签没有关键词也合法，空查询且无标签仍返回空。桌面端标签选择器支持名称/别名/分类搜索、默认收起、最多显示 40 个匹配项；选中标签写入 URL 的重复 `tag` 参数（`q` 为空时省略），后退/分享可恢复。`#` 联想与原有筛选按钮保持不变。
+- **同系列折叠**：`SearchItem.series` 由 `articleSeriesPosition` 填充；`packages/core/src/search/group.ts` 的 `groupSearchItems` 只做展示分组，不改引擎排名。同一系列命中 ≥2 篇文章时折叠为一行，组头取该系列所有命中（含系列实体）中排名最高的一项，系列实体被吸收，组内文章保持原排名顺序；组头显示「命中 N 篇 · 共 M 篇」，默认收起，展开后显示「第 N 篇」；单篇或无系列命中保持原样。桌面只调用 core，符合 §13.5。
+- **测试与验证**：core 新增多标签 4 例、系列分组 5 例、settings 3 例（共 120 例）；desktop 新增 image-upload 7 例、search-tags 6 例（共 53 例）；全仓 typecheck、test 通过（209 例）。针对改动文件运行 `biome check` 通过；全仓 `biome check .` 仍会命中 `.tmp` 夹具与 Windows CRLF 的历史问题，未批量格式化无关文件。
+- **取舍**：压缩只在浏览器画布可用时启用，不引入新依赖，也不在 core 里解码图片；GIF 动图与 WebP 原样保存，避免丢帧/重复压缩。多标签是 AND 语义，减少标签会扩大结果；分组只作用于当前结果集，搜索排名仍由引擎决定。
+
+## 追加记录：系列目录跳转 / 文章库同系列折叠 / 系列前后篇 / 标签合并
+
+- **编辑器系列目录跳转**：`ArticleOrderPicker` 增加可选 `onOpenArticle`，目录标题变成按钮；`SeriesPanel`/`SeriesForm` 透传到 `EditorPage`，复用已有 `focus` + `useFocusJump`：`setTab('articles')` 后由文章面板打开目标表单。与编辑器搜索跳转一致，未保存的系列表单会被丢弃；缺失文章保持不可点。
+- **文章库同系列折叠**：core 新增 `packages/core/src/db/article-groups.ts` 的 `groupArticlesBySeries(snapshot, articles)`（纯函数、零 IO）：当前结果集内同系列 ≥2 篇时在首个成员位置成组，组内保持输入顺序，`position` 取 `series.articleIds` 的 1 基下标；悬空 seriesId 与不足两篇的系列保持单篇。`/articles` 默认收起，组头显示系列/状态/篇数并可展开，展开状态只在本页组件内。
+- **系列前后篇**：core `getArticleNeighbors(snapshot, articleId)` 按 `series.articleIds` 顺序、跳过缺失文章返回 `previous/next`；文章页新增 `SeriesPager`，在标签之后（正文前）与插图之后（文尾）各渲染一次，首末篇显示「已是第一篇 / 已是最后一篇」，短篇/无系列/不在目录中不渲染，单篇系列整块隐藏。
+- **标签合并**：`Editor.mergeTags(sourceIds, targetId)` 走一次 `library.applyEdit`：只允许同类别；源标签名称与别名按 `normalizeName` 去重后并入目标别名；文章/系列的 `characterTagIds`/`plotTagIds` 去掉源、按目标类别归位并去重；删除源标签，目标 id 不重算。目标是 `series`/`general` 且源仍被引用时直接报错（这两类标签没有挂接字段，避免静默丢引用）。UI 在编辑器「标签」页新增「合并标签…」面板（目标下拉 + 同类别源复选 + 二次确认）。合并不改文章/系列 `updatedAt`；`library.applyEdit` 会自动重算 counts、校验并落盘。
+- **测试与验证**：core 新增 `article-groups.test.ts` 6 例、`view.test.ts` 增加 3 例、`edit.test.ts` 增加 4 例合并测试（core 120→133）；全仓 typecheck 通过、测试 222 全绿（platform 11 + schema 25 + core 133 + desktop 53）。`biome lint` 对改动文件无新增错误；`biome format` 仍会因工作区历史 CRLF 把整文件判为需重排，未批量格式化无关文件。
+- **取舍**：同系列折叠只作用于当前筛选/搜索后的结果集，组内保持当前排序（文章库按更新时间）；不提供全局展开/收起（逐组按钮足够，与搜索结果页一致）。标签合并限定同类别，避免在 `characterTagIds`/`plotTagIds` 之间改变语义；不新增 schema/迁移/导出格式变化。
+
 ---
 
 ## 附：文档自检
@@ -2162,6 +2222,6 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–22 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复与公开发布已追加） |
+| Goal 1–25 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复、公开发布、数据库重命名、导出直写与 Goal 25 已追加） |
 
 

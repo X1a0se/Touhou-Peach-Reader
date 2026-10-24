@@ -97,6 +97,14 @@ class TauriZip implements IZip {
   async createFromDir(dirPath: string, zipPath: string, opts?: { order?: string[] }): Promise<ZipCreateResult> {
     return call('zip_create_from_dir', { dirPath, zipPath, order: opts?.order ?? ['manifest.json'] });
   }
+
+  async createFromDirTo(dirPath: string, targetPath: string, opts?: { order?: string[] }): Promise<ZipCreateResult> {
+    return call('zip_create_from_dir_to', {
+      dirPath,
+      targetPath,
+      order: opts?.order ?? ['manifest.json'],
+    });
+  }
 }
 
 class TauriWallpapers implements IWallpaperStore {

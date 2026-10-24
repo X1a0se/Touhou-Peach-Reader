@@ -1,4 +1,4 @@
-import { getArticleView, type ImageRef } from '@tpr/core';
+import { type ArticleNeighbors, getArticleNeighbors, getArticleView, type ImageRef } from '@tpr/core';
 import { Markdown, Panel, TagChip } from '@tpr/ui';
 import { useEffect, useState } from 'react';
 import { FavoriteButton } from '../components/FavoriteButton.js';
@@ -24,6 +24,61 @@ function CoverImage({ image, toUrl }: { image: ImageRef; toUrl: (path: string) =
       className="h-52 w-[9.5rem] shrink-0 rounded-lg border border-border object-cover shadow-sm"
       loading="lazy"
     />
+  );
+}
+
+function SeriesPager({
+  neighbors,
+  where,
+}: {
+  neighbors: ArticleNeighbors;
+  where: 'top' | 'bottom';
+}) {
+  const { series, previous, next } = neighbors;
+  if (!previous && !next) return null;
+
+  return (
+    <nav
+      aria-label={where === 'top' ? '系列文章导航（文首）' : '系列文章导航（文尾）'}
+      className="flex flex-col gap-2 rounded-xl border border-border bg-surface/60 p-2 text-sm shadow-sm backdrop-blur-sm"
+    >
+      <div className="flex items-stretch gap-2">
+        {previous ? (
+          <Link
+            to={`/article/${previous.id}`}
+            aria-label={`上一篇：${previous.title}`}
+            className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-lg px-3 py-2 transition-colors hover:bg-surface-strong"
+          >
+            <span className="text-[0.68rem] text-muted-foreground">← 上一篇</span>
+            <span className="truncate font-medium">{previous.title}</span>
+          </Link>
+        ) : (
+          <span className="flex min-w-0 flex-1 items-center px-3 py-2 text-xs text-muted-foreground">
+            已是第一篇
+          </span>
+        )}
+        {next ? (
+          <Link
+            to={`/article/${next.id}`}
+            aria-label={`下一篇：${next.title}`}
+            className="flex min-w-0 flex-1 flex-col items-end gap-0.5 rounded-lg px-3 py-2 text-right transition-colors hover:bg-surface-strong"
+          >
+            <span className="text-[0.68rem] text-muted-foreground">下一篇 →</span>
+            <span className="truncate font-medium">{next.title}</span>
+          </Link>
+        ) : (
+          <span className="flex min-w-0 flex-1 items-center justify-end px-3 py-2 text-xs text-muted-foreground">
+            已是最后一篇
+          </span>
+        )}
+      </div>
+      <Link
+        to={`/series/${series.id}`}
+        className="border-t border-border px-3 pt-2 text-center text-xs text-muted-foreground transition-colors hover:text-accent"
+      >
+        返回《{series.title}》目录
+      </Link>
+    </nav>
   );
 }
 
@@ -86,6 +141,7 @@ export function ArticlePage() {
   }
 
   const { article } = view;
+  const neighbors = snapshot ? getArticleNeighbors(snapshot, article.id) : null;
   const toUrl = (path: string) => services.platform.assets.toUrl(path);
 
   return (
@@ -204,6 +260,8 @@ export function ArticlePage() {
           </section>
         ) : null}
 
+        {neighbors ? <SeriesPager neighbors={neighbors} where="top" /> : null}
+
         <Panel className="p-6">
           {bodyError ? (
             <p className="text-sm text-red-600 dark:text-red-300">正文文件缺失或无法读取：{bodyError}</p>
@@ -236,6 +294,8 @@ export function ArticlePage() {
             ))}
           </section>
         ) : null}
+
+        {neighbors ? <SeriesPager neighbors={neighbors} where="bottom" /> : null}
       </article>
     </div>
   );

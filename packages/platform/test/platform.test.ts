@@ -102,6 +102,21 @@ describe('FflateZip', () => {
     expect(await fs.readText('/restore/manifest.json')).toBe('{}');
   });
 
+  it('createFromDirTo 直接写指定目标，内容可解压', async () => {
+    const { fs, zip } = createMemoryPlatform();
+    await fs.writeText('/data/articles/a.json', '{"id":"a"}');
+    await fs.writeText('/data/manifest.json', '{}');
+    await fs.writeText('/direct.tpr', 'old');
+
+    const created = await zip.createFromDirTo('/data', '/direct.tpr', { order: ['manifest.json'] });
+    expect(created.entries).toBe(2);
+
+    const extracted = await zip.extractAll('/direct.tpr', '/restore');
+    expect(extracted.entries).toBe(2);
+    expect(extracted.rejected).toEqual([]);
+    expect(await fs.readText('/restore/articles/a.json')).toBe('{"id":"a"}');
+  });
+
   it('拒绝越界条目并记录 rejected，不中断整体', async () => {
     const { fs, zip } = createMemoryPlatform();
     const bytes = zipSync({

@@ -29,23 +29,23 @@ export async function pickTprFile(): Promise<string | null> {
   return typeof selected === 'string' ? selected : null;
 }
 
-/** 保存对话框 → 写字节；返回用户选择的路径，取消则 null。 */
-export async function saveTprFile(fileName: string, bytes: Uint8Array): Promise<string | null> {
-  if (!isTauri()) {
-    // 浏览器预览：退化成下载
-    const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/zip' });
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = fileName;
-    anchor.click();
-    URL.revokeObjectURL(url);
-    return fileName;
-  }
+/** 只弹保存对话框，返回目标路径；取消则 null（实际写入由 zip_create_from_dir_to 完成）。 */
+export async function pickTprSavePath(fileName: string): Promise<string | null> {
+  if (!isTauri()) return null;
   const target = await save({ defaultPath: fileName, filters: TPR_FILTER });
-  if (target === null) return null;
-  await invoke('save_export', { path: target, bytes: Array.from(bytes) });
-  return target;
+  return target === null ? null : target;
+}
+
+/** 浏览器预览的下载回退；返回下载文件名。 */
+export async function downloadTprFile(fileName: string, bytes: Uint8Array): Promise<string> {
+  const blob = new Blob([bytes as unknown as BlobPart], { type: 'application/zip' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = fileName;
+  anchor.click();
+  URL.revokeObjectURL(url);
+  return fileName;
 }
 
 /**

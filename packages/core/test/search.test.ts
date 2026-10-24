@@ -1,5 +1,5 @@
-import { makeArticle, makeAuthor, makeDatabase, makeSeries, makeTag } from '@tpr/schema/testing';
 import { createMemoryPlatform } from '@tpr/platform/memory';
+import { makeArticle, makeAuthor, makeDatabase, makeSeries, makeTag } from '@tpr/schema/testing';
 import { describe, expect, it } from 'vitest';
 import { createServices } from '../src/create.js';
 import { createContentStore } from '../src/db/content-store.js';
@@ -137,9 +137,15 @@ describe('search index', () => {
 
   it('筛选：短篇 / 系列 / 作者 / 角色', async () => {
     const { engine } = await buildFixture();
-    expect(engine.search('魔理沙', { filter: 'short' }).every((hit) => hit.kind === 'article')).toBe(true);
-    expect(engine.search('日常', { filter: 'series' }).every((hit) => hit.kind === 'series')).toBe(true);
-    expect(engine.search('魔理沙', { filter: 'author' }).every((hit) => hit.kind === 'author')).toBe(true);
+    expect(
+      engine.search('魔理沙', { filter: 'short' }).every((hit) => hit.kind === 'article'),
+    ).toBe(true);
+    expect(engine.search('日常', { filter: 'series' }).every((hit) => hit.kind === 'series')).toBe(
+      true,
+    );
+    expect(
+      engine.search('魔理沙', { filter: 'author' }).every((hit) => hit.kind === 'author'),
+    ).toBe(true);
     expect(
       engine.search('魔理沙', { filter: 'tag-character' }).every((hit) => hit.kind === 'tag'),
     ).toBe(true);
@@ -162,6 +168,42 @@ describe('search index', () => {
     expect(engine.search('魔法使').length).toBeGreaterThan(0);
     engine.dispose();
     expect(engine.search('魔法使')).toEqual([]);
+  });
+});
+
+describe('search 多标签（Goal 25）', () => {
+  it('空查询 + 多标签只返回同时满足的文档', async () => {
+    const { engine, entry, short } = await buildFixture();
+    const hits = engine.search('', { tags: ['雾雨魔理沙', '红魔馆'] });
+    expect(hits.filter((hit) => hit.kind === 'article').map((hit) => hit.id)).toEqual([entry.id]);
+    expect(hits.some((hit) => hit.id === short.id)).toBe(false);
+  });
+
+  it('显式标签与关键词一起按 AND 过滤', async () => {
+    const { engine, entry } = await buildFixture();
+    const hits = engine.search('茶会', { tags: ['红魔馆', ' 雾雨魔理沙 '] });
+    expect(hits.map((hit) => hit.id)).toEqual([entry.id]);
+  });
+
+  it('重复标签去重后不改变结果', async () => {
+    const { engine, entry } = await buildFixture();
+    const hits = engine.search('', { tags: ['红魔馆', '红魔馆', ' 红魔馆 '] });
+    expect(hits.filter((hit) => hit.kind === 'article').map((hit) => hit.id)).toEqual([entry.id]);
+  });
+
+  it('标签名里的空格按归一化规则匹配', () => {
+    const engine = createSearchEngine();
+    const base = {
+      kind: 'article' as const,
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      virtual: [],
+      tokens: {},
+    };
+    engine.add([
+      { ...base, rid: 'a:1', id: '1', tagNames: ['魔法 森林'] },
+      { ...base, rid: 'a:2', id: '2', tagNames: ['森林'] },
+    ]);
+    expect(engine.search('', { tags: ['魔法 森林'] }).map((hit) => hit.id)).toEqual(['1']);
   });
 });
 
@@ -252,6 +294,19 @@ describe('search service（导入后的真实数据流）', () => {
 
     const completed = await services.search.search('#已完结');
     expect(completed.items.some((item) => item.kind === 'series')).toBe(true);
+
+    // 多标签筛选：空查询 + 两个标签，只留同时带两个标签的系列第一篇
+    const tagged = await services.search.search('', {
+      tags: ['雾雨魔理沙', '红魔馆'],
+    });
+    expect(tagged.items.map((item) => item.title)).toEqual(['系列第一篇']);
+
+    // 系列条目带 series 引用（篇号 + 总篇数）
+    const firstEntry = all.items.find(
+      (item) => item.kind === 'article' && item.series?.title === '示例系列',
+    );
+    expect(firstEntry?.series).toMatchObject({ status: 'completed', total: 2 });
+    expect(firstEntry?.series?.index).toBeGreaterThanOrEqual(1);
 
     // 结果里的片段来自正文，且标出了命中词
     const withSnippet = all.items.find((item) => item.snippets.length > 0);

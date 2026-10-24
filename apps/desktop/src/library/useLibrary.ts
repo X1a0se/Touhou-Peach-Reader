@@ -1,7 +1,14 @@
-import type { DBSnapshot, ExportSelection, Services } from '@tpr/core';
+import { suggestExportFileName, type DBSnapshot, type ExportSelection, type Services } from '@tpr/core';
 import type { Issue } from '@tpr/schema';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { onTauriDrop, pickTprFile, readFileBytes, saveTprFile, stageTprFile } from '../platform/files.js';
+import {
+  downloadTprFile,
+  onTauriDrop,
+  pickTprFile,
+  pickTprSavePath,
+  readFileBytes,
+  stageTprFile,
+} from '../platform/files.js';
 
 export type LibraryStatus = 'loading' | 'empty' | 'ready';
 
@@ -119,10 +126,20 @@ export function useLibrary(services: Services): LibraryState {
       setBusy(true);
       setError(null);
       try {
-        const result = await services.library.export(selection);
-        const saved = await saveTprFile(result.fileName, result.bytes);
-        setWarnings((prev) => [...prev, ...result.warnings]);
-        setMessage(saved ? `已导出到 ${saved}` : '已生成导出文件（未保存）');
+        if (services.platform.kind === 'tauri') {
+          // 桌面端：先选目标，再让 Rust 直接把工作目录写成 .tpr；ZIP 不进 JS。
+          const target = await pickTprSavePath(suggestExportFileName(snapshot.manifest.name));
+          if (!target) return;
+          const result = await services.library.exportToPath(selection, target);
+          setWarnings((prev) => [...prev, ...result.warnings]);
+          setMessage(`已导出到 ${target}`);
+        } else {
+          // 浏览器预览：保留字节下载回退，只适合小库。
+          const result = await services.library.export(selection);
+          const saved = await downloadTprFile(result.fileName, result.bytes);
+          setWarnings((prev) => [...prev, ...result.warnings]);
+          setMessage(`已导出到 ${saved}`);
+        }
       } catch (cause) {
         setError(describe(cause));
       } finally {

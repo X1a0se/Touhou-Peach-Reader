@@ -1,6 +1,7 @@
 //! 文件系统命令（design §14.4）。
 //!
-//! 全部先过 `ensure_within(&app_data_dir, ...)`：JS 只能碰 app data 目录内的路径。
+//! 大部分命令先过 `ensure_within(&app_data_dir, ...)`：JS 只能碰 app data 目录内的路径。
+//! `stage_import` 是显式例外：只读用户拖入/选中的外部 `.tpr`，复制进 app data 后再处理。
 //! 错误统一成 `"ECODE: 可读信息"` 字符串，TS 侧 `mapNativeError()` 只看 ECODE 前缀。
 
 use std::fs;
@@ -218,37 +219,10 @@ pub async fn fs_copy(app: AppHandle, from: String, to: String) -> Result<(), Str
     fs::copy(&from, &to).map(|_| ()).map_err(io_err)
 }
 
-/// 导出保存：唯一的例外——路径由用户在系统保存对话框里选定，因此不做 app data 限制。
-/// 仍然强制 `.tpr` 后缀与"父目录必须已存在"，不允许借它创建目录树或写任意文件名。
-#[tauri::command]
-pub async fn save_export(path: String, bytes: Vec<u8>) -> Result<(), String> {
-    let target = PathBuf::from(&path);
-    let has_tpr_ext = target
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("tpr"))
-        .unwrap_or(false);
-    if !has_tpr_ext {
-        return Err("EINVAL: 导出文件必须以 .tpr 结尾".to_string());
-    }
-    if !target.is_absolute() {
-        return Err("EINVAL: 需要绝对路径".to_string());
-    }
-    let parent = target
-        .parent()
-        .ok_or_else(|| "EINVAL: 路径没有父目录".to_string())?;
-    if !parent.exists() {
-        return Err("ENOENT: 目标目录不存在".to_string());
-    }
-    tauri::async_runtime::spawn_blocking(move || write_atomic(&target, &bytes))
-        .await
-        .map_err(|e| format!("EIO: {e}"))?
-}
-
 /// 导入暂存：拖入 / 对话框选中的 `.tpr` 在 app data 之外，先复制进
 /// `$APPDATA/imports/staged-{ms}-{safe}.tpr`，后续解压与合并只碰 app data 内的路径。
 ///
-/// 这是 `save_export` 之外第二个“外部路径”例外：**只读**源文件，不往外部写；
+/// 这是“外部路径”例外之一：**只读**源文件，不往外部写；
 /// 仍然限制 `.tpr` 后缀、绝对路径、常规文件与 1 GB 上限。
 #[tauri::command]
 pub async fn stage_import(app: AppHandle, source_path: String) -> Result<String, String> {

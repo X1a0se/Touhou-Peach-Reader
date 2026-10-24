@@ -56,6 +56,8 @@ export interface SearchHit {
 export interface SearchOptions {
   filter?: FilterKind;
   limit?: number;
+  /** 调用方显式选中的标签名（如多选筛选器），与查询串里的 `#标签` 一起按 AND 过滤。 */
+  tags?: readonly string[];
 }
 
 export interface SearchEngine {
@@ -147,6 +149,7 @@ export function createSearchEngine(): SearchEngine {
     tokens: readonly string[],
     parsed: ReturnType<typeof parseQuery>,
     opts: SearchOptions,
+    explicitTags: readonly string[],
   ): SearchHit[] => {
     const filter = opts.filter ?? 'all';
     const limit = opts.limit ?? DEFAULT_LIMIT;
@@ -170,13 +173,14 @@ export function createSearchEngine(): SearchEngine {
     }
 
     const requireVirtual = parsed.virtualTags;
-    const requireTags = parsed.tagNames.map(normalizeTagName);
+    const requireTags = [...new Set([...parsed.tagNames.map(normalizeTagName), ...explicitTags])];
 
     const candidates: SearchHit[] = [];
     const consider = (doc: SearchDoc, score: number) => {
       if (!matchesFilter(doc, filter)) return;
       if (!requireVirtual.every((tag) => doc.virtual.includes(tag))) return;
-      if (requireTags.length > 0 && !requireTags.every((name) => doc.tagNames.includes(name))) return;
+      if (requireTags.length > 0 && !requireTags.every((name) => doc.tagNames.includes(name)))
+        return;
       candidates.push({
         kind: doc.kind,
         id: doc.id,
@@ -207,7 +211,10 @@ export function createSearchEngine(): SearchEngine {
 
   const search = (query: string, opts: SearchOptions = {}): SearchHit[] => {
     const parsed = parseQuery(query);
-    if (isEmptyQuery(parsed)) return [];
+    const explicitTags = [
+      ...new Set((opts.tags ?? []).map(normalizeTagName).filter((name) => name.length > 0)),
+    ];
+    if (isEmptyQuery(parsed) && explicitTags.length === 0) return [];
 
     // 索引里的 CJK 串存的是「整串 + 二元组」，查询串里的长 CJK 词必须同样拆成二元组，
     // 否则「魔理沙」这个 3 字词在索引中不存在，会漏召回。
@@ -217,13 +224,13 @@ export function createSearchEngine(): SearchEngine {
     ].flatMap((token) => (isCjk(token) && token.length > 2 ? bigramsOf(token) : [token]));
     const baseTokens = sanitizeTokens(queryTokens);
 
-    const first = run(baseTokens, parsed, opts);
+    const first = run(baseTokens, parsed, opts, explicitTags);
     if (first.length > 0 || parsed.terms.length === 0) return first;
 
     // 第二段：只保留二元组，放宽召回
     const relaxed = sanitizeTokens(bigramsOnly(baseTokens));
     if (relaxed.length === 0) return first;
-    return run(relaxed, parsed, opts);
+    return run(relaxed, parsed, opts, explicitTags);
   };
 
   return {
@@ -241,7 +248,8 @@ export function createSearchEngine(): SearchEngine {
 }
 
 function ridOf(hit: SearchHit): string {
-  const prefix = hit.kind === 'article' ? 'a' : hit.kind === 'series' ? 's' : hit.kind === 'author' ? 'p' : 't';
+  const prefix =
+    hit.kind === 'article' ? 'a' : hit.kind === 'series' ? 's' : hit.kind === 'author' ? 'p' : 't';
   return `${prefix}:${hit.id}`;
 }
 

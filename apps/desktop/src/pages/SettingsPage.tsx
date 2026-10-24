@@ -204,6 +204,9 @@ export function SettingsPage() {
   const library = useLibraryContext();
   const { settings, ready, save } = useSettingsContext();
 
+  const snapshot = library.snapshot;
+  const currentVersion = snapshot?.manifest.version ?? null;
+
   const [source, setSource] = useState(settings.defaultSource);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -212,6 +215,10 @@ export function SettingsPage() {
   const [runtime, setRuntime] = useState<AppRuntimeInfo | null>(null);
   const [runtimeLoading, setRuntimeLoading] = useState(true);
   const [repoError, setRepoError] = useState<string | null>(null);
+  const [databaseName, setDatabaseName] = useState('');
+  const [renaming, setRenaming] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
+  const [nameNotice, setNameNotice] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -230,8 +237,9 @@ export function SettingsPage() {
     setSource(settings.defaultSource);
   }, [ready]);
 
-  const snapshot = library.snapshot;
-  const currentVersion = snapshot?.manifest.version ?? null;
+  useEffect(() => {
+    setDatabaseName(snapshot?.manifest.name ?? '');
+  }, [snapshot?.manifest.name]);
 
   const persist = async (patch: SettingsPatch): Promise<void> => {
     setError(null);
@@ -294,6 +302,22 @@ export function SettingsPage() {
     } catch (cause) {
       setStatus(null);
       setError(describe(cause));
+    }
+  };
+
+  const renameDatabase = async (): Promise<void> => {
+    if (!snapshot) return;
+    setNameError(null);
+    setNameNotice(null);
+    setRenaming(true);
+    try {
+      await services.library.rename(databaseName);
+      await library.refresh();
+      setNameNotice('数据库名称已保存');
+    } catch (cause) {
+      setNameError(describe(cause));
+    } finally {
+      setRenaming(false);
     }
   };
 
@@ -492,11 +516,63 @@ export function SettingsPage() {
         </p>
       </Panel>
 
-      <Panel tone="plain" className="rounded-xl border border-border bg-surface/40 p-5 text-sm text-muted-foreground">
-        <p>
-          当前库：{snapshot ? `${snapshot.manifest.name}（${snapshot.manifest.databaseId}，schema ${snapshot.manifest.schemaVersion}）` : '未打开'}
-        </p>
-        <p className="mt-1">数据库包版本：{currentVersion ?? '—'}</p>
+      <Panel className="grid gap-3">
+        <SectionHeading
+          title="当前数据库"
+          description="名称只影响界面显示与导出文件名；databaseId、目录结构与文章数据都不变。"
+        />
+        {snapshot ? (
+          <form
+            className="grid gap-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void renameDatabase();
+            }}
+          >
+            <label className="grid gap-1 text-sm">
+              <span className="font-medium">数据库名称</span>
+              <input
+                aria-label="数据库名称"
+                className={inputClass}
+                value={databaseName}
+                maxLength={200}
+                placeholder="给这个库起个名字"
+                disabled={renaming}
+                onChange={(event) => {
+                  setDatabaseName(event.target.value);
+                  setNameError(null);
+                  setNameNotice(null);
+                }}
+              />
+              <span className="text-xs text-muted-foreground">
+                1–200 个字符；保存后首页「当前数据库」、设置页与导出文件名立即更新。
+              </span>
+            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="submit"
+                variant="primary"
+                disabled={
+                  renaming ||
+                  databaseName.trim() === '' ||
+                  databaseName.trim() === snapshot.manifest.name
+                }
+              >
+                {renaming ? '保存中…' : '保存名称'}
+              </Button>
+              <span className="break-all font-mono text-xs text-muted-foreground">
+                {snapshot.manifest.databaseId} · schema {snapshot.manifest.schemaVersion} · 包版本{' '}
+                {currentVersion ?? '—'}
+              </span>
+            </div>
+            {nameError !== null && <p className="text-xs text-red-500">{nameError}</p>}
+            {nameNotice !== null && (
+              <p className="text-xs text-emerald-600 dark:text-emerald-300">{nameNotice}</p>
+            )}
+          </form>
+        ) : (
+          <p className="text-sm text-muted-foreground">尚未打开数据库。</p>
+        )}
       </Panel>
     </div>
   );

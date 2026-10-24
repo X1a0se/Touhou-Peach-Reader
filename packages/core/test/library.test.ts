@@ -115,6 +115,40 @@ describe('library: 导入 / 持久化 / 导出 round-trip', () => {
     expect(bodyOf(b?.db as RawDatabase)).toBe(bodyOf(a?.db as RawDatabase));
   });
 
+  it('export-direct: exportToPath 直写目标、不把 ZIP 读回 JS，且清理临时目录', async () => {
+    const db = makeDatabase();
+    const { bytes } = await packDatabase(db, '/seed');
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const library = createLibrary(platform);
+    await library.importBytes(bytes);
+
+    await platform.fs.mkdir('/out');
+    const target = '/out/backup.tpr';
+    const readPaths: string[] = [];
+    const readBytes = platform.fs.readBytes.bind(platform.fs);
+    platform.fs.readBytes = async (path: string) => {
+      readPaths.push(path);
+      return readBytes(path);
+    };
+
+    const summary = await library.exportToPath({ all: true }, target);
+    expect(summary.fileName).toBe('backup.tpr');
+    expect(summary.warnings).toEqual([]);
+    expect(summary.counts.articles).toBe(db.articles.length);
+    expect(await platform.fs.exists(target)).toBe(true);
+    expect(readPaths).not.toContain(target);
+
+    const exportsDir = platform.paths.join(platform.paths.dataDir, 'exports');
+    if (await platform.fs.exists(exportsDir)) {
+      expect(await platform.fs.listDir(exportsDir)).toEqual([]);
+    }
+
+    const reopened = await createLibrary(createMemoryPlatform({ dataDir: '/appB' })).importBytes(
+      await platform.fs.readBytes(target),
+    );
+    expect(reopened.snapshot.articles.length).toBe(db.articles.length);
+  });
+
   it('export-subset: 只导出一篇时系列不随包，作者/标签按引用裁剪', async () => {
     const db = makeDatabase();
     const { bytes } = await packDatabase(db, '/seed');
@@ -158,5 +192,47 @@ describe('library: 导入 / 持久化 / 导出 round-trip', () => {
     const reopened = await createLibrary(platform).restore();
     expect(reopened?.manifest.counts.tags).toBe(after?.manifest.counts.tags);
     expect(reopened?.manifest.counts.articles).toBe(after?.manifest.counts.articles);
+  });
+
+  it('rename: 改名写入磁盘、snapshot 与导出文件名同步，重启后仍在', async () => {
+    const db = makeDatabase();
+    const { bytes } = await packDatabase(db, '/seed');
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const library = createLibrary(platform);
+    await library.importBytes(bytes);
+
+    await library.rename('  雾雨图书馆  ');
+    expect(library.snapshot()?.manifest.name).toBe('雾雨图书馆');
+
+    // 改名不影响实体数据，后续编辑也不会把名字改回去
+    const editor = createEditor(platform, library);
+    await editor.saveTag({ category: 'character', name: '改名后标签' });
+    expect(library.snapshot()?.manifest.name).toBe('雾雨图书馆');
+
+    const exported = await library.export({ all: true });
+    expect(exported.fileName.startsWith('雾雨图书馆-')).toBe(true);
+
+    const reopened = await createLibrary(platform).restore();
+    expect(reopened?.manifest.name).toBe('雾雨图书馆');
+  });
+
+  it('rename-reject: 空名与超长名被拒绝，原名称与 updatedAt 不变', async () => {
+    const db = makeDatabase();
+    const { bytes } = await packDatabase(db, '/seed');
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const library = createLibrary(platform);
+    await library.importBytes(bytes);
+    const before = library.snapshot()?.manifest;
+
+    await expect(library.rename('   ')).rejects.toThrow('数据库名称不能为空');
+    await expect(library.rename('x'.repeat(201))).rejects.toThrow('数据库名称不能超过 200 个字符');
+
+    const after = library.snapshot()?.manifest;
+    expect(after?.name).toBe(before?.name);
+    expect(after?.updatedAt).toBe(before?.updatedAt);
+
+    // 200 字符是允许的上界
+    await library.rename('x'.repeat(200));
+    expect(library.snapshot()?.manifest.name).toBe('x'.repeat(200));
   });
 });

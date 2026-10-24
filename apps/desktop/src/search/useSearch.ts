@@ -1,5 +1,6 @@
 import type { FilterKind, SearchItem, Services } from '@tpr/core';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { normalizeSelectedTags } from './tags.js';
 
 export type SearchStatus = 'idle' | 'indexing' | 'running' | 'done' | 'error';
 
@@ -24,8 +25,11 @@ const EMPTY: SearchState = {
 export interface SearchController extends SearchState {
   query: string;
   filter: FilterKind;
+  /** 多选标签，结果需同时满足（AND） */
+  tags: readonly string[];
   setQuery(value: string): void;
   setFilter(value: FilterKind): void;
+  setTags(values: readonly string[]): void;
 }
 
 const DEBOUNCE_MS = 200;
@@ -37,6 +41,7 @@ const DEBOUNCE_MS = 200;
 export function useSearch(services: Services, enabled: boolean): SearchController {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterKind>('all');
+  const [tags, setTags] = useState<readonly string[]>([]);
   const [state, setState] = useState<SearchState>(EMPTY);
   const seq = useRef(0);
 
@@ -69,7 +74,7 @@ export function useSearch(services: Services, enabled: boolean): SearchControlle
     const current = seq.current + 1;
     seq.current = current;
 
-    if (trimmed.length === 0) {
+    if (trimmed.length === 0 && tags.length === 0) {
       setState(EMPTY);
       return;
     }
@@ -77,7 +82,7 @@ export function useSearch(services: Services, enabled: boolean): SearchControlle
     const timer = setTimeout(() => {
       setState((prev) => ({ ...prev, status: 'running' }));
       void services.search
-        .search(trimmed, { filter })
+        .search(trimmed, { filter, tags })
         .then((result) => {
           if (seq.current !== current) return;
           setState({
@@ -100,16 +105,26 @@ export function useSearch(services: Services, enabled: boolean): SearchControlle
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [query, filter, enabled, services]);
+  }, [query, filter, tags, enabled, services]);
 
   const changeQuery = useCallback((value: string) => setQuery(value), []);
   const changeFilter = useCallback((value: FilterKind) => setFilter(value), []);
+  const changeTags = useCallback((values: readonly string[]) => {
+    setTags((prev) => {
+      const next = normalizeSelectedTags(values);
+      return prev.length === next.length && prev.every((value, index) => value === next[index])
+        ? prev
+        : next;
+    });
+  }, []);
 
   return {
     ...state,
     query,
     filter,
+    tags,
     setQuery: changeQuery,
     setFilter: changeFilter,
+    setTags: changeTags,
   };
 }

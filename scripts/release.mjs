@@ -7,7 +7,7 @@
  * 所以版本号散落在 5 个文件里，必须有一个单一入口来 bump / 构建 / 覆盖安装 / 核对。
  *
  * 用法：
- *   node scripts/release.mjs release    一条命令：check + build + 覆盖安装版 + 刷新 dist/portable + 核对
+ *   node scripts/release.mjs release    一条命令：check + build + 覆盖安装版 + 刷新 dist/portable（并同步便携镜像）+ 核对
  *   node scripts/release.mjs status     只核对版本与目录，不改任何文件
  *   node scripts/release.mjs build      跑 check + tauri build（产物在 target/release）
  *   node scripts/release.mjs install    把 NSIS 安装包静默装到注册表里的 InstallLocation
@@ -40,6 +40,8 @@ const NSIS_DIR = join(ROOT, 'apps/desktop/src-tauri/target/release/bundle/nsis')
 const DIST_DIR = join(ROOT, 'dist');
 const PORTABLE_DIR = join(DIST_DIR, 'portable');
 const PORTABLE_NAME = 'Touhou Peach Reader.exe';
+/** 便携版镜像目录：每次刷新 dist/portable 后同步过去（TPR_PORTABLE_MIRROR 可覆盖） */
+const MIRROR_DIR = process.env.TPR_PORTABLE_MIRROR ?? 'D:\\Touhou Peach Reader Portable';
 const TAURI_CONF = join(ROOT, 'apps/desktop/src-tauri/tauri.conf.json');
 const CARGO_TOML = join(ROOT, 'apps/desktop/src-tauri/Cargo.toml');
 
@@ -147,8 +149,8 @@ function line(label, value, note = '') {
   console.log(`  ${label.padEnd(14, ' ')} ${String(value ?? '—').padEnd(28, ' ')} ${note}`);
 }
 
-function portableManifest() {
-  const file = join(PORTABLE_DIR, 'manifest.json');
+function manifestOf(dir) {
+  const file = join(dir, 'manifest.json');
   if (!existsSync(file)) return null;
   try {
     return JSON.parse(read(file));
@@ -164,8 +166,10 @@ function status() {
   const portableSha = existsSync(PORTABLE_EXE) ? sha256(PORTABLE_EXE) : null;
   const installer = newestInstaller();
   const installed = installedInfo();
-  const folder = portableManifest();
+  const folder = manifestOf(PORTABLE_DIR);
   const folderExe = join(PORTABLE_DIR, PORTABLE_NAME);
+  const mirror = manifestOf(MIRROR_DIR);
+  const mirrorExe = join(MIRROR_DIR, PORTABLE_NAME);
 
   console.log('\nTouhou Peach Reader · 发布一致性\n');
   line('根 package', versions.root);
@@ -181,6 +185,11 @@ function status() {
   } else {
     line('免安装目录', '未打包', '运行 pnpm release:portable 或 pnpm release');
   }
+  if (mirror && existsSync(mirrorExe)) {
+    line('便携镜像', `${mirror.version}（文件 ${exeVersion(mirrorExe)}）`, MIRROR_DIR);
+  } else {
+    line('便携镜像', existsSync(MIRROR_DIR) ? '未同步' : '目录不存在', MIRROR_DIR);
+  }
   if (installed) {
     line('安装版', `${installed.version}（文件 ${installed.fileVersion}）`, installed.location);
     if (installed.sha) line('  哈希', installed.sha.slice(0, 16));
@@ -195,6 +204,14 @@ function status() {
   if (portable !== target) problems.push(`构建产物版本 ${portable ?? '缺失'} ≠ ${target}`);
   if (!folder) problems.push(`免安装目录未打包（期望 dist/portable 里是 ${target}）`);
   else if (folder.version !== target) problems.push(`免安装目录版本 ${folder.version} ≠ ${target}`);
+  if (existsSync(MIRROR_DIR)) {
+    if (!mirror) problems.push(`便携镜像未同步（${MIRROR_DIR} 里没有 manifest.json）`);
+    else if (mirror.version !== target) problems.push(`便携镜像版本 ${mirror.version} ≠ ${target}`);
+    else if (!existsSync(mirrorExe)) problems.push(`便携镜像缺少 ${PORTABLE_NAME}`);
+    else if (existsSync(folderExe) && sha256(mirrorExe) !== sha256(folderExe)) {
+      problems.push(`便携镜像的 ${PORTABLE_NAME} 与 dist/portable 不一致`);
+    }
+  }
   if (!installed) problems.push('尚未安装（安装版不存在）');
   else {
     if (installed.version !== target) problems.push(`安装版注册版本 ${installed.version} ≠ ${target}`);
@@ -212,13 +229,14 @@ function status() {
   if (problems.length === 0) {
     console.log(`✔ 一致：安装版与免安装目录都是 ${target}`);
     console.log(`  免安装版：${folderExe}`);
+    if (existsSync(MIRROR_DIR)) console.log(`  便携镜像：${MIRROR_DIR}`);
     console.log(`  安装版：  ${join(installed.location, 'touhou-peach-reader.exe')}`);
     if (hashNote) console.log(`  ${hashNote}`);
     return 0;
   }
   console.log('✖ 不一致：');
   for (const problem of problems) console.log(`   - ${problem}`);
-  console.log('\n修复：`pnpm release`（= 构建 + 覆盖安装 + 刷新 dist/portable）。');
+  console.log('\n修复：`pnpm release`（= 构建 + 刷新 dist/portable 并同步便携镜像 + 覆盖安装 + 核对）。');
   return 1;
 }
 
@@ -273,13 +291,19 @@ function install(quiet = false) {
   });
   if (result.status !== 0) fail(`安装器退出码 ${result.status}`);
 
-  // NSIS 是异步解压的，等新 exe 落地再核对
+  // NSIS 是异步解压的，等新 exe 落地再核对；静默安装在本机可能直接退出 0 而不落盘。
   const exe = join(target, 'touhou-peach-reader.exe');
   for (let i = 0; i < 40; i += 1) {
     if (existsSync(exe) && exeVersion(exe) === versions.root) break;
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   }
-  if (!existsSync(exe)) fail(`安装后找不到 ${exe}`);
+  const actual = existsSync(exe) ? exeVersion(exe) : null;
+  if (actual !== versions.root) {
+    fail(
+      `安装未生效：${exe} 的版本是 ${actual ?? '缺失'}，期望 ${versions.root}。\n` +
+        `   本机 NSIS 静默安装可能不落盘，请手动运行 ${installerName} 完成 GUI 安装。`,
+    );
+  }
   console.log(`✔ 已安装到 ${target}\n`);
   return quiet ? 0 : status();
 }
@@ -319,9 +343,35 @@ function packagePortable() {
   };
   writeFileSync(join(PORTABLE_DIR, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
   console.log(`✔ 免安装目录已刷新：${PORTABLE_DIR}\n`);
+  mirrorPortable();
 }
 
-/** 一条命令：构建 → 覆盖安装版 → 刷新免安装目录 → 核对。 */
+/**
+ * 把刚刷新好的 `dist/portable` 同步到便携版镜像目录。
+ * 只复制顶层文件，不动镜像里的 data/、backup/ 等子目录；镜像目录不存在时跳过并说明原因。
+ */
+function mirrorPortable() {
+  if (process.platform !== 'win32') return;
+  if (!existsSync(MIRROR_DIR)) {
+    console.log(`  跳过便携镜像：${MIRROR_DIR} 不存在（可用 TPR_PORTABLE_MIRROR 指定其他目录）\n`);
+    return;
+  }
+
+  const files = readdirSync(PORTABLE_DIR).filter((name) => statSync(join(PORTABLE_DIR, name)).isFile());
+  for (const name of files) {
+    try {
+      copyFileSync(join(PORTABLE_DIR, name), join(MIRROR_DIR, name));
+    } catch (error) {
+      fail(
+        `无法写入便携镜像 ${join(MIRROR_DIR, name)}：${error.code ?? error.message}\n` +
+          '   如果应用正从该目录运行，请先退出 Touhou Peach Reader 再重试。',
+      );
+    }
+  }
+  console.log(`✔ 便携镜像已同步（${files.length} 个文件）：${MIRROR_DIR}\n`);
+}
+
+/** 一条命令：构建 → 刷新免安装目录（含便携镜像）→ 覆盖安装版 → 核对。 */
 function release() {
   const pids = runningProcesses();
   if (pids.length > 0) {
@@ -330,8 +380,9 @@ function release() {
     );
   }
   build();
-  install(true);
+  // 先刷新 dist/portable 与便携镜像：即便后面的 NSIS 安装失败，免安装交付物也是最新的
   packagePortable();
+  install(true);
   return status();
 }
 
