@@ -27,8 +27,8 @@
 
 | 用途 | 文件 |
 |---|---|
-| 安装版（推荐） | `TouhouPeachReader-0.1.6-x64-setup.exe` |
-| 免安装版 | `TouhouPeachReader-0.1.6-portable.exe` |
+| 安装版（推荐） | `TouhouPeachReader-0.1.7-x64-setup.exe` |
+| 免安装版 | `TouhouPeachReader-0.1.7-portable.exe` |
 | 数据库 | `TouhouPeachReader-DB-1.0.0.tpr` |
 
 发布页：<https://github.com/X1a0se/Touhou-Peach-Reader/releases/latest>
@@ -84,6 +84,7 @@ corepack pnpm typecheck    # 全包类型检查
 corepack pnpm test         # 全包单测
 corepack pnpm check        # typecheck + test + 依赖边界 + Tauri 泄漏检查
 corepack pnpm release      # 一条命令更新安装版与 dist/portable 免安装版（也可双击 发布更新.cmd）
+corepack pnpm release:publish  # 把 dist/release 里的安装包与免安装版补发到 GitHub Release
 ```
 
 > Windows 上若 `corepack enable` 因权限失败，直接用 `corepack pnpm <script>` 即可；`tauri.conf.json` 的 `before*Command` 也已写成这种形式。
@@ -118,6 +119,7 @@ node scripts/release.mjs --set 0.1.2   # 需要升版本号时，先统一改 5 
 
 - 仓库：<https://github.com/X1a0se/Touhou-Peach-Reader>（公开）。
 - 每个 Release 提供三件套：NSIS 安装版、免安装 exe、`.tpr` 数据库；标签跟随**数据库版本**，应用版本见「设置 → 关于」。
+- 数据库版本没变、只更新程序时，用 `corepack pnpm release:publish` 更新同一个 Release（换资产、改标题、删掉旧版本的安装包），不要另开标签——`/releases/latest` 必须始终挂着 `.tpr`。凭据读 `GH_TOKEN`，没设就直接用 git 已经配好的凭据管理器账号。
 - 应用内置默认数据库源 = `https://github.com/X1a0se/Touhou-Peach-Reader/releases/latest`；不再支持镜像前缀，GitHub API 与下载都直连。
 
 ## 结构
@@ -131,7 +133,7 @@ packages/
 apps/
   desktop/   Tauri 2 壳 + 路由 + 页面组装
              src-tauri/src/commands/  fs / zip（含导出直写）（Rust）
-scripts/     依赖边界检查、Tauri 泄漏检查、图标生成、发布一致性（release.mjs）
+scripts/     依赖边界检查、Tauri 泄漏检查、图标生成、发布一致性（release.mjs）、发布到 GitHub Release（publish-release.mjs）
 dist/        发布产物（git 忽略）：portable/ 免安装目录、安装包
 发布更新.cmd  双击更新两版（内部 corepack pnpm release）
 ```
