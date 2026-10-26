@@ -19,7 +19,7 @@
 | UI | React 18 + Vite + Tailwind + shadcn/ui | 复用 `@app/ui` 包 | 组件库不绑定 DOM 特有 API 的放 core |
 | 状态 | Zustand | 复用 | 状态管理纯 TS |
 | 搜索 | FlexSearch（内存索引） | 复用 | 支持中文分词可后续替换 |
-| 本地存储 | SQLite（`tauri-plugin-sql`） | 复用同一 schema | 或用文件系统 JSON 持久化，SQLite 更适合未来规模 |
+| 本地存储 | SQLite（自研 rusqlite 命令，图片/正文以 BLOB 存储；`.tpr` 仍是 JSON+文件交换格式） | 复用同一 schema | 插件走 JSON IPC 会整图进 JS 内存，单库 225 MB 图片改用自定义协议读取 |
 | 打包 | `tauri build` | — | — |
 | 数据库包 | ZIP（JSON + 图片资源） | 复用同一格式 | 见下 |
 

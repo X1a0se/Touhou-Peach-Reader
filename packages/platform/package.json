@@ -12,7 +12,8 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "fflate": "0.8.3"
+    "fflate": "0.8.3",
+    "sql.js": "1.15.1"
   },
   "devDependencies": {
     "vitest": "5.0.5"

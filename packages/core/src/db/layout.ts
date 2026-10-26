@@ -7,6 +7,8 @@ export interface DbIo {
 }
 
 export const LAYOUT = {
+  database: 'database.sqlite',
+  legacyDir: 'legacy',
   manifest: 'manifest.json',
   authors: 'authors.json',
   tags: 'tags.json',

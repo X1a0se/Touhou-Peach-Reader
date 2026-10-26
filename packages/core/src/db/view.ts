@@ -22,7 +22,7 @@ export interface ImageRef {
   file: string;
   kind: ImageAsset['kind'];
   caption: string | null;
-  /** 包内相对路径拼上库目录后的绝对路径，交给 `assets.toUrl` */
+  /** 包内相对路径拼上库目录后的绝对路径；本地 BLOB 图片优先用 `assets.imageUrl(dir, id)`，此字段作兼容回退 */
   path: string;
 }
 

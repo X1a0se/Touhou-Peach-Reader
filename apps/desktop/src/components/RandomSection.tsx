@@ -3,6 +3,7 @@ import { Button, EmptyState, Panel, SectionHeading } from '@tpr/ui';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useServices } from '../context.js';
+import { imageSource } from '../lib/images.js';
 import { TagLinks } from './TagLinks.js';
 
 export function RandomSection({ snapshot }: { snapshot: DBSnapshot }) {
@@ -15,7 +16,7 @@ export function RandomSection({ snapshot }: { snapshot: DBSnapshot }) {
     if (!imageId || !loaded) return null;
     const image = snapshot.maps.images.get(imageId);
     if (!image) return null;
-    return services.platform.assets.toUrl(services.platform.paths.join(loaded.dir, image.file));
+    return imageSource(services.platform, loaded.dir, image);
   };
 
   const drawOne = () => {

@@ -28,6 +28,9 @@ fn configure_webview2_profile() {
 pub fn run() {
     configure_webview2_profile();
     tauri::Builder::default()
+        .register_uri_scheme_protocol("peach", |context, request| {
+            commands::sql::image_response(context.app_handle(), request.uri())
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
@@ -47,6 +50,11 @@ pub fn run() {
             commands::zip::zip_create_from_dir_to,
             commands::wallpaper::import_wallpaper,
             commands::fs::stage_import,
+            commands::sql::sql_query,
+            commands::sql::sql_batch,
+            commands::sql::sql_read_blob,
+            commands::sql::sql_read_blob_to_file,
+            commands::sql::sql_write_blob,
             commands::app::app_info,
             commands::app::install_info,
         ])

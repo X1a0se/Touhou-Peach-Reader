@@ -3,14 +3,19 @@ import { appDataDir } from '@tauri-apps/api/path';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { PlatformError, mapNativeError } from '@tpr/platform';
 import type {
+  BlobSource,
   DirEntry,
   FileStat,
   IFileSystem,
+  ISql,
   IWallpaperStore,
   IZip,
   INetwork,
   Platform,
   RejectedEntry,
+  SqlRow,
+  SqlStatement,
+  SqlValue,
   ZipCreateResult,
   ZipExtractResult,
 } from '@tpr/platform';
@@ -65,6 +70,62 @@ class TauriFileSystem implements IFileSystem {
   }
   async copy(from: string, to: string): Promise<void> {
     return call('fs_copy', { from, to });
+  }
+}
+
+function bytesOf(value: unknown): Uint8Array | null {
+  if (value instanceof ArrayBuffer) return new Uint8Array(value);
+  if (value instanceof Uint8Array) return value;
+  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (Array.isArray(value) && value.every((item) => typeof item === 'number')) {
+    return Uint8Array.from(value as number[]);
+  }
+  return null;
+}
+
+class TauriSql implements ISql {
+  async query(path: string, sql: string, params: SqlValue[] = []): Promise<SqlRow[]> {
+    return call('sql_query', { path, sql, params });
+  }
+
+  async batch(path: string, statements: SqlStatement[]): Promise<void> {
+    return call('sql_batch', {
+      path,
+      statements: statements.map((statement) => ({
+        sql: statement.sql,
+        params: statement.params ?? [],
+      })),
+    });
+  }
+
+  async readBlob(path: string, sql: string, params: SqlValue[] = []): Promise<Uint8Array | null> {
+    const raw = await call<unknown>('sql_read_blob', { path, sql, params });
+    const bytes = bytesOf(raw);
+    if (bytes === null) {
+      throw new PlatformError('EIO', 'SQL 图片读取返回了不支持的数据类型');
+    }
+    return bytes.byteLength === 0 ? null : bytes;
+  }
+
+  async readBlobToFile(
+    path: string,
+    sql: string,
+    params: SqlValue[],
+    targetPath: string,
+  ): Promise<boolean> {
+    return call('sql_read_blob_to_file', { path, sql, params, targetPath });
+  }
+
+  async writeBlob(
+    path: string,
+    sql: string,
+    params: SqlValue[],
+    source: BlobSource,
+  ): Promise<void> {
+    if (source instanceof Uint8Array) {
+      return call('sql_write_blob', { path, sql, params, bytes: Array.from(source) });
+    }
+    return call('sql_write_blob', { path, sql, params, sourcePath: source.file });
   }
 }
 
@@ -206,12 +267,14 @@ export async function createTauriPlatform(): Promise<Platform> {
   const dataDir = await appDataDir();
   const tools = makePathTools(dataDir);
   const fs = new TauriFileSystem();
+  const sql = new TauriSql();
   const zip = new TauriZip(fs, dataDir, tools.join);
   const wallpapers = new TauriWallpapers(fs, dataDir, tools.join);
 
   return {
     kind: 'tauri',
     fs,
+    sql,
     zip,
     paths: {
       dataDir,
@@ -222,6 +285,14 @@ export async function createTauriPlatform(): Promise<Platform> {
     assets: {
       kind: 'asset-protocol',
       toUrl: (absPath: string) => convertFileSrc(absPath),
+      imageUrl: (databaseDir: string, imageId: string) => {
+        const databaseId = tools.basename(databaseDir);
+        const safe = /^[A-Za-z0-9_-]{1,128}$/;
+        if (!safe.test(databaseId) || !safe.test(imageId)) return null;
+        const useHttp =
+          typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
+        return `${useHttp ? 'http://peach.localhost' : 'peach://localhost'}/image/${databaseId}/${imageId}`;
+      },
     },
     opener: {
       async openExternal(url: string): Promise<void> {

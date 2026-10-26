@@ -141,7 +141,8 @@ dist/        发布产物（git 忽略）：portable/ 免安装目录、安装�
 ## 数据位置
 
 - Windows：`%APPDATA%\com.touhou.peachreader\`
-  - `workspace/{databaseId}/`：当前库（与 `.tpr` 同构的目录）
+  - `workspace/{databaseId}/database.sqlite`：当前库（实体、正文与图片 BLOB 全在 SQLite 内）
+  - `workspace/{databaseId}/legacy/`：旧版 JSON 工作区迁移后的备份（不参与读取，可手工删除）
   - `imports/`、`exports/`：临时导入/导出
   - `user/{databaseId}.json`：收藏
   - `settings.json`：设置

@@ -2,6 +2,7 @@ import { createMemoryPlatform } from '@tpr/platform/memory';
 import type { RawDatabase } from '@tpr/schema';
 import { makeDatabase, makeTag } from '@tpr/schema/testing';
 import { describe, expect, it } from 'vitest';
+import { readImageBlob } from '../src/db/sql/store.js';
 import { ioFor } from '../src/db/workspace.js';
 import { serializeDatabase, writeDatabaseDir } from '../src/db/write.js';
 import { createLibrary, type Library } from '../src/db/library.js';
@@ -163,7 +164,7 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
     expect(library.snapshot()?.featured.some((entry) => entry.targetId === articleId)).toBe(false);
   });
 
-  it('edit-image: 上传图片写文件，改 kind 时移动文件，删除时清理引用', async () => {
+  it('edit-image: 上传图片写 BLOB，改 kind 时更新元数据，删除时清理数据与引用', async () => {
     const { platform, library, editor } = await openDatabase();
     const article = library.snapshot()?.articles[0];
     const imageId = await editor.saveImage({
@@ -176,13 +177,12 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
     const image = library.snapshot()?.images.find((item) => item.id === imageId);
     expect(image?.caption).toBe('封面配文');
     const dir = library.current()?.dir ?? '';
-    expect(await platform.fs.exists(platform.paths.join(dir, image?.file ?? ''))).toBe(true);
+    expect(await readImageBlob(platform, dir, imageId)).toEqual(new Uint8Array([1, 2, 3, 4]));
 
     await editor.updateImage(imageId, { kind: 'illustration', caption: '改过的配文' });
     const moved = library.snapshot()?.images.find((item) => item.id === imageId);
     expect(moved?.file).toContain('/illustration/');
-    expect(await platform.fs.exists(platform.paths.join(dir, moved?.file ?? ''))).toBe(true);
-    expect(await platform.fs.exists(platform.paths.join(dir, image?.file ?? ''))).toBe(false);
+    expect(await readImageBlob(platform, dir, imageId)).toEqual(new Uint8Array([1, 2, 3, 4]));
 
     if (!article) throw new Error('夹具缺少文章');
     await editor.saveArticle({
@@ -200,7 +200,7 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
     });
     await editor.deleteImage(imageId);
     expect(library.snapshot()?.images.some((item) => item.id === imageId)).toBe(false);
-    expect(await platform.fs.exists(platform.paths.join(dir, moved?.file ?? ''))).toBe(false);
+    expect(await readImageBlob(platform, dir, imageId)).toBeNull();
     expect(library.snapshot()?.articles[0]?.coverImageId).toBeUndefined();
   });
 

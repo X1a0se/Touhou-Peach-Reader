@@ -24,6 +24,7 @@ import { ImageFilePicker } from '../components/ImageFilePicker.js';
 import { SeriesPicker } from '../components/SeriesPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
 import { useServices } from '../context.js';
+import { imageSource } from '../lib/images.js';
 import type { DraftStore } from '../editor/drafts.js';
 import { formatBytes, prepareImageUpload, uploadNotice } from '../editor/image-upload.js';
 import { IMAGE_ACCEPT, validateImageFile } from '../editor/images.js';
@@ -117,9 +118,7 @@ function CoverField({
   const selected = images.find((image) => image.id === value);
   const loaded = services.library.current();
   const previewUrl =
-    selected && loaded
-      ? services.platform.assets.toUrl(services.platform.paths.join(loaded.dir, selected.file))
-      : '';
+    selected && loaded ? imageSource(services.platform, loaded.dir, selected) : '';
 
   const upload = async (file: File): Promise<void> => {
     const invalid = validateImageFile(file);
@@ -2097,8 +2096,8 @@ function ImagesPanel({
   const [settingsError, setSettingsError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, { kind: ImageKind; caption: string }>>({});
   const loaded = services.library.current();
-  const toUrl = (file: string) =>
-    loaded ? services.platform.assets.toUrl(services.platform.paths.join(loaded.dir, file)) : '';
+  const toUrl = (image: { id: string; file: string }) =>
+    loaded ? imageSource(services.platform, loaded.dir, image) : '';
   const visibleImages = visibleIds
     ? snapshot.images.filter((image) => visibleIds.has(image.id))
     : snapshot.images;
@@ -2225,7 +2224,7 @@ function ImagesPanel({
               className="flex gap-3 rounded-xl border border-border bg-surface/60 p-3"
             >
               <img
-                src={toUrl(image.file)}
+                src={toUrl(image)}
                 alt={image.caption ?? image.id}
                 className="h-24 w-16 shrink-0 rounded object-cover"
               />

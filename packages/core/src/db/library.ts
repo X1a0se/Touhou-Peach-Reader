@@ -10,11 +10,10 @@ import {
 } from './export.js';
 import type { ImportOutcome } from './import.js';
 import { importDatabaseFromBytes, importDatabaseFromPath } from './import.js';
-import { computeCounts, normalizeDatabase } from './normalize.js';
-import { readDatabaseDir } from './read.js';
-import { pruneDatabaseDir, serializeDatabase, writeDatabaseDir } from './write.js';
+import { ensureLocalDatabase } from './migrate.js';
+import { computeCounts } from './normalize.js';
+import { databasePathOf, readSqliteFromFile, saveDatabase } from './sql/store.js';
 import { toSnapshot, type DBSnapshot } from './snapshot.js';
-import { ioFor } from './workspace.js';
 import { readActive, workspacePath } from './workspace.js';
 
 export interface LoadedDatabase {
@@ -41,7 +40,7 @@ export interface Library {
   readonly revision: number;
   /**
    * 编辑器专用：在结构化克隆出来的草稿上改，校验通过才替换内存态并整体落盘。
-   * 所有写入串行执行，避免快速连点造成 `.tmp` 竞争（design §9.1）。
+   * 所有写入串行执行，避免快速连点造成 SQLite 事务交错（design §9.5）。
    */
   applyEdit(build: (draft: RawDatabase) => void): Promise<void>;
   /**
@@ -61,20 +60,20 @@ export function createLibrary(platform: Platform): Library {
   let writeQueue: Promise<void> = Promise.resolve();
 
   async function loadFrom(dir: string, databaseId: string): Promise<LoadedDatabase> {
-    const io = ioFor(platform);
-    const raw = await readDatabaseDir(io, dir);
-    const { db } = normalizeDatabase(raw);
+    await ensureLocalDatabase(platform, dir);
+    const dbPath = databasePathOf(platform, dir);
+    const db = await readSqliteFromFile(platform, dbPath);
     loaded = {
       databaseId,
       dir,
       db,
-      contents: createContentStore(io, dir),
+      contents: createContentStore(platform, dbPath),
     };
     revision += 1;
     return loaded;
   }
 
-  /** 在草稿上改、校验、整体落盘；所有写操作共用同一条队列。 */
+  /** 在草稿上改、校验，再用差异事务写回 SQLite；所有写操作共用同一条队列。 */
   async function persist(build: (draft: RawDatabase) => void): Promise<void> {
     const current = loaded;
     if (!current) throw new Error('尚未打开数据库，无法编辑');
@@ -83,36 +82,22 @@ export function createLibrary(platform: Platform): Library {
     draft.manifest.updatedAt = new Date().toISOString();
     // computeCounts 返回新对象（不改入参），必须回写，否则首页计数永远停在导入时的值
     draft.manifest.counts = computeCounts(draft);
-    // 编辑后包内文件集合会变（新增正文/图片、改 kind），校验前必须重算
-    draft.filePaths = new Set([
-      ...draft.articles.flatMap((article) =>
-        typeof article.content === 'object' && article.content !== null ? [article.content.file] : [],
-      ),
-      ...draft.images.map((image) => image.file),
-    ]);
+    // SQLite 路径下没有独立文件可校验；正文行由 content store 保证，图片字节由编辑器/合并写入。
+    delete draft.filePaths;
     const report = validateDatabase(draft);
     const error = report.errors[0];
     if (error) throw new Error(`${error.code}: ${error.message}`);
 
-    const io = ioFor(platform);
-    const dirtyPath = io.join(current.dir, '.dirty');
-    await platform.fs.writeText(dirtyPath, JSON.stringify({ at: new Date().toISOString() }));
-    const markdown = new Map<string, string>();
+    // 正文独立存表：没有行的文章先补空行，编辑后删除的文章由差异事务清掉。
     for (const article of draft.articles) {
-      try {
-        markdown.set(article.id, await current.contents.read(article.id));
-      } catch {
-        markdown.set(article.id, '');
-      }
+      if (!(await current.contents.has(article.id))) await current.contents.write(article.id, '');
     }
-    const files = serializeDatabase(draft, markdown);
-    await writeDatabaseDir(io, current.dir, files);
-    // 覆盖式写入不会删旧文件：必须清掉已删除的实体，否则重启会"复活"。
-    // keep 必须同时包含 JSON/Markdown 与图片二进制：serializeDatabase 只产出文本，
-    // 漏掉 image.file 会把所有图片当"已删除"清掉（导入后封面全丢）。
-    await pruneDatabaseDir(io, current.dir, new Set([...files.map((file) => file.path), ...draft.filePaths]));
-    if (await platform.fs.exists(dirtyPath)) await platform.fs.remove(dirtyPath);
+    await saveDatabase(platform, current.dir, current.db, draft);
 
+    const nextIds = new Set(draft.articles.map((article) => article.id));
+    for (const article of current.db.articles) {
+      if (!nextIds.has(article.id)) current.contents.invalidate(article.id);
+    }
     current.db.manifest.counts = draft.manifest.counts;
     // 改名也必须回写，否则 snapshot 与首页仍显示旧名
     current.db.manifest.name = draft.manifest.name;
@@ -126,11 +111,16 @@ export function createLibrary(platform: Platform): Library {
       credits: draft.credits,
     });
     current.db.manifest.updatedAt = draft.manifest.updatedAt;
-    current.db.filePaths = draft.filePaths;
+    current.db.filePaths = new Set([
+      ...draft.articles.map((article) =>
+        typeof article.content === 'object' && article.content !== null ? article.content.file : '',
+      ).filter((file) => file.length > 0),
+      ...draft.images.map((image) => image.file),
+    ]);
     revision += 1;
   }
 
-  /** 所有写操作串行入队，避免快速连点造成 `.tmp` 竞争（design §9.1）。 */
+  /** 所有写操作串行入队，避免快速连点造成 SQLite 事务交错（design §9.5）。 */
   function enqueueEdit(build: (draft: RawDatabase) => void): Promise<void> {
     const run = (): Promise<void> => persist(build);
     return writeQueue.then(run, run);

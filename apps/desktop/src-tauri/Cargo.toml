@@ -1,6 +1,6 @@
 [package]
 name = "touhou-peach-reader"
-version = "0.1.7"
+version = "0.1.8"
 description = "东方同人阅读器"
 edition = "2021"
 rust-version = "1.77"
@@ -18,6 +18,7 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+rusqlite = { version = "0.41", features = ["bundled"] }
 zip = { version = "9", default-features = false, features = ["deflate"] }
 walkdir = "2"
 

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createServices } from '../src/create.js';
 import { createContentStore } from '../src/db/content-store.js';
 import { normalizeDatabase } from '../src/db/normalize.js';
+import { databasePathOf, writeSqliteDatabase } from '../src/db/sql/store.js';
 import { toSnapshot } from '../src/db/snapshot.js';
 import { ioFor } from '../src/db/workspace.js';
 import { serializeDatabase, writeDatabaseDir } from '../src/db/write.js';
@@ -15,7 +16,6 @@ import { bigramsOnly, tokenizeZh } from '../src/search/tokenize.js';
 
 async function buildFixture() {
   const platform = createMemoryPlatform();
-  const io = ioFor(platform);
   const dir = platform.paths.join(platform.paths.dataDir, 'workspace', 'db_test');
   await platform.fs.mkdir(dir);
 
@@ -34,7 +34,6 @@ async function buildFixture() {
     type: 'series-entry',
     seriesId: series.id,
     title: '第一篇 茶会',
-    content: { file: 'articles/entry.md' },
     authorIds: [author.id],
     characterTagIds: [character.id],
     plotTagIds: [plot.id],
@@ -43,7 +42,6 @@ async function buildFixture() {
     type: 'short',
     title: '魔法使的午后',
     summary: '帕秋莉在图书馆里读书。',
-    content: { file: 'articles/short.md' },
     authorIds: [author.id],
     characterTagIds: [character.id],
   });
@@ -61,9 +59,13 @@ async function buildFixture() {
     { withFiles: false },
   );
 
-  const contents = createContentStore(io, dir);
-  await contents.write(entry.id, '# 第一篇 茶会\n\n灵梦和魔理沙在红魔馆喝茶。\n');
-  await contents.write(short.id, '# 魔法使的午后\n\n帕秋莉·诺蕾姬在图书馆里读魔导书。\n');
+  const markdown = new Map([
+    [entry.id, '# 第一篇 茶会\n\n灵梦和魔理沙在红魔馆喝茶。\n'],
+    [short.id, '# 魔法使的午后\n\n帕秋莉·诺蕾姬在图书馆里读魔导书。\n'],
+  ]);
+  const dbPath = databasePathOf(platform, dir);
+  await writeSqliteDatabase(platform, dbPath, raw, markdown);
+  const contents = createContentStore(platform, dbPath);
 
   const snapshot = toSnapshot(raw);
   const built = await buildSearchIndex(snapshot, { content: contents, chunk: 1 });

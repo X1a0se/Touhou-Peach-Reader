@@ -1,4 +1,4 @@
-import type { ArticleMeta } from '@tpr/schema';
+import type { ArticleMeta, ImageAsset } from '@tpr/schema';
 import {
   type ArticleListRow,
   type DBSnapshot,
@@ -11,6 +11,7 @@ import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
+import { imageSource } from '../lib/images.js';
 
 type TypeFilter = 'all' | 'short' | 'series-entry';
 
@@ -39,7 +40,7 @@ function ArticleCard({
   article: ArticleMeta;
   position: number | null;
   snapshot: DBSnapshot | null;
-  toUrl: (file: string) => string;
+  toUrl: (image: ImageAsset) => string;
 }) {
   const series = article.seriesId ? snapshot?.maps.series.get(article.seriesId) : undefined;
   const cover = article.coverImageId ? snapshot?.maps.images.get(article.coverImageId) : undefined;
@@ -54,7 +55,7 @@ function ArticleCard({
       >
         {cover ? (
           <img
-            src={toUrl(cover.file)}
+            src={toUrl(cover)}
             alt={cover.caption ?? article.title}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
             loading="lazy"
@@ -114,7 +115,7 @@ function ArticleSeriesGroup({
 }: {
   row: Extract<ArticleListRow, { kind: 'group' }>;
   snapshot: DBSnapshot;
-  toUrl: (file: string) => string;
+  toUrl: (image: ImageAsset) => string;
   expanded: boolean;
   onToggle(): void;
 }) {
@@ -175,8 +176,8 @@ export function ArticlesPage() {
   const [expandedSeries, setExpandedSeries] = useState<ReadonlySet<string>>(() => new Set());
 
   const loaded = services.library.current();
-  const toUrl = (file: string): string =>
-    loaded ? services.platform.assets.toUrl(services.platform.paths.join(loaded.dir, file)) : '';
+  const toUrl = (image: ImageAsset): string =>
+    loaded ? imageSource(services.platform, loaded.dir, image) : '';
 
   const articles = useMemo(() => {
     if (!snapshot) return [];

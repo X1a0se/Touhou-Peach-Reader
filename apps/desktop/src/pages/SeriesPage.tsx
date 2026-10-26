@@ -5,6 +5,7 @@ import { FavoriteButton } from '../components/FavoriteButton.js';
 import { TagLinks } from '../components/TagLinks.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
+import { imageSource } from '../lib/images.js';
 
 const STATUS_LABEL: Record<string, string> = {
   ongoing: '连载中',
@@ -54,7 +55,8 @@ export function SeriesPage() {
   }
 
   const { series } = view;
-  const toUrl = (path: string) => services.platform.assets.toUrl(path);
+  const toUrl = (image: { id: string; file: string }) =>
+    loaded ? imageSource(services.platform, loaded.dir, image) : '';
 
   return (
     <article className="flex flex-col gap-6">
@@ -76,7 +78,7 @@ export function SeriesPage() {
         <div className="relative flex flex-col gap-4 sm:flex-row">
           {view.cover ? (
             <img
-              src={toUrl(view.cover.path)}
+              src={toUrl(view.cover)}
               alt={view.cover.caption ?? '封面'}
               className="h-56 w-40 shrink-0 self-start rounded-xl border border-border object-cover shadow-sm"
               loading="lazy"

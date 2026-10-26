@@ -1,6 +1,6 @@
 /**
  * 编辑器（Goal 9）：所有写操作都走 `library.applyEdit`，先克隆草稿、校验、再整体落盘。
- * 图片二进制单独写文件，元数据进入 `images.json`。
+ * 图片二进制写入 SQLite BLOB，元数据由差异事务同步。
  */
 import type { Platform } from '@tpr/platform';
 import {
@@ -20,6 +20,7 @@ import {
   tagIdFor,
 } from '@tpr/schema';
 import type { Library } from '../db/library.js';
+import { writeImageBlob } from '../db/sql/store.js';
 
 export * from './document-import.js';
 
@@ -414,37 +415,30 @@ export function createEditor(platform: Platform, library: Library): Editor {
       if (!/^[a-z0-9]+$/.test(ext)) throw new Error('图片扩展名不合法');
       const loaded = current();
       const file = `images/${draft.kind}/${id}.${ext}`;
-      const absolute = platform.paths.join(loaded.dir, file);
-      await platform.fs.mkdir(platform.paths.dirname(absolute));
-      await platform.fs.writeBytes(absolute, draft.bytes);
+      const image: ImageAsset = {
+        id,
+        file,
+        kind: draft.kind,
+        ...(draft.caption?.trim() ? { caption: draft.caption.trim() } : {}),
+      };
+      // 先写 BLOB 再写元数据：若随后校验失败，会留下一条未引用的图片记录，可在编辑器中删除。
+      await writeImageBlob(platform, loaded.dir, image, draft.bytes);
 
       await library.applyEdit((db) => {
-        const existing = db.images.find((image) => image.id === id);
-        const next: ImageAsset = {
-          id,
-          file,
-          kind: draft.kind,
-          ...(draft.caption?.trim() ? { caption: draft.caption.trim() } : {}),
-        };
-        if (existing) Object.assign(existing, next);
-        else db.images.push(next);
+        const existing = db.images.find((item) => item.id === id);
+        if (existing) Object.assign(existing, image);
+        else db.images.push(image);
       });
       return id;
     },
 
     async updateImage(id, patch) {
-      const loaded = current();
       const existing = library.snapshot()?.images.find((image) => image.id === id);
       if (!existing) throw new Error(`图片 ${id} 不存在`);
       let file = existing.file;
       if (patch.kind && patch.kind !== existing.kind) {
         const ext = existing.file.split('.').pop() ?? 'bin';
         file = `images/${patch.kind}/${id}.${ext}`;
-        const from = platform.paths.join(loaded.dir, existing.file);
-        const to = platform.paths.join(loaded.dir, file);
-        await platform.fs.mkdir(platform.paths.dirname(to));
-        await platform.fs.copy(from, to);
-        await platform.fs.remove(from);
       }
       await library.applyEdit((db) => {
         const image = db.images.find((item) => item.id === id);
@@ -459,8 +453,6 @@ export function createEditor(platform: Platform, library: Library): Editor {
     },
 
     async deleteImage(id) {
-      const loaded = current();
-      const existing = library.snapshot()?.images.find((image) => image.id === id);
       await library.applyEdit((db) => {
         db.images = db.images.filter((image) => image.id !== id);
         for (const article of db.articles) {
@@ -471,10 +463,6 @@ export function createEditor(platform: Platform, library: Library): Editor {
           if (series.coverImageId === id) delete series.coverImageId;
         }
       });
-      if (existing) {
-        const absolute = platform.paths.join(loaded.dir, existing.file);
-        if (await platform.fs.exists(absolute)) await platform.fs.remove(absolute);
-      }
     },
 
     async saveFeatured(targetType, targetId, recommendations) {

@@ -5,11 +5,12 @@ import {
   migrateDatabase,
   validateDatabase,
 } from '@tpr/schema';
+import { articleMd } from './layout.js';
 import { computeCounts, normalizeDatabase } from './normalize.js';
 import { readDatabaseDir } from './read.js';
 import { toSnapshot, type DBSnapshot } from './snapshot.js';
+import { databasePathOf, writeSqliteDatabase } from './sql/store.js';
 import { DB_LAYOUT, commitWorkspace, ioFor, removeTree } from './workspace.js';
-import { serializeDatabase, writeDatabaseDir } from './write.js';
 
 export interface ImportOutcome {
   snapshot: DBSnapshot;
@@ -43,9 +44,16 @@ async function runImport(
     const { db: migrated, applied } = migrateDatabase(raw, raw.manifest.schemaVersion);
     // 注意：migrate 可能改形状，所以先迁移、再归一化正文、最后校验
     const { db: normalized, markdown } = normalizeDatabase(migrated);
+    // 内联正文归一化后变成虚拟的 articles/{id}.md，校验前补进文件集合。
+    const filePaths = new Set(normalized.filePaths ?? []);
+    for (const [id] of markdown) filePaths.add(articleMd(id));
+    for (const article of normalized.articles) {
+      if (typeof article.content === 'object' && article.content !== null) filePaths.add(article.content.file);
+    }
     const ready: RawDatabase = {
       ...normalized,
       manifest: { ...normalized.manifest, counts: computeCounts(normalized), updatedAt: normalized.manifest.updatedAt },
+      filePaths,
     };
 
     const report = validateDatabase(ready);
@@ -53,8 +61,21 @@ async function runImport(
       throw new ImportError(`导入失败：数据库校验未通过（${report.errors.length} 个错误）`, report);
     }
 
-    // 归一化后的文本重新落盘（正文写成 .md），图片已由解压阶段就位
-    await writeDatabaseDir(io, staging, serializeDatabase(ready, markdown));
+    for (const article of ready.articles) {
+      if (markdown.has(article.id)) continue;
+      if (typeof article.content !== 'object' || article.content === null) continue;
+      markdown.set(article.id, await platform.fs.readText(io.join(staging, article.content.file)));
+    }
+
+    // 所有实体、正文与图片 BLOB 一次性写成 staging/database.sqlite；解压出来的
+    // JSON/Markdown/图片只是原料，写完即删，提交后的 workspace 只保留 SQLite 文件。
+    const imageSources = new Map<string, { file: string }>();
+    for (const image of ready.images) imageSources.set(image.id, { file: io.join(staging, image.file) });
+    await writeSqliteDatabase(platform, databasePathOf(platform, staging), ready, markdown, imageSources);
+    for (const entry of await platform.fs.listDir(staging)) {
+      if (entry.name === 'database.sqlite') continue;
+      await platform.fs.remove(entry.path, { recursive: true });
+    }
     await commitWorkspace(platform, staging, ready.manifest.databaseId);
 
     return {

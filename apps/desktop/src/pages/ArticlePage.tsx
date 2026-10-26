@@ -5,6 +5,7 @@ import { FavoriteButton } from '../components/FavoriteButton.js';
 import { Link, useParams } from 'react-router';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
+import { imageSource } from '../lib/images.js';
 
 const TYPE_LABEL: Record<string, string> = {
   short: '短篇文',
@@ -16,10 +17,10 @@ const STATUS_LABEL: Record<string, string> = {
   completed: '已完结',
 };
 
-function CoverImage({ image, toUrl }: { image: ImageRef; toUrl: (path: string) => string }) {
+function CoverImage({ image, toUrl }: { image: ImageRef; toUrl: (image: ImageRef) => string }) {
   return (
     <img
-      src={toUrl(image.path)}
+      src={toUrl(image)}
       alt={image.caption ?? '封面'}
       className="h-52 w-[9.5rem] shrink-0 rounded-lg border border-border object-cover shadow-sm"
       loading="lazy"
@@ -142,7 +143,8 @@ export function ArticlePage() {
 
   const { article } = view;
   const neighbors = snapshot ? getArticleNeighbors(snapshot, article.id) : null;
-  const toUrl = (path: string) => services.platform.assets.toUrl(path);
+  const toUrl = (image: ImageRef) =>
+    loaded ? imageSource(services.platform, loaded.dir, image) : '';
 
   return (
     <div>
@@ -282,7 +284,7 @@ export function ArticlePage() {
             {view.illustrations.map((image) => (
               <figure key={image.id} className="flex flex-col gap-2">
                 <img
-                  src={toUrl(image.path)}
+                  src={toUrl(image)}
                   alt={image.caption ?? '插图'}
                   className="w-full rounded-xl border border-border"
                   loading="lazy"

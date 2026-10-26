@@ -4,6 +4,7 @@ import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
+import { imageSource } from '../lib/images.js';
 
 const TITLE: Record<FeaturedPageKind, string> = {
   short: '精选短文',
@@ -19,6 +20,8 @@ export function FeaturedPage({ page }: { page: FeaturedPageKind }) {
       ? getFeaturedCards(snapshot, { dir: loaded.dir, join: services.platform.paths.join }, page)
       : [];
 
+  const imageUrl = (image: { id: string; file: string }) =>
+    loaded ? imageSource(services.platform, loaded.dir, image) : '';
   const valid = cards.filter((card) => card.status === 'ok');
   const broken = cards.filter((card) => card.status === 'missing');
 
@@ -51,7 +54,7 @@ export function FeaturedPage({ page }: { page: FeaturedPageKind }) {
             <Link to={card.to ?? '#'} className="shrink-0" aria-label={`打开《${card.title}》`}>
               {card.cover ? (
                 <img
-                  src={services.platform.assets.toUrl(card.cover.path)}
+                  src={imageUrl(card.cover)}
                   alt={card.cover.caption ?? card.title}
                   className="h-36 w-24 rounded-xl border border-border object-cover shadow-sm"
                   loading="lazy"

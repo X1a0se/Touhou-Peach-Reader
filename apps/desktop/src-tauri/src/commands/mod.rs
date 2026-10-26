@@ -2,5 +2,6 @@
 
 pub mod app;
 pub mod fs;
+pub mod sql;
 pub mod wallpaper;
 pub mod zip;

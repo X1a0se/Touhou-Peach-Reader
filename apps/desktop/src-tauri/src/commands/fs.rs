@@ -60,11 +60,11 @@ fn ensure_within(root: &Path, candidate: &str, allow_missing: bool) -> Result<Pa
     Ok(resolved)
 }
 
-fn resolve(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
     ensure_within(&app_data(app)?, path, false)
 }
 
-fn resolve_for_write(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
+pub(crate) fn resolve_for_write(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
     ensure_within(&app_data(app)?, path, true)
 }
 

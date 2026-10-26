@@ -54,12 +54,12 @@
 | D11 | 标签/作者用**内容确定性 ID**（可跨库合并），文章/系列/图片用 nanoid | §6.2 |
 | D12 | 正文规范形态恒为 `articles/{id}.md` + `content:{file}` | §6.3 |
 | D13 | 虚拟标签由 `type`/`status` 派生，不落库、不导出 | §6.4 |
-| D14 | 本地持久化用**文件式 workspace**，不引 SQLite | §9 |
+| D14 | 本地持久化用**单文件 SQLite**（实体 + Markdown + 图片 BLOB），`.tpr` 保持 JSON+文件交换格式 | §9 |
 | D15 | 合并按 id + `updatedAt`；同时间戳异内容 → 冲突报告 | §10 |
 | D16 | 搜索用 `Intl.Segmenter` + CJK 二元组；高亮片段自建；FlexSearch 隔离在适配层 | §11 |
 | D17 | shadcn/ui 的家在 `packages/ui`，Tailwind v4 CSS-first | §13.1 |
 | D18 | 路由用 `createHashRouter` | §13.3 |
-| D19 | 图片经 `Platform.assets.toUrl()`，UI 不碰 Tauri | §13.4 |
+| D19 | 本地图片走 SQLite BLOB 自定义协议，其他图片经 `Platform.assets.toUrl()`；UI 不碰 Tauri | §13.4 §14.4 |
 | D20 | Tauri 配置、capabilities 最小权限、CSP、Rust 命令签名 | §14 |
 | D21 | vitest 5 + fixture 工厂 + 可注入 `rng`/`now` | §15.1 |
 | D22 | Goal 验收矩阵：能自动化的自动化，剩下的人工 | §15.2 |
@@ -999,7 +999,7 @@ export function migrateDatabase(
 
 ## 9. 本地持久化（D14）
 
-### 9.1 目录约定
+### 9.1 目录与数据布局
 
 ```
 $APPDATA/com.touhou.peachreader/          ← 桌面端 = %APPDATA%\com.touhou.peachreader
@@ -1007,7 +1007,9 @@ $APPDATA/com.touhou.peachreader/          ← 桌面端 = %APPDATA%\com.touhou.p
 ├─ active.json            当前库指针：{ "databaseId": "db_…", "openedAt": "ISO" }
 ├─ wallpapers/            壁纸图片（`wp-{epoch_ms}.{png|jpg|jpeg|webp}`，≤20 MB，由 Rust 命令复制进来）
 ├─ workspace/
-│  └─ {databaseId}/       ← 与 .tpr **完全同构**（§7.2 的目录树）+ .dirty 标记
+│  └─ {databaseId}/
+│     ├─ database.sqlite   当前库：实体 + 正文 + 图片 BLOB
+│     └─ legacy/           旧 JSON workspace 的迁移备份（仅迁移后出现，可手工删除）
 ├─ user/
 │  └─ {databaseId}.json   用户态：{ favorites: { articles: [], series: [] }, lastMergeAt, source }
 ├─ cache/
@@ -1017,43 +1019,68 @@ $APPDATA/com.touhou.peachreader/          ← 桌面端 = %APPDATA%\com.touhou.p
    └─ {timestamp}/        导入暂存区（失败即删）
 ```
 
-- `settings.json`、`active.json`、`user/*.json` **不是**数据库包的一部分，导出时不带。
-- **编辑器草稿箱（Goal 16）不在文件系统里**：存在 WebView 的 `localStorage`，键为 `tpr:drafts:v1:{databaseId}`，值为 `DraftEnvelope[]`（`{v:1,id,kind,label,updatedAt,payload}`）。按库隔离；最多 50 条（超出丢最旧）、单条 payload 上限 1.5 M 字符；写入失败（配额/过大）在表单里显示"草稿未保存"横幅，但**不阻断保存实体**。草稿不随数据库导出，换机不迁移。
-- 收藏（Goal 7）落在 `user/{databaseId}.json`：`favorites.articles` / `favorites.series` 为 id 数组，按加入时间倒序。数据库被重新导入导致某条消失时，读取时过滤并记 `stale`（Goal 7 要求"自动清理或标记失效"，选**标记失效**：保留 id，UI 显示灰色"已失效"）。
-- 同一 `databaseId` 重复导入 = **覆盖**（先备份再换名）；不同 id = 新增一个库，可在 `/settings` 切换。
-- **删除实体必须删文件**（Goal 21 修复）：此前只重写 JSON，被删文章/系列/图片的 `.md` 与二进制仍留在 `workspace/{databaseId}/`，`restore()` 重新扫目录时会把它们读回来（表现为「删掉的条目重启后复活」）。现在 `writeDatabaseDir` 之后调 `pruneDatabaseDir(io, dir, keep)`，`keep` = 本次写出的文本文件路径 ∪ `draft.filePaths`（**必须含图片二进制**，否则封面会被误删）；它遍历 `articles/`、`series/` 与 `images/` 的每个子目录（cover/illustration/…），删掉不在集合里的文件，不碰根部的 `manifest.json`/`featured.json`/`credits.json` 等。`applyEdit` 与合并导入共用这条落盘路径，因此两者都受保护。
+本地库是**一个 SQLite 文件**，不再是"与 `.tpr` 同构的目录"：
 
-### 9.2 写入协议：tmp + rename
+| 表 | 内容 |
+|---|---|
+| `manifest` | 单行（`id = 1`）：原 `manifest.json` 字段 + `counts_json` |
+| `authors` / `author_aliases` | 作者与别名，`position` 保序 |
+| `tags` / `tag_aliases` | 标签与别名；`aliases_present` 区分"缺省"与"空数组" |
+| `images` | 图片元数据 + `mime` / `byte_size` / `data BLOB` |
+| `articles` / `article_contents` | 文章元数据与 Markdown 正文（按 `article_id` 一行） |
+| `article_authors` / `article_tags` / `article_illustrations` | 文章关系与顺序 |
+| `series` / `series_articles` / `series_authors` / `series_tags` | 系列与关系、顺序 |
+| `featured` / `featured_recommendations` | 精选条目与多条推荐语 |
+| `credits` | 鸣谢，`position` 保序 |
+
+- `PRAGMA user_version` 是**本地库布局版本**，与 `.tpr` 的 `manifest.schemaVersion` 相互独立；打开时版本不匹配直接报"不支持的本地数据库版本"，不做隐式升级。
+- 不启用外键：`validateDatabase` 把悬空作者/标签/系列当 warning，导入必须保持宽松；删除与级联由 `saveDatabase` 显式处理。
+- `.tpr` **仍是** JSON + Markdown 文件 + 图片文件的交换格式（§7.2）；SQLite 只是本地运行时形态，导出时重新物化成文件，不把 `database.sqlite` 放进包。
+- `settings.json`、`active.json`、`user/*.json` **不是**数据库包的一部分，导出时不带。
+- **编辑器草稿箱（Goal 16）不在数据库里**：存在 WebView 的 `localStorage`，键为 `tpr:drafts:v1:{databaseId}`，值为 `DraftEnvelope[]`（`{v:1,id,kind,label,updatedAt,payload}`）。按库隔离；最多 50 条（超出丢最旧）、单条 payload 上限 1.5 M 字符；写入失败（配额/过大）在表单里显示"草稿未保存"横幅，但**不阻断保存实体**。草稿不随数据库导出，换机不迁移。
+- 收藏（Goal 7）落在 `user/{databaseId}.json`：`favorites.articles` / `favorites.series` 为 id 数组，按加入时间倒序。数据库被重新导入导致某条消失时，读取时过滤并记 `stale`（保留 id，UI 显示灰色"已失效"）。
+- 同一 `databaseId` 重复导入 = **覆盖**（先备份再换名）；不同 id = 新增一个库，可在 `/settings` 切换。
+- **删除实体会同步删除数据库行**：`saveDatabase` 先删正文/关系子表再删主表，图片主表删除时 BLOB 一并删除；不再需要 `pruneDatabaseDir` 之类的目录清理。
+
+### 9.2 写入协议：SQLite 事务 + 正文/图片专用路径
 
 ```ts
-async function atomicWriteText(fs: IFileSystem, path: string, text: string) {
-  const tmp = `${path}.tmp`;
-  await fs.writeText(tmp, text);
-  await fs.rename(tmp, path);          // 同卷 rename 在 NTFS 上是原子的
-}
+// 正文：按文章 id UPSERT 一行，编辑不重写整库
+await contents.write(articleId, markdown);
+// 图片：BLOB 单独写，避免大图进入 JSON IPC
+await writeImageBlob(platform, dir, image, bytes);
+// 元数据：一次编辑的差异在同一个事务里提交
+await saveDatabase(platform, dir, previous, next);
 ```
 
-- 任何 JSON / .md 的写入都走这个函数；**不**先删除目标文件。
-- 批量编辑（编辑器保存一次涉及多文件）：先写 `.dirty`（内容 = 本次操作 id），全部成功后删 `.dirty`。
-- 启动时若发现 `.dirty` 或残留 `*.tmp`：删 `*.tmp`，重建索引，不弹窗；若 `manifest.json` 解析失败才进"库损坏"流程（§9.4）。
+- **正文**存 `article_contents`，由 `ContentStore` 懒加载/按需读取；编辑元数据不会重写正文。
+- **图片**字节由 `Platform.sql.writeBlob` 写进 `images.data`；Rust 侧直接把 app data 内的文件绑定为 BLOB，或把 BLOB 直接落成导出文件，字节不经过 JS。
+- **元数据**由 `saveDatabase` 做差异更新：只改动新增/修改/删除的实体，删除时先子表后主表；整个调用是一个事务，失败自动回滚。
+- 全量导入/迁移用 `writeSqliteDatabase`：在临时文件里建表、写实体/正文/BLOB，读回校验（实体深比较、`PRAGMA quick_check`、正文数量/字节数、图片数量/BLOB 总字节数）通过后才换名。
+- 因此不再有 `.dirty` 标记与 `serializeDatabase` 的逐文件写入；崩溃时 SQLite 的事务日志保证"要么旧状态、要么新状态"。
 
 ### 9.3 入库的原子换名
 
+导入仍先解到 `imports/{timestamp}/`，在暂存目录里生成 `database.sqlite`，再整体换名：
+
 ```ts
-async function commitWorkspace(staging: string, databaseId: string, platform: Platform) {
-  const { fs, paths } = platform;
-  const target = paths.join(paths.dataDir, 'workspace', databaseId);
+async function commitWorkspace(platform: Platform, staging: string, databaseId: string) {
+  const target = workspacePath(platform, databaseId);
   const backup = `${target}.bak-${Date.now()}`;
-  if (await fs.exists(target)) await fs.rename(target, backup);   // ① 旧库让位
+  const hadTarget = await platform.fs.exists(target);
+  if (hadTarget) await withRetry(() => platform.fs.rename(target, backup)); // ① 旧库让位
   try {
-    await fs.rename(staging, target);                              // ② 新库就位
-  } catch (e) {
-    if (await fs.exists(backup)) await fs.rename(backup, target);  // 回滚
-    throw e;
+    await withRetry(() => platform.fs.rename(staging, target));              // ② 新库就位
+  } catch (error) {
+    if (hadTarget && (await platform.fs.exists(backup))) {
+      await platform.fs.rename(backup, target).catch(() => undefined);      // 回滚
+    }
+    throw new PlatformError('EIO', '导入失败：无法替换本地数据库目录（请关闭占用该目录的程序）', error);
   }
-  if (await fs.exists(backup)) await fs.remove(backup, { recursive: true }); // ③ 清理
-  await atomicWriteText(fs, paths.join(paths.dataDir, 'active.json'),
-    JSON.stringify({ databaseId, openedAt: new Date().toISOString() }, null, 2));
+  if (hadTarget && (await platform.fs.exists(backup))) {
+    await withRetry(() => platform.fs.remove(backup, { recursive: true })).catch(() => undefined); // ③ 清理
+  }
+  await writeActive(platform, databaseId);
 }
 ```
 
@@ -1063,23 +1090,38 @@ Windows 的坑与对策：
 |---|---|
 | 目录被资源管理器/预览窗格占用导致 rename 失败（`EPERM`/`EACCES`） | 指数退避重试 5 次（50/100/200/400/800 ms），失败则提示"请关闭正在占用该目录的程序" |
 | `rename` 跨盘（`imports` 与 `workspace` 不同卷） | 保证二者都在 `dataDir` 下，同卷；`IFileSystem.rename` 内部若检测到跨卷则退化为 `copy + remove` |
-| 杀毒软件短暂锁文件 | 同上退避；`.tmp` 写入失败不覆盖原文件 |
+| 杀毒软件短暂锁文件 | 同上退避；SQLite 事务失败不覆盖原库 |
 | 路径含空格/中文/超长 | 全程 `paths.join()`；单文件路径 ≤ 240 字符（Windows MAX_PATH 余量） |
 
 ### 9.4 损坏与恢复
 
 | 症状 | 处理 |
 |---|---|
-| `manifest.json` 不存在/解析失败 | 该库标记 `corrupt`，`/settings` 提供"重新导入"；不自动删用户数据 |
-| 某个实体 JSON 解析失败 | 跳过该实体 + `W_ENTITY_UNREADABLE`，库照常打开（宁可少一篇，不要整库打不开） |
-| `articles/{id}.md` 缺失 | 列表里仍显示，详情页提示"正文文件缺失"；导入校验阶段本应已报错 |
-| `active.json` 指向不存在的库 | 打开首个可用库；没有则进空状态引导导入 |
-| 磁盘满（`ENOSPC`） | 编辑器保存失败时保留内存态 + 明确提示，不静默丢改动 |
+| `database.sqlite` 不存在且没有旧 `manifest.json` | `ensureLocalDatabase` 抛 `EIO 不是有效的数据库目录：缺少 manifest.json`，UI 显示错误；不自动删用户数据，可重新导入同 id 覆盖 |
+| `PRAGMA user_version` 不是当前版本 | 报 `EIO 不支持的本地数据库版本`，不尝试猜测结构；保留库文件供后续版本迁移 |
+| `manifest` 行缺失 / 关键列不是预期类型 | 报 `EIO database.sqlite 缺少 manifest 行` 或 SQLite 读取错误；不做半读 |
+| 某篇文章没有 `article_contents` 行 | 详情页明确提示"正文缺失：{id}"，列表仍可打开 |
+| 图片行存在但 `data` 为 NULL | 自定义协议返回 404，页面显示图片占位；导出时记 `W_EXPORT_SKIPPED` |
+| `active.json` 指向不存在的库 / 没有 `active.json` | `restore()` 返回 `null`，UI 进空状态引导导入；不自动猜测其它库 |
+| 磁盘满（`ENOSPC`）/ SQLite 写失败 | 事务回滚，编辑器保留内存态并明确提示，不静默丢改动 |
 
 ### 9.5 单实例与并发
 
-- 桌面端进程级单实例（Tauri 单窗口）；**不做**多进程写同一 workspace 的保护（超出本项目范围）。
-- 所有写操作串行化：core 内部一条 `writeQueue: Promise<void>` 链，避免编辑器快速连点造成 `.tmp` 竞争。
+- 桌面端进程级单实例（Tauri 单窗口）；**不做**多进程写同一 `database.sqlite` 的保护（超出本项目范围）。
+- 所有写操作串行化：core 内部一条 `writeQueue: Promise<void>` 链，避免编辑器快速连点造成事务交错。
+- 自定义图片协议只读打开数据库，Rust 侧设置 5 秒 `busy_timeout`；正常编辑是短事务，缩放/滚动时的读不会被长写阻塞。
+
+### 9.6 旧 JSON workspace 迁移
+
+首次打开没有 `database.sqlite` 的库时，`ensureLocalDatabase` 自动迁移：
+
+1. 读取根目录旧 `manifest.json` / `authors.json` / `tags.json` / `images.json` / `featured.json` / `credits.json`、`articles/*.json`、`series/*.json`，并扫描实际存在的 Markdown 与图片文件。
+2. `migrateDatabase` 改形状 → `validateDatabase`（错误级直接中止，不生成半成品）。
+3. 读正文 Markdown；图片按 id 记录源文件路径。
+4. 写同目录的 `database.sqlite.migrating`，内部读回校验通过后原子改名为 `database.sqlite`。
+5. 把旧根条目（JSON、`articles/`、`series/`、`images/`、`.dirty`）移进 `legacy/`；**不删除**，留给用户人工备份。下次打开若已存在 `database.sqlite`，只做幂等的残留清理，不重复迁移。
+
+任一步失败旧数据都还在；`.migrating` 半成品下次启动丢弃重来。迁移后 `.tpr` 导出仍是旧格式（JSON + 文件），导入端继续兼容。
 
 ---
 
@@ -1901,7 +1943,7 @@ const FORBIDDEN = [/@tauri-apps\//, /window\.__TAURI__/, /\bconvertFileSrc\b/, /
 | # | `/plan` 原文 | 本设计 | 理由 |
 |---|---|---|---|
 | 1 | React **18** + Vite（未指定） | React **19.3.1** + Vite **8.3.4** | 新项目没有历史包袱；19 是当前稳定线；Vite 8 是 React 19 插件的主线版本 |
-| 2 | 本地存储 **SQLite**（`tauri-plugin-sql`） | **文件式 workspace**（与 `.tpr` 同构） | ① `/plan` 五、已留"或用文件系统 JSON 持久化"的口子；② `/goal` 3 明确允许"SQLite 或文件"；③ 单库 ≤ 2 万篇，JSON + 内存索引完全够用；④ 免去 SQLite schema 迁移与 `.tpr` 之间的双份模型 |
+| 2 | 本地存储 **SQLite**（`tauri-plugin-sql`） | **单文件 SQLite**（自研 rusqlite 命令，不用插件） | ① 正文与图片都是大对象，插件经 JSON 往返会把整张图读进 JS 内存，自研命令可以用 BLOB 流式写文件；② 单库 225 MB 图片用 SQLite 单文件便于备份/替换；③ `.tpr` 仍是 JSON+Markdown+图片的交换格式，导入导出逻辑不变；④ 旧 JSON workspace 自动迁移并保留 `legacy/` 备份 |
 | 3 | `content: string \| { file: string }` | 落盘**恒为** `{ file }`（导入时接受 string 并归一化） | 双形态会让"导出后逐字段相等"的 round-trip 断言变得含混；统一后格式只有一种 |
 | 4 | 标签/作者 **无 ID 规则** | 确定性 ID（`p_`/`t_` + sha256 前缀） | `/plan` 三、要求"按 id 归并"，但没定义 id 从哪来；不解决这个就无法合并 |
 | 5 | 四、目录树**没有图片元数据文件** | 新增 `images.json`（裸数组） | `ImageAsset` 有 `caption`/`kind`，而 `images/cover/{id}.ext` 只存字节；不给元数据一个落点，`.tpr` 就无法逐字段 round-trip |
@@ -1912,7 +1954,7 @@ const FORBIDDEN = [/@tauri-apps\//, /window\.__TAURI__/, /\bconvertFileSrc\b/, /
 |---|---|---|---|
 | 6 | 搜索用 FlexSearch 的 highlight | 自建 `buildSnippets` | FlexSearch 的高亮基于 token 串，中文切词后原文位置对不上；自建才能保证片段来自原文 |
 | 7 | 路由未指定模式 | `createHashRouter` | `tauri://localhost` 下深链/刷新的 fallback 不可靠 |
-| 8 | 图片显示方式未指定 | 一律经 `IAssetUrls.toUrl()` | 用 Tauri `convertFileSrc` 才能加载 `asset:` URL；UI 层因此零 Tauri 依赖 |
+| 8 | 图片显示方式未指定 | 本地库图片走 `IAssetUrls.imageUrl()`，其余经 `IAssetUrls.toUrl()` | 本地图片字节在 SQLite BLOB 里，用自定义 `peach` 协议按数据库/图片 id 读取；内存平台回退到文件 URL。UI 层仍零 Tauri 依赖 |
 
 ### 17.3 保持不变的部分
 
@@ -2012,10 +2054,10 @@ Goal 8 追加记录：
 
 Goal 9 追加记录：
 
-- **写入路径**：编辑器全部走 `library.applyEdit(build)` —— `structuredClone(current.db)` → 改草稿 → 重算 `filePaths` → `computeCounts` → `validateDatabase`（有 error 直接抛 `CODE: message`，不落盘）→ 写 `.dirty` → 逐篇读正文 → `serializeDatabase` + `writeDatabaseDir` → 删 `.dirty` → 内存替换 + `revision += 1`；所有写入走 `writeQueue` 串行（design §9.1）。
-- **`filePaths` 必须重算**：导入时 `filePaths` 是只读集合，编辑新增正文/图片后不重算会误报 `E_CONTENT_MISSING` / `E_IMAGE_FILE_MISSING`（实现时踩过）。
+- **写入路径**：编辑器全部走 `library.applyEdit(build)` —— `structuredClone(current.db)` → 改草稿 → `computeCounts` → `validateDatabase`（有 error 直接抛 `CODE: message`，不落盘）→ 补空正文（`ContentStore.write(id, '')`）→ `saveDatabase(platform, dir, previous, next)` 单事务差异落盘 → 内存替换 + `revision += 1`；所有写入走 `writeQueue` 串行（design §9.2）。正文由 `ContentStore` 按 id UPSERT 到 `article_contents`，图片字节由 `writeImageBlob` 写 `images.data` BLOB；不再有 `.dirty` / `writeDatabaseDir`（SQLite 化前的旧路径已删除）。
+- **SQLite 化后 `filePaths` 不再是落盘依据**：`persist` 在 `validateDatabase` 前删掉从 SQLite 读出的虚拟 `filePaths`，否则新增正文/图片会被误报 `E_CONTENT_MISSING` / `E_IMAGE_FILE_MISSING`——校验只在 `.tpr` 导入/导出时才需要真实文件集合。
 - **作者别名复用**：`saveAuthor` 无 id 时按 `normalizeName` 在 canonicalName 与 aliases 里查重，命中就复用原 id，不新建（/goal 9 明确要求）；标签同理，但查重限定在同一 `category` 内。
-- **图片**：`saveImage` 写 `images/{kind}/{id}.{ext}`；`updateImage` 改 kind 时先复制到新路径再删旧文件；`deleteImage` 级联清掉引用它的 `coverImageId` / `illustrationImageIds`。
+- **图片**：`saveImage` 用 `writeImageBlob` 把字节写进 `images.data` BLOB；`updateImage` 只改元数据里的 `file`/kind；`deleteImage` 级联清掉引用它的 `coverImageId` / `illustrationImageIds`，该图片行与 BLOB 由差异事务删除。
 - **系列双向同步**：`saveSeries` 把 `articleIds` 里的文章改成 `series-entry` 并写 `seriesId`，被移出的文章降级为 `short` 并删 `seriesId`；`deleteSeries` 一律降级。
 - 桌面端 `/editor` 七个 tab（文章/系列/作者/标签/图片/推荐语/鸣谢）：文章与系列是"列表 + 表单"两栏，正文按需读取（编辑元数据不覆盖正文），标签/作者用复选网格，图片用文件上传 + 逐张改 kind/配文，推荐语可多条（推荐人可空），鸣谢可增删并 ↑↓ 排序。`useLibrary().refresh()` 在每次保存后把 `library.snapshot()` 同步回 Provider。
 - 单测新增 `test/edit.test.ts` 8 个用例（新建/重启、别名复用、标签类别、系列同步、级联删除、图片移动/清理、推荐语与鸣谢、空标题拒绝），core 54 passed；真机 E2E `.tmp/goal9-e2e.mjs` 13 项全过（表单新建作者、表单改标题、详情页正文、图片上传/改 kind/删除、推荐语 2 条、鸣谢保序、刷新后全部保留），截图 `.tmp/goal9-editor.png`。
@@ -2026,7 +2068,7 @@ Goal 10 追加记录：
 - **`DBSnapshot` 不含正文**：`mergeDatabases` 返回的 `articles` 是 `ArticleMeta`，落盘前必须把 `content: { file: 'articles/{id}.md' }` 补回去（`applyEdit` 里按 id 找旧对象复用，新增文章给默认路径），否则导出的包缺 `content` 字段、再导入时整篇被当坏条目跳过（实现时踩过）。
 - **`applyConflicts` 需要对方快照**：只传 `contents`/`imageFiles` 不够——裁决"用对方"时必须能拿到 incoming 的实体本身才能替换，签名因此是 `applyConflicts(result, decisions, { snapshot, contents, imageFiles })`。
 - **图片按字节哈希判冲突**：`mergeDatabases` 的 `MergeSide.hashImage` 由调用方注入（桌面走 Rust 读文件 + `crypto.subtle` sha256），两边同 id 不同哈希才进冲突清单；图片**绝不**按 `updatedAt` 自动换。
-- **写入顺序**：先 `library.saveContent` 写正文（incoming 新增/更新 + 冲突裁决为对方的），再把图片按合并后的 `file` 路径写进本地，最后 `library.applyEdit` 整体替换七个集合（`applyEdit` 重算 counts/filePaths、校验、落盘）。
+- **写入顺序**：先 `library.saveContent` 写正文（incoming 新增/更新 + 冲突裁决为对方的），再用 `writeImageBlob` 把图片字节写进本地 BLOB，最后 `library.applyEdit` 整体替换七个集合（`applyEdit` 重算 counts、校验、`saveDatabase` 差异落盘）。
 - 单测 `test/merge.test.ts` 7 个用例（新者胜、同内容不冲突、冲突+裁决、图片哈希冲突、幂等、prepare→apply→导出→再导入、悬空引用进 `report.dangling`），core 61 passed；真机 CDP 12 项断言全过（prepare 计数、自动更新、冲突清单、裁决落盘、未动项不变、无重复 id、取消清理且不改库、导出仍可用、`/merge` 页渲染）。
 - 编辑器文章面板新增「导出这篇」与「多选导出（已选 N）」，复用 `library.export({ articles })`；原生文件对话框无法在 CDP 里自动点，E2E 用服务层直调 + 页面渲染双重验证。
 - 顺带把 `random.test.ts` 的性能断言从 20ms 放宽到 50ms（取 5 次最快值），避免并行跑测试时抖动。
@@ -2143,7 +2185,7 @@ Goal 20 追加记录（统一更新两版：一条命令 + 运行方式识别）
 Goal 21 追加记录（首页计数不更新 + 编辑器全实体搜索）：
 
 - **计数 bug 根因**：`packages/core/src/db/library.ts:122` 只写了 `computeCounts(draft);`，而 `computeCounts` 返回新对象、不修改入参（`packages/core/src/db/normalize.ts:28-38`），因此编辑器保存后 `manifest.counts` 仍是导入时的数字，首页「当前数据库」纹丝不动。修法是双保险：写入时 `draft.manifest.counts = computeCounts(draft)`；读取时 `packages/core/src/db/snapshot.ts:39` 用 `{ ...raw.manifest, counts: computeCounts(raw) }` 重算，旧库也能自愈。
-- **顺带修「删了又复活」**：落盘是覆盖式的，删除文章/系列/图片后旧文件仍留在 `workspace/{databaseId}/`，`restore()` 会把它们读回来。新增 `pruneDatabaseDir(io, dir, keep)`（`packages/core/src/db/write.ts:61-83`），在 `writeDatabaseDir` 后清理 `articles/`、`series/`、`images/*` 下不在 `keep` 的文件；`keep` 必须并上 `draft.filePaths`，否则图片二进制（不在 JSON 文本里）会被误删——`library.ts:149` 即 `new Set([...files.map((file) => file.path), ...draft.filePaths])`。首跑 core 测试 3 例失败（`edit.test.ts:179`、`export-fidelity.test.ts:139` 图片缺失、merge roundtrip），就是漏了图片路径。
+- **「删了又复活」在 SQLite 化后消失**：旧 JSON 落盘是覆盖式的，删除文章/系列/图片后旧文件仍留在 `workspace/{databaseId}/`，`restore()` 会把它们读回来；当时新增 `pruneDatabaseDir(io, dir, keep)` 清理。现在 `saveDatabase` 按 id 差异删行、图片 BLOB 随主表删除，不再有目录残留，`pruneDatabaseDir` 已删除。
 - **编辑器搜索**：新增 `apps/desktop/src/editor/search.ts`（纯函数，七类实体、AND 子串、不搜正文，接口见 §13.2）；`EditorPage` 加常驻搜索框与 combobox/listbox 语义（↑↓/Enter/Esc、`aria-activedescendant`）。选中命中后切标签页、按 `visibleIds` 过滤左侧列表、用 `focus` + `useFocusJump` 定位到具体条目。`useFocusJump` 用 ref 存回调、依赖只写 `[token, id]`——若把 `snapshot`/`box` 写进依赖，保存后的 `refresh()` 会重置正在编辑的表单。
 - **测试**：`apps/desktop/test/editor-search.test.ts` 14 例（七类命中、大小写、别名、标签类别、推荐语/鸣谢合成 id、AND 多词、全角空格、空查询 null、`limit` 与 `totals` 分离、结果顺序）；`packages/core/test/library.test.ts` 加 `counts-after-edit`（saveTag/saveAuthor/deleteArticle 后 counts 与数组长度一致，`restore()` 后仍一致）。合计 155 → **170**（platform 10 + schema 25 + core 100 + desktop 35）。
 - **E2E（CDP 9222，`.tmp/goal21-e2e.mjs`）**：首页标签数 2 → 新建「目标21计数标签」→ 3；`Page.reload` 后仍 3；杀进程重启后仍 3；删除该标签 → 回 2，重启仍 2。搜索「灵梦」下拉显示 文章·3/系列·1/标签·1 共 5 项，Enter 跳到文章页并打开《夹具系列第一篇》；查询时左侧列表 6 → 3，清空恢复 6。截图 `.tmp/goal21-home-added.png`、`.tmp/goal21-reload.png`、`.tmp/goal21-search.png`、`.tmp/goal21-jump.png`。

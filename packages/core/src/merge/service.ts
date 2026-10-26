@@ -9,6 +9,7 @@ import type { Library } from '../db/library.js';
 import { normalizeDatabase } from '../db/normalize.js';
 import { readDatabaseDir } from '../db/read.js';
 import { type DBSnapshot, toSnapshot } from '../db/snapshot.js';
+import { readImageBlob, writeImageBlob } from '../db/sql/store.js';
 import { ioFor } from '../db/workspace.js';
 import {
   applyConflicts,
@@ -93,7 +94,7 @@ export function createMergeService(platform: Platform, library: Library): MergeS
       const baseHashes = new Map<string, string | null>();
       const incomingHashes = new Map<string, string | null>();
       for (const image of baseSnapshot.images) {
-        const bytes = await readIfExists(io.join(current.dir, image.file));
+        const bytes = await readImageBlob(platform, current.dir, image.id);
         baseHashes.set(image.id, bytes ? await sha256Hex(bytes) : null);
       }
       for (const image of snapshot.images) {
@@ -128,7 +129,7 @@ export function createMergeService(platform: Platform, library: Library): MergeS
         await library.saveContent(articleId, text);
       }
 
-      // 2. 图片：incoming 新增的 + 裁决为 take-incoming 的，按合并后的 file 路径写到本地
+      // 2. 图片：incoming 新增的 + 裁决为 take-incoming 的，把字节写进本地 SQLite BLOB
       const imageIds = new Set(preview.result.sources.imageBytes);
       for (const conflict of preview.result.report.conflicts) {
         if (conflict.collection !== 'images') continue;
@@ -138,12 +139,9 @@ export function createMergeService(platform: Platform, library: Library): MergeS
         const image = merged.images.find((item) => item.id === imageId);
         const source = preview.imageFiles.get(imageId);
         if (!image || !source) continue;
-        const from = io.join(preview.dir, source.file);
-        const to = io.join(current.dir, image.file);
-        const bytes = await readIfExists(from);
+        const bytes = await readIfExists(io.join(preview.dir, source.file));
         if (!bytes) continue;
-        await platform.fs.mkdir(platform.paths.dirname(to));
-        await platform.fs.writeBytes(to, bytes);
+        await writeImageBlob(platform, current.dir, image, bytes);
       }
 
       // 3. 整体替换集合（applyEdit 会重算 counts、重建 filePaths、校验后落盘）

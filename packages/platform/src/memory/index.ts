@@ -2,6 +2,7 @@ import { PlatformError } from '../errors.js';
 import { basenamePath, dirnamePath, joinPath } from '../paths.js';
 import type { INetwork, Platform } from '../types.js';
 import { InMemoryFileSystem } from './fs.js';
+import { createMemorySql } from './sql.js';
 import { createMemoryWallpapers } from './wallpaper.js';
 import { FflateZip } from './zip.js';
 
@@ -28,6 +29,7 @@ export function createMemoryPlatform(opts: MemoryPlatformOptions = {}): Platform
     kind: 'memory',
     fs,
     zip: new FflateZip(fs),
+    sql: createMemorySql(fs),
     paths: {
       dataDir,
       join: joinPath,

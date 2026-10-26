@@ -3,6 +3,7 @@ import type { Counts, Issue, RawDatabase } from '@tpr/schema';
 import type { ContentStore } from './content-store.js';
 import { MANIFEST_LAST } from './layout.js';
 import { computeCounts } from './normalize.js';
+import { readImageBlobToFile } from './sql/store.js';
 import { DB_LAYOUT, removeTree } from './workspace.js';
 import { serializeDatabase } from './write.js';
 
@@ -226,16 +227,12 @@ async function prepareExport(
       await platform.fs.writeText(path, file.text);
     }
     for (const image of db.images) {
-      // image.file 已是包内相对路径（images/{kind}/{name}）
-      const relative = image.file;
-      const from = platform.paths.join(source.dir, relative);
-      if (!(await platform.fs.exists(from))) {
+      // image.file 已是包内相对路径（images/{kind}/{name}）；字节从 SQLite BLOB 直接落盘。
+      const to = platform.paths.join(workDir, image.file);
+      const written = await readImageBlobToFile(platform, source.dir, image.id, to);
+      if (!written) {
         warnings.push(skipped(`图片缺失：${image.file}`, 'image', image.id));
-        continue;
       }
-      const to = platform.paths.join(workDir, relative);
-      await platform.fs.mkdir(platform.paths.dirname(to));
-      await platform.fs.copy(from, to);
     }
     return { dir: workDir, stamp: at, name: db.manifest.name, counts: db.manifest.counts, warnings };
   } catch (error) {

@@ -55,6 +55,39 @@ export interface ZipCreateResult {
   bytes: number;
 }
 
+/** SQL 参数/结果值；BLOB 不走普通查询，见 ISql 的专用方法。 */
+export type SqlValue = string | number | null;
+
+export interface SqlStatement {
+  sql: string;
+  params?: SqlValue[];
+}
+
+export type SqlRow = Record<string, SqlValue>;
+
+/** 图片等 BLOB 的来源：已在 JS 里的字节，或允许平台直接从文件读取。 */
+export type BlobSource = Uint8Array | { file: string };
+
+/**
+ * 通用 SQL 接口（本地数据库使用）。
+ *
+ * - 所有路径都是调用方给定的绝对路径，platform 负责实际的 SQLite 驱动。
+ * - batch 必须是单个事务；query 不支持 BLOB。
+ * - writeBlob 的 SQL 约定最后一个占位符是 BLOB，平台把 source 作为最后一项绑定。
+ */
+export interface ISql {
+  query(path: string, sql: string, params?: SqlValue[]): Promise<SqlRow[]>;
+  batch(path: string, statements: SqlStatement[]): Promise<void>;
+  readBlob(path: string, sql: string, params?: SqlValue[]): Promise<Uint8Array | null>;
+  readBlobToFile(
+    path: string,
+    sql: string,
+    params: SqlValue[],
+    targetPath: string,
+  ): Promise<boolean>;
+  writeBlob(path: string, sql: string, params: SqlValue[], source: BlobSource): Promise<void>;
+}
+
 export interface IZip {
   /** 解压整个包到 destDir；zip-slip、符号链接、超限条目进 rejected，不中断整体 */
   extractAll(zipPath: string, destDir: string, opts?: { limits?: Partial<ZipLimits> }): Promise<ZipExtractResult>;
@@ -81,6 +114,11 @@ export interface IAssetUrls {
   readonly kind: 'asset-protocol' | 'blob' | 'none';
   /** 把本地绝对路径变成一个 <img src> 能用的 URL */
   toUrl(absPath: string): string;
+  /**
+   * 本地数据库里的图片 BLOB → <img src> URL。
+   * 平台不支持（内存/浏览器）时缺省，调用方回退到 toUrl。
+   */
+  imageUrl?(databaseDir: string, imageId: string): string | null;
 }
 
 export interface IOpener {
@@ -114,6 +152,7 @@ export interface Platform {
   readonly kind: 'tauri' | 'memory' | 'web';
   readonly fs: IFileSystem;
   readonly zip: IZip;
+  readonly sql: ISql;
   readonly paths: IAppPaths;
   readonly assets: IAssetUrls;
   readonly opener: IOpener;
