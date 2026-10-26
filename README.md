@@ -27,8 +27,8 @@
 
 | 用途 | 文件 |
 |---|---|
-| 安装版（推荐） | `TouhouPeachReader-0.1.7-x64-setup.exe` |
-| 免安装版 | `TouhouPeachReader-0.1.7-portable.exe` |
+| 安装版（推荐） | `TouhouPeachReader-0.1.8-x64-setup.exe` |
+| 免安装版 | `TouhouPeachReader-0.1.8-portable.exe` |
 | 数据库 | `TouhouPeachReader-DB-1.0.0.tpr` |
 
 发布页：<https://github.com/X1a0se/Touhou-Peach-Reader/releases/latest>
