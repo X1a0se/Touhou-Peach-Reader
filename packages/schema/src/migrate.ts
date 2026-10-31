@@ -25,7 +25,7 @@ export class UnsupportedSchemaError extends Error {
   ) {
     super(
       code === 'E_NEWER_SCHEMA'
-        ? `该数据库由更新版本的 Touhou Peach Reader 创建（schemaVersion=${version}），请先升级客户端。`
+        ? `该数据库由更新版本的“东方桃图吧大书库”创建（schemaVersion=${version}），请先升级客户端。`
         : `无法识别的 schemaVersion=${version}。`,
     );
     this.name = 'UnsupportedSchemaError';

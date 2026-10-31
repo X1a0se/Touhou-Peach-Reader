@@ -43,7 +43,7 @@ export function Layout() {
                 {services.app.getName()}
               </h1>
               <p className="text-[0.7rem] text-muted-foreground">
-                东方同人阅读器 · 阅读器与数据库分离
+                桃文阅读器 · 阅读器与数据库分离
               </p>
             </div>
             <div className="ml-auto flex items-center gap-2">

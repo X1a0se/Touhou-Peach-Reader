@@ -9,7 +9,7 @@ import { isTauri } from './index.js';
  * core / ui / schema 仍然零 Tauri 依赖（scripts/check-no-tauri.mjs 会守住）。
  */
 
-export const TPR_FILTER = [{ name: '东方桃园数据库', extensions: ['tpr'] }];
+export const TPR_FILTER = [{ name: '东方桃图吧大书库数据库', extensions: ['tpr'] }];
 
 export const WALLPAPER_FILTER = [
   { name: '图片（PNG / JPEG / WebP）', extensions: ['png', 'jpg', 'jpeg', 'webp'] },

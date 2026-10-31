@@ -1,6 +1,8 @@
-# Touhou Peach Reader
+# 东方桃图吧大书库
 
-东方同人阅读客户端。阅读器与数据库分离：客户端只负责呈现、搜索、收藏、编辑、同步，所有内容来自可独立分发的 `.tpr` 数据库包。
+东方桃图吧大书库：东方同人阅读客户端。阅读器与数据库分离：客户端只负责呈现、搜索、收藏、编辑、同步，所有内容来自可独立分发的 `.tpr` 数据库包。
+
+> 0.1.9 起项目显示名由「Touhou Peach Reader / 东方同人阅读器」更新为「东方桃图吧大书库」。数据目录 `%APPDATA%\com.touhou.peachreader`、`.tpr` 格式与数据库均不变；旧安装版会与新版本并列在“应用和功能”里，升级后请手动卸载旧版。
 
 ## Q&A
 
@@ -27,8 +29,8 @@
 
 | 用途 | 文件 |
 |---|---|
-| 安装版（推荐） | `TouhouPeachReader-0.1.8-x64-setup.exe` |
-| 免安装版 | `TouhouPeachReader-0.1.8-portable.exe` |
+| 安装版（推荐） | `TouhouPeachReader-0.1.9-x64-setup.exe` |
+| 免安装版 | `TouhouPeachReader-0.1.9-portable.exe` |
 | 数据库 | `TouhouPeachReader-DB-1.0.0.tpr` |
 
 发布页：<https://github.com/X1a0se/Touhou-Peach-Reader/releases/latest>
@@ -91,11 +93,11 @@ corepack pnpm release:publish  # 把 dist/release 里的安装包与免安装版
 
 ## 版本与升级（安装版 / 免安装版）
 
-Tauri **没有增量更新**：`tauri build` 只会生成新的免安装 exe 与 NSIS 安装包，**不会**替换已经装到 `D:\Touhou Peach Reader`（注册表 `InstallLocation`）的那份副本。所以更新一律走**一个入口**：
+Tauri **没有增量更新**：`tauri build` 只会生成新的免安装 exe 与 NSIS 安装包，**不会**替换已经装到 `%LOCALAPPDATA%\东方桃图吧大书库`（旧版默认目录 `D:\Touhou Peach Reader`，以注册表 `InstallLocation` 为准）的那份副本。所以更新一律走**一个入口**：
 
 ```bash
 corepack pnpm release            # 一条命令：check → build → 覆盖安装版 → 刷新 dist/portable → 核对
-node scripts/release.mjs --set 0.1.2   # 需要升版本号时，先统一改 5 处，再 pnpm release
+node scripts/release.mjs --set 0.2.0   # 需要升版本号时，先统一改 5 处，再 pnpm release
 ```
 
 也可以直接**双击仓库根目录的 `发布更新.cmd`**（内部就是上面这条命令，结束会停住窗口）。
@@ -105,7 +107,7 @@ node scripts/release.mjs --set 0.1.2   # 需要升版本号时，先统一改 5 
 1. `check`（typecheck + 全部单测 + 依赖边界 + Tauri 泄漏检查）；
 2. `tauri build`，产出 NSIS 安装包与新的 exe；
 3. 按注册表里的 `InstallLocation` **静默覆盖安装版**（应用正在运行会先报错让你关闭）；
-4. 把 exe + 安装包 + `README.txt` 收进 **`dist/portable/`**（固定的免安装目录，直接双击 `Touhou Peach Reader.exe`），并自动同步到 **`D:\\Touhou Peach Reader Portable`**（目录不存在时跳过并提示，环境变量 `TPR_PORTABLE_MIRROR` 可换目标）；
+4. 把 exe + 安装包 + `README.txt` 收进 **`dist/portable/`**（固定的免安装目录，直接双击 `东方桃图吧大书库.exe`），并自动同步到 **`D:\Touhou Peach Reader Portable`**（历史镜像目录名，保留以兼容旧文件夹；目录不存在时跳过并提示，环境变量 `TPR_PORTABLE_MIRROR` 可换目标）；
 5. 打印核对表：5 处版本号、构建产物、免安装目录、便携镜像、安装版版本；全部一致才算成功。
 
 细粒度命令仍然保留：`release:status`（只读核对，含便携镜像）、`release:build`、`release:install`、`release:portable`（刷新 `dist/portable` 并同步便携镜像）。

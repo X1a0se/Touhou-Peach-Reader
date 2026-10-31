@@ -143,7 +143,7 @@ async function upload(releaseId, file) {
 /** 把 dist/portable 里的产物按 release 命名规则复制到 dist/release，并列出候选资产。 */
 function collectAssets() {
   const installer = readdirSync(PORTABLE_DIR).find((name) => name.endsWith('_x64-setup.exe'));
-  const wanted = [{ name: APP + '-' + version + '-portable.exe', from: join(PORTABLE_DIR, 'Touhou Peach Reader.exe') }];
+  const wanted = [{ name: APP + '-' + version + '-portable.exe', from: join(PORTABLE_DIR, '东方桃图吧大书库.exe') }];
   if (installer) wanted.push({ name: APP + '-' + version + '-x64-setup.exe', from: join(PORTABLE_DIR, installer) });
 
   for (const item of wanted) {
@@ -178,7 +178,7 @@ const main = async () => {
 
   const dbAsset = release.assets.find((a) => a.name.endsWith('.tpr'));
   const dbVersion = dbAsset ? (/DB-(\d+\.\d+\.\d+)\.tpr$/.exec(dbAsset.name)?.[1] ?? '未知') : '未知';
-  const title = 'Touhou Peach Reader ' + version + ' · 数据库 ' + dbVersion;
+  const title = '东方桃图吧大书库 ' + version + ' · 数据库 ' + dbVersion;
   const body = notesPath ? readFileSync(notesPath, 'utf8') : release.body;
 
   // 只传当前版本的安装包/免安装 exe 与数据库资产；旧版本文件留给 --clean 处理

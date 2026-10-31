@@ -1,6 +1,8 @@
-# Touhou Peach Reader — 技术设计文档
+# 东方桃图吧大书库 — 技术设计文档
 
 > 版本：design-v1 ｜ 日期：2026-10-19 ｜ 对应 `/goal` 1–12 ｜ 对应代码基线：空仓库（仅 `TohoPR_plan.md`、`TohoPR_goal.md`）
+>
+> 0.1.9 起程序显示名改为「东方桃图吧大书库」；本文档的配置示例与现行行为已按新名更新，文末的历史执行记录保留当时的旧名。
 >
 > **本文档的用途**：位于 `TohoPR_plan.md`（架构意图）与 `TohoPR_goal.md`（验收单元）之间，回答"**具体怎么实现**"。
 > 读完本文档应当可以直接开始写 Goal 1 的代码，不需要再做任何技术选型。
@@ -959,7 +961,7 @@ export const MIGRATIONS: Record<number, Migration> = {
 export class UnsupportedSchemaError extends Error {
   constructor(readonly code: 'E_NEWER_SCHEMA' | 'E_UNKNOWN_SCHEMA', readonly version: number) {
     super(code === 'E_NEWER_SCHEMA'
-      ? `该数据库由更新版本的 Touhou Peach Reader 创建（schemaVersion=${version}），请升级客户端。`
+      ? `该数据库由更新版本的“东方桃图吧大书库”创建（schemaVersion=${version}），请先升级客户端。`
       : `无法识别的 schemaVersion=${version}。`);
   }
 }
@@ -1683,8 +1685,8 @@ assets: { kind: 'asset-protocol', toUrl: (abs) => convertFileSrc(abs) }
 cd apps/desktop
 pnpm add -D @tauri-apps/cli@2.12.3 @tauri-apps/api@2.12.4 \
   @tauri-apps/plugin-opener@2.7.2 @tauri-apps/plugin-dialog@2.8.3
-pnpm tauri init --app-name "Touhou Peach Reader" \
-  --window-title "Touhou Peach Reader" \
+pnpm tauri init --app-name "东方桃图吧大书库" \
+  --window-title "东方桃图吧大书库" \
   --frontend-dist ../dist --dev-url http://localhost:1420 \
   --before-dev-command "pnpm dev" --before-build-command "pnpm build"
 ```
@@ -1696,7 +1698,7 @@ pnpm tauri init --app-name "Touhou Peach Reader" \
 ```json
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Touhou Peach Reader",
+  "productName": "东方桃图吧大书库",
   "version": "0.1.0",
   "identifier": "com.touhou.peachreader",
   "build": {
@@ -1709,7 +1711,7 @@ pnpm tauri init --app-name "Touhou Peach Reader" \
     "windows": [
       {
         "label": "main",
-        "title": "Touhou Peach Reader",
+        "title": "东方桃图吧大书库",
         "width": 1280,
         "height": 840,
         "minWidth": 960,
@@ -1732,7 +1734,7 @@ pnpm tauri init --app-name "Touhou Peach Reader" \
 }
 ```
 
-- `productName` 与窗口 `title` 都写死 `Touhou Peach Reader` —— Goal 1 的验收就是窗口标题，两个地方都要对。
+- `productName` 与窗口 `title` 都写死 `东方桃图吧大书库` —— Goal 1 的验收就是窗口标题，两个地方都要对。
 - `identifier` 决定 `$APPDATA` 的实际路径：`%APPDATA%\com.touhou.peachreader`（Windows）/ `~/Library/Application Support/com.touhou.peachreader`（macOS）。`@tpr/platform` 里的 `dataDir` 由它推导，**不要**在别处硬编码。
 - `assetProtocol.scope` 必须是 `$APPDATA/**`；写窄了图片全白，写宽了（如 `**`）等于把整个磁盘暴露给页面。
 - CSP 里 `connect-src` 必须含 GitHub 相关域：`api.github.com`（API）、`github.com`（release 重定向）、`objects.githubusercontent.com` / `release-assets.githubusercontent.com` / `*.githubusercontent.com`（实际资产下载）。实现时最初漏了资产域，真机下载会在重定向处被 CSP 拦下——已补进 `tauri.conf.json`。**`style-src` 的 `'unsafe-inline'` 不能省**：Tailwind v4 与 React 内联 style 依赖它。
@@ -1826,7 +1828,7 @@ async fn zip_extract_all(app: tauri::AppHandle, zip_path: String, dest_dir: Stri
 | `zip_create_from_dir_to` | `IZip.createFromDirTo` / `exportDatabaseToPath` | **写 app data 之外**：源目录必须在 app data 内，目标来自系统保存对话框；校验绝对路径、`.tpr` 后缀、父目录存在；同目录写 `*.partial`，成功后 `rename` 覆盖，失败删 partial、保留旧目标 |
 | `stage_import` | `apps/desktop/src/platform/files.ts` 的 `stageTprFile` | **读 app data 之外**（Goal 18）：拖入 / 对话框选中的 `.tpr` 先复制到 `imports/staged-{ms}-{safe}.tpr`，后续解压与合并只碰 app data 内的路径；校验绝对路径、`.tpr` 后缀、常规文件、≤1 GB |
 | `app_info` | `apps/desktop/src/platform/app-info.ts` | 只读：返回 `{version, exePath, dataDir}`。`version` 取 `app.package_info()`（与 `tauri.conf.json` / `Cargo.toml` 同源）（Goal 19） |
-| `install_info` | `apps/desktop/src/platform/app-info.ts` | 只读：查 `HKCU\…\Uninstall\Touhou Peach Reader` 的 `InstallLocation` / `DisplayVersion`，返回 `{location, version}` 或 `null`；用于判断当前 exe 是安装版还是免安装版（Goal 20） |
+| `install_info` | `apps/desktop/src/platform/app-info.ts` | 只读：查 `HKCU\…\Uninstall\东方桃图吧大书库` 的 `InstallLocation` / `DisplayVersion`，返回 `{location, version}` 或 `null`；用于判断当前 exe 是安装版还是免安装版（Goal 20） |
 | `import_wallpaper` | `IWallpaperStore.importFile` | 壁纸源在 app data 之外（用户任意目录），读入后复制到 `$APPDATA/wallpapers/wp-{epoch_ms}.{ext}`；校验绝对路径、扩展名白名单、≤20 MB、magic bytes（PNG/JPEG/WebP）；返回 `{fileName, bytes}` |
 | `http_*` | — | **不实现**：网络走 JS `fetch`（见 14.5），避免把 reqwest/TLS 拖进首次编译 |
 

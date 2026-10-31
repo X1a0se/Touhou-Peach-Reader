@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-title 更新 Touhou Peach Reader（安装版 + 免安装版）
+title 更新 东方桃图吧大书库（安装版 + 免安装版）
 cd /d "%~dp0"
 
 echo.

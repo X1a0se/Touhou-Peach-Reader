@@ -9,7 +9,7 @@ describe('version', () => {
   });
 
   it('应用名与窗口标题一致（Goal 1 验收）', () => {
-    expect(APP_NAME).toBe('Touhou Peach Reader');
+    expect(APP_NAME).toBe('东方桃图吧大书库');
   });
 });
 

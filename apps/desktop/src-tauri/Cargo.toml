@@ -1,7 +1,7 @@
 [package]
 name = "touhou-peach-reader"
-version = "0.1.8"
-description = "东方同人阅读器"
+version = "0.1.9"
+description = "东方桃图吧大书库：东方同人阅读客户端"
 edition = "2021"
 rust-version = "1.77"
 

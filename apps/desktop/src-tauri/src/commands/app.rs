@@ -46,7 +46,7 @@ pub struct InstallInfo {
 /// 并把命令放到阻塞线程池，彻底避免主线程卡死。
 #[cfg(windows)]
 const UNINSTALL_KEY: &str =
-    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Touhou Peach Reader";
+    r"Software\Microsoft\Windows\CurrentVersion\Uninstall\东方桃图吧大书库";
 
 #[cfg(windows)]
 fn normalize_install_info(location: String, version: String) -> Option<InstallInfo> {
@@ -100,11 +100,11 @@ mod tests {
         assert!(normalize_install_info("   ".into(), "0.1.3".into()).is_none());
 
         let info = normalize_install_info(
-            " \"D:\\Touhou Peach Reader\\\" ".into(),
+            " \"D:\\东方桃图吧大书库\\\" ".into(),
             " 0.1.3 ".into(),
         )
         .expect("有效安装路径");
-        assert_eq!(info.location, "D:\\Touhou Peach Reader\\");
+        assert_eq!(info.location, "D:\\东方桃图吧大书库\\");
         assert_eq!(info.version, "0.1.3");
     }
 }

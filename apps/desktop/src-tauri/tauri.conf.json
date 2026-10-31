@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Touhou Peach Reader",
-  "version": "0.1.8",
+  "productName": "东方桃图吧大书库",
+  "version": "0.1.9",
   "identifier": "com.touhou.peachreader",
   "build": {
     "beforeDevCommand": "corepack pnpm --filter @tpr/desktop dev",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Touhou Peach Reader",
+        "title": "东方桃图吧大书库",
         "width": 1120,
         "height": 760,
         "minWidth": 880,

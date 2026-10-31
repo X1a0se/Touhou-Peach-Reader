@@ -3,7 +3,7 @@
  * 发布一致性工具（Goal 19）。
  *
  * 背景：Tauri 没有"增量更新"；`tauri build` 只产出新的免安装 exe 与 NSIS 安装包，
- * **不会**自动替换已安装到 `D:\Touhou Peach Reader`（或其它 `InstallLocation`）的副本。
+ * **不会**自动替换已安装到 `%LOCALAPPDATA%\东方桃图吧大书库`（或其它 `InstallLocation`）的副本。
  * 所以版本号散落在 5 个文件里，必须有一个单一入口来 bump / 构建 / 覆盖安装 / 核对。
  *
  * 用法：
@@ -34,13 +34,13 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const APP_ID = 'com.touhou.peachreader';
-const UNINSTALL_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Touhou Peach Reader';
+const UNINSTALL_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\东方桃图吧大书库';
 const PORTABLE_EXE = join(ROOT, 'apps/desktop/src-tauri/target/release/touhou-peach-reader.exe');
 const NSIS_DIR = join(ROOT, 'apps/desktop/src-tauri/target/release/bundle/nsis');
 const DIST_DIR = join(ROOT, 'dist');
 const PORTABLE_DIR = join(DIST_DIR, 'portable');
-const PORTABLE_NAME = 'Touhou Peach Reader.exe';
-/** 便携版镜像目录：每次刷新 dist/portable 后同步过去（TPR_PORTABLE_MIRROR 可覆盖） */
+const PORTABLE_NAME = '东方桃图吧大书库.exe';
+/** 便携版镜像目录（沿用旧英文目录名，避免迁移用户数据）：刷新 dist/portable 后同步过去（TPR_PORTABLE_MIRROR 可覆盖） */
 const MIRROR_DIR = process.env.TPR_PORTABLE_MIRROR ?? 'D:\\Touhou Peach Reader Portable';
 const TAURI_CONF = join(ROOT, 'apps/desktop/src-tauri/tauri.conf.json');
 const CARGO_TOML = join(ROOT, 'apps/desktop/src-tauri/Cargo.toml');
@@ -117,21 +117,40 @@ function exeVersion(file) {
 
 /** 注册表里的安装位置与版本（只读）。 */
 function installedInfo() {
-  const result = spawnSync('reg', ['query', UNINSTALL_KEY], { encoding: 'utf8' });
+  // 注册表值可能含中文路径：用 PowerShell 输出 UTF-8 JSON，避免 reg.exe 的 GBK 解码乱码。
+  const script = [
+    '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;',
+    '$key = Get-ItemProperty -LiteralPath $env:TPR_UNINSTALL_KEY -ErrorAction SilentlyContinue;',
+    'if ($null -ne $key) { [pscustomobject]@{ location = $key.InstallLocation; version = $key.DisplayVersion } | ConvertTo-Json -Compress }',
+  ].join(' ');
+  const keyPath = UNINSTALL_KEY.replace(/^HKCU\\/, 'HKCU:\\');
+  const result = spawnSync(
+    'powershell.exe',
+    ['-NoProfile', '-NonInteractive', '-Command', script],
+    { encoding: 'utf8', env: { ...process.env, TPR_UNINSTALL_KEY: keyPath } },
+  );
   if (result.status !== 0) return null;
-  const text = result.stdout;
-  const location = (/InstallLocation\s+REG_SZ\s+(.+)/.exec(text)?.[1] ?? '')
+  const text = (result.stdout ?? '').trim().replace(/^\uFEFF/, '');
+  if (!text) return null;
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const location = String(raw?.location ?? '')
     .trim()
     .replace(/^"|"$/g, '');
-  const version = (/DisplayVersion\s+REG_SZ\s+(.+)/.exec(text)?.[1] ?? '').trim();
-  const exe = location ? join(location, 'touhou-peach-reader.exe') : '';
+  if (!location) return null;
+  const version = String(raw?.version ?? '').trim().replace(/^"|"$/g, '');
+  const exe = join(location, 'touhou-peach-reader.exe');
   return {
     location,
     version,
     exe,
-    exists: Boolean(exe && existsSync(exe)),
-    fileVersion: exe && existsSync(exe) ? exeVersion(exe) : null,
-    sha: exe && existsSync(exe) ? sha256(exe) : null,
+    exists: existsSync(exe),
+    fileVersion: existsSync(exe) ? exeVersion(exe) : null,
+    sha: existsSync(exe) ? sha256(exe) : null,
   };
 }
 
@@ -171,7 +190,7 @@ function status() {
   const mirror = manifestOf(MIRROR_DIR);
   const mirrorExe = join(MIRROR_DIR, PORTABLE_NAME);
 
-  console.log('\nTouhou Peach Reader · 发布一致性\n');
+  console.log('\n东方桃图吧大书库 · 发布一致性\n');
   line('根 package', versions.root);
   line('core', versions.core);
   line('desktop', versions.desktop);
@@ -244,7 +263,7 @@ function build() {
   const pids = runningProcesses();
   if (pids.length > 0) {
     fail(
-      `应用正在运行（PID ${pids.join(', ')}），Windows 会锁住 target\\release\\touhou-peach-reader.exe，无法覆盖。\n   请先退出 Touhou Peach Reader，再重跑 pnpm release:build。`,
+      `应用正在运行（PID ${pids.join(', ')}），Windows 会锁住 target\\release\\touhou-peach-reader.exe，无法覆盖。\n   请先退出 东方桃图吧大书库，再重跑 pnpm release:build。`,
     );
   }
   const env = {
@@ -279,11 +298,11 @@ function install(quiet = false) {
 
   const pids = runningProcesses();
   if (pids.length > 0) {
-    fail(`应用正在运行（PID ${pids.join(', ')}）。请先退出 Touhou Peach Reader 再覆盖安装。`);
+    fail(`应用正在运行（PID ${pids.join(', ')}）。请先退出 东方桃图吧大书库 再覆盖安装。`);
   }
 
   const installed = installedInfo();
-  const target = installed?.location || join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData/Local'), 'Touhou Peach Reader');
+  const target = installed?.location || join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData/Local'), '东方桃图吧大书库');
   console.log(`▶ 静默安装 ${installerName}\n  目标目录 ${target}`);
   const result = spawnSync(installer, ['/S', `/D=${target}`], {
     stdio: 'inherit',
@@ -323,7 +342,7 @@ function packagePortable() {
   copyFileSync(installer, join(PORTABLE_DIR, basename(installer)));
 
   const readme = [
-    `Touhou Peach Reader ${versions.root}（免安装版）`,
+    `东方桃图吧大书库 ${versions.root}（免安装版）`,
     '',
     `运行：双击「${PORTABLE_NAME}」`,
     '数据：%APPDATA%\\com.touhou.peachreader（与安装版共用，升级不会丢库）',
@@ -364,7 +383,7 @@ function mirrorPortable() {
     } catch (error) {
       fail(
         `无法写入便携镜像 ${join(MIRROR_DIR, name)}：${error.code ?? error.message}\n` +
-          '   如果应用正从该目录运行，请先退出 Touhou Peach Reader 再重试。',
+          '   如果应用正从该目录运行，请先退出 东方桃图吧大书库 再重试。',
       );
     }
   }
@@ -376,7 +395,7 @@ function release() {
   const pids = runningProcesses();
   if (pids.length > 0) {
     fail(
-      `应用正在运行（PID ${pids.join(', ')}）。\n   请先退出 Touhou Peach Reader，再重跑 pnpm release（或双击「发布更新.cmd」）。`,
+      `应用正在运行（PID ${pids.join(', ')}）。\n   请先退出 东方桃图吧大书库，再重跑 pnpm release（或双击「发布更新.cmd」）。`,
     );
   }
   build();
