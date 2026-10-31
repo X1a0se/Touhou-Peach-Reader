@@ -858,6 +858,7 @@ async function importZipPath(src: string, platform: Platform): Promise<ImportRes
   // 4) 迁移到当前版本（在 zod parse 之前改形状）
   const { db, applied } = migrateDatabase(raw, manifest.schemaVersion);
   // 5) 结构校验（schema + 引用完整性），error 即中止并清理 staging
+  //    校验前先剔除包内没有文件的图片条目（旧版本可能导出过 BLOB 缺失的包），记 W_IMAGE_FILE_MISSING
   const report = validateDatabase(toSnapshot(db));
   if (!report.ok) { await fs.remove(staging, { recursive: true }); throw new ImportError(report.errors); }
   // 6) 原子换名入库 + 写 active.json + 建索引
@@ -865,6 +866,8 @@ async function importZipPath(src: string, platform: Platform): Promise<ImportRes
   return { snapshot: await loadSnapshot(manifest.databaseId, platform), report, migrations: applied, rejected: r.rejected };
 }
 ```
+
+导入端的兼容约定：包内 `images.json` 有条目但对应图片文件不存在时，**不当作 error**——该条目会在校验前从内存库中剔除，并在 `report.warnings` 最前面记一条 `W_IMAGE_FILE_MISSING`（`entity: 'image'`），其余继续导入。这样 0.1.8 及更早版本曾导出的“缺 BLOB 包”仍然可恢复；`validateDatabase` 本身的 `E_IMAGE_FILE_MISSING` 契约保持不变，导出端必须保证清单与文件一致。
 
 字节入口（`/goal` 3 的签名）在桌面端是**薄包装**：把 `Uint8Array` 写到 `imports/{ts}.tpr` 再走上面这条路，从而始终使用 Rust 流式解压；在 web/memory 端直接 `fflate.unzipSync`。
 
@@ -881,7 +884,7 @@ export interface ImportResult {
 
 | 编号 | 规则 |
 |---|---|
-| B0 | `all: true` 是**完整备份**：全部 authors/tags/images/articles/series/featured/credits 原样导出，只重算 `manifest.counts` 与 `updatedAt`，不做引用闭包裁剪 |
+| B0 | `all: true` 是**完整备份**：全部 authors/tags/images/articles/series/featured/credits 原样导出，只重算 `manifest.counts` 与 `updatedAt`，不做引用闭包裁剪（BLOB 不可读的图片按 B8 剔除） |
 | B1 | 部分导出：文章集合 = 用户选中集；**作者与标签始终全量导出**（库级词表，未挂接的也带走）；图片按 B3；缺失的引用不补，记 `W_EXPORT_SKIPPED` 警告 |
 | B2 | 系列**只在其全部文章都被包含时**才导出，且 `articleIds` 保持原顺序。只导出系列中一篇时，该篇保留 `seriesId`，导入端产生 `W_DANGLING_SERIES`（可接受的降级，避免造出"残缺系列"） |
 | B3 | 部分导出时图片只打包被选中文章/系列直接引用的那些，未被引用的不导出（全库备份按 B0 全带） |
@@ -889,6 +892,7 @@ export interface ImportResult {
 | B5 | `credits.json` 默认全量导出（`includeCredits: false` 时清空并计入 counts） |
 | B6 | 导出**不做** schema 降级，`schemaVersion` 恒为 `CURRENT_SCHEMA_VERSION` |
 | B7 | `manifest.counts` 重算；`databaseId` 沿用当前库；`updatedAt` 取导出时刻 |
+| B8 | 图片行存在但 SQLite `data` 为 NULL/空时，**不写入包**：从 `images` 数组和 `manifest.counts.images` 中一起移除，记 `W_EXPORT_SKIPPED`（message 注明“已从导出包移除”）；导出包中 `images.json`、实际文件、counts 三者必须一致。导入端对旧版本已产出的缺图包按 §7.5 的 `W_IMAGE_FILE_MISSING` 兼容处理 |
 
 > 取舍：标签/作者是库级词表，体积小、跨库通用，用户新建后往往还没来得及挂文章，"导出即备份"的预期要求它们全量跟随；图片是大文件，部分导出按引用收窄，避免单篇导出变成整库拷贝。`all: true` 走独立分支，保证「导出全库」就是完整备份。
 
@@ -1101,7 +1105,7 @@ Windows 的坑与对策：
 | `PRAGMA user_version` 不是当前版本 | 报 `EIO 不支持的本地数据库版本`，不尝试猜测结构；保留库文件供后续版本迁移 |
 | `manifest` 行缺失 / 关键列不是预期类型 | 报 `EIO database.sqlite 缺少 manifest 行` 或 SQLite 读取错误；不做半读 |
 | 某篇文章没有 `article_contents` 行 | 详情页明确提示"正文缺失：{id}"，列表仍可打开 |
-| 图片行存在但 `data` 为 NULL | 自定义协议返回 404，页面显示图片占位；导出时记 `W_EXPORT_SKIPPED` |
+| 图片行存在但 `data` 为 NULL | 自定义协议返回 404，页面显示图片占位；导出时跳过该图片、从 `images.json` 与 `manifest.counts` 中移除并记 `W_EXPORT_SKIPPED`，避免产出“有元数据、无文件”的坏包；导入缺图包时同样跳过该元数据并记 `W_IMAGE_FILE_MISSING`（warning），不阻断整库导入；合并时 base 的 NULL 图片按“无字节”参与哈希，incoming 包内缺文件的图片在 prepare 阶段剔除，不写入新行 |
 | `active.json` 指向不存在的库 / 没有 `active.json` | `restore()` 返回 `null`，UI 进空状态引导导入；不自动猜测其它库 |
 | 磁盘满（`ENOSPC`）/ SQLite 写失败 | 事务回滚，编辑器保留内存态并明确提示，不静默丢改动 |
 
@@ -1176,7 +1180,8 @@ for id in union(base.ids, incoming.ids):
 
 - `stripNoise` 去掉 `updatedAt` 自身与任何运行时注入字段；比较用结构深比较，数组顺序敏感（`articleIds` 顺序是数据）。
 - **不合并字段级**：不做"取标题自 A、取简介自 B"。理由：字段级合并会产出两个库都不存在的新状态，用户无法预期，也让 round-trip 测试失效。
-- `images`：以 id 为键；两边都有时比较**字节 sha256**：相同 → 保留；不同 → 冲突 `binary-different`（用户选一个，绝不自动换图）。
+- `images`：以 id 为键；两边都有时比较**字节 sha256**：相同 → 保留；不同 → 冲突 `binary-different`（用户选一个，绝不自动换图）。base 的 `data` 为 NULL 时按“无字节”参与比较，读取 SQL 只查 `data IS NOT NULL`，不会把 SQLite NULL 抛成 Rust 类型错误。
+- `images` 文件缺失：`prepare` 先扫描 incoming 的图片元数据并尝试读包内文件；读不到文件的图片从 incoming snapshot 与 `imageFiles` 中剔除，apply 不会为它写元数据，因此不会新增 `data` 为 NULL 的行。若文章仍引用该 id，validate 阶段记 `W_DANGLING_IMAGE`。
 - `featured`：无 id，键 = `${targetType}:${targetId}`。两边都有 → **推荐语取并集**（按 `author ?? ''` + `\u0000` + `text` 去重，保留 base 在前）；这条不产生冲突（推荐语是附加信息，丢一条比多一条更糟）。
 - `credits`：无 id，键 = `${normalizeName(name)}\u0000${role ?? ''}\u0000${link ?? ''}`；并集，保持 base 顺序。
 
@@ -1200,6 +1205,8 @@ export function applyConflicts(
 2. 跑 `validateDatabase`，把新增的 `dangling` 原样塞进 `report.dangling`（**不自动删除**引用）。
 3. `possibleDuplicates`：按 `normalizeName` 分组作者与标签，组内 id ≥ 2 即列出；UI 提供"合并为一条"的后续操作（Goal 9 的编辑器里实现，不在合并流程里自动做）。
 
+- 图片一致性：`prepare` 已按包内文件过滤 incoming 图片，base 的 NULL 按无字节处理；因此合并不会因缺 BLOB 中断，也不会在 apply 时为缺图新增 `data=NULL` 行。被过滤图片若仍被文章引用，由第 2 步的 validate 记 `W_DANGLING_IMAGE`。
+
 ### 10.5 合并页交互契约（Goal 10）
 
 - 三步：**选择文件 → 预览影响 → 确认应用**。
@@ -1215,6 +1222,7 @@ export function applyConflicts(
 4. 图片同 id 异字节 → `binary-different` 冲突。
 5. 合并后再导出再导入 → 无重复实体、无 error 级问题（`/goal` 10 的原话）。
 6. 合并是纯函数：同一输入两次调用结果深相等。
+7. base 图片 `data` 为 NULL、incoming 包内缺图片文件 → prepare 不抛 rusqlite 类型错误；incoming 缺图不进入合并结果，apply 后不新增 NULL 行，base 的 NULL 行保留。
 
 ---
 
@@ -1901,7 +1909,7 @@ export function makeDatabase(over?: Partial<RawDatabase>): RawDatabase {
 | **7** 收藏 | `pnpm --filter @tpr/core test -- -t favorites`（持久化、失效标记） | 收藏→重启仍在；两 tab；取消收藏即时生效 |
 | **8** 随机 | `pnpm --filter @tpr/core test -- -t random`（5 组用例，见 §12.4） | 十连抽网格、可点、可重抽、不足 10 组有提示 |
 | **9** 编辑器 | `pnpm --filter @tpr/core test -- -t edit`（CRUD 纯函数、别名不误判、图片 kind/caption） | 各类实体建/改/删后重启仍存在；图片能选能显；鸣谢可排序 |
-| **10** 导出合并 | `pnpm --filter @tpr/core test -- -t merge`（6 组用例，见 §10.6）、`pnpm --filter @tpr/core test -- -t export`（B1–B7 各一条） | 合并页三步流程；冲突逐条可切换；应用后无重复实体 |
+| **10** 导出合并 | `pnpm --filter @tpr/core test -- -t merge`（7 组用例，见 §10.6）、`pnpm --filter @tpr/core test -- -t export`（B1–B7 各一条） | 合并页三步流程；冲突逐条可切换；应用后无重复实体 |
 | **11** GitHub | `pnpm --filter @tpr/core test -- -t github-url`（URL→API 解析，纯函数） | 输入 release URL 能下载并导入；设置页能检查更新；鸣谢外链可点 |
 | **12** 打包 | `node scripts/check-no-tauri.mjs`（core/ui/schema 中 0 命中）、`pnpm build` 成功 | 安装包双击能起、能导入示例库；`packages/platform/docs/mobile-adaptation.md` 存在且覆盖接口清单 |
 
@@ -2250,6 +2258,16 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 - **标签合并**：`Editor.mergeTags(sourceIds, targetId)` 走一次 `library.applyEdit`：只允许同类别；源标签名称与别名按 `normalizeName` 去重后并入目标别名；文章/系列的 `characterTagIds`/`plotTagIds` 去掉源、按目标类别归位并去重；删除源标签，目标 id 不重算。目标是 `series`/`general` 且源仍被引用时直接报错（这两类标签没有挂接字段，避免静默丢引用）。UI 在编辑器「标签」页新增「合并标签…」面板（目标下拉 + 同类别源复选 + 二次确认）。合并不改文章/系列 `updatedAt`；`library.applyEdit` 会自动重算 counts、校验并落盘。
 - **测试与验证**：core 新增 `article-groups.test.ts` 6 例、`view.test.ts` 增加 3 例、`edit.test.ts` 增加 4 例合并测试（core 120→133）；全仓 typecheck 通过、测试 222 全绿（platform 11 + schema 25 + core 133 + desktop 53）。`biome lint` 对改动文件无新增错误；`biome format` 仍会因工作区历史 CRLF 把整文件判为需重排，未批量格式化无关文件。
 - **取舍**：同系列折叠只作用于当前筛选/搜索后的结果集，组内保持当前排序（文章库按更新时间）；不提供全局展开/收起（逐组按钮足够，与搜索结果页一致）。标签合并限定同类别，避免在 `characterTagIds`/`plotTagIds` 之间改变语义；不新增 schema/迁移/导出格式变化。
+
+## 追加记录：多选搜索、封面压缩、编辑草稿、导入合并标签与 R18
+
+- **多选搜索**：新增 `apps/desktop/src/editor/filter.ts`（`joinSearchParts` / `createQueryMatcher` / `matchesQuery` / `filterByQuery`），复用编辑器搜索的 `tokenizeQuery`，用 `normalizeName` 做 NFKC、大小写与空白归一化，多个 token 按 AND 同时包含；空查询显示全部。新增受控的 `ListSearchInput`（`type="search"`，Esc 清空）并接入三处原先没有搜索的多选面：文章面板「多选导出」（标题 + 简介 + 系列标题 + 作者名）、标签合并面板（同时过滤目标下拉与源候选）、文章/系列表单的插图 `PickerRow`。已勾选项始终留在可见列表里，避免“搜索后看不见已选”。合并面板同时修正关闭时机：`submit` 等待 `run` 返回，只有合并成功才 `onDone()`，失败保留面板；合并中禁用按钮。已有的 `CreatablePicker`、`ArticleOrderPicker`、`SearchTagFilter` 搜索保持原样。
+- **封面压缩开关**：新增 `apps/desktop/src/components/CompressImagesSwitch.tsx`，从 `useSettingsContext` 读写全局 `compressImages`，`role="switch"`、`aria-label="压缩上传图片"`，保存失败在旁显示红字；图片页与文章/系列的 `CoverField` 内联上传处共用同一个开关，上传仍调用 `prepareImageUpload(file, settings.compressImages)`。开关只影响之后的上传，不追溯已入库图片；设置仍只写 `settings.json`，不进数据库包、不参与导出/合并。
+- **编辑已有实体的草稿**：`apps/desktop/src/editor/drafts.ts` 的草稿信封增加可选 `targetId`，新增 `editDraftId(kind, targetId)`、`findDraftForTarget`、`isEditDraft` 与按 key 排序的 `stableSerialize`；`useDraftAutosave` 增加 `baseline`、`targetId`、`onSaved`、`isDiscarded`：payload 与 baseline 结构比较相等时不写草稿，已有草稿会被删除（改回原样即撤销草稿）；`isDiscarded` 记录本次会话丢弃过的 id，防止“删除草稿后组件卸载/关页时又补写回来”；`beforeunload` 同步 flush，保存/删除成功后通知 `onSaved`。`useDraftBox` 增加 `activate(id)` 与 `wasDiscarded(id)`。文章、系列、作者、标签四类编辑表单都从实体构造 baseline，编辑态也启用 autosave；文章正文尤其要注意：即使已有草稿也读取原正文作为 baseline，正文尚未读到或读取失败时 payload 为 null，不会用空正文覆盖原文；读取失败后仍可直接输入或导入新正文。保存成功才清草稿并关闭；取消/切换标签页/关闭编辑器保留草稿；删除实体成功后才清对应编辑草稿；草稿指向的实体不存在时丢弃并提示。`DraftList` 对编辑草稿显示「编辑」徽章。推荐语与鸣谢仍是原有的整表草稿，图片元数据不接编辑草稿。
+- **导入合并同名标签**：新增 `packages/core/src/db/tag-merge.ts` 的纯函数 `mergeDuplicateTags(db)`：先按 id 去重，再按 `category + "\0" + normalizeName(name)` 分组；每组保留第一个为目标，其余标签的名称与别名按 `normalizeName` 去重后并入目标 `aliases`，并改写文章/系列 `characterTagIds` / `plotTagIds` 的引用、去重保序；跨类别同名不合并，不原地修改输入。`runImport` 在 `normalizeDatabase` 之后、校验与写 SQLite 之前执行合并，后续文件路径、图片剔除、counts、校验全部基于合并后的库；有合并时在报告最前面插入 `W_IMPORT_TAG_MERGED`（写明组数、移除数量与前几个名称），`ImportOutcome` 增加 `mergedTags`，导入成功提示追加「自动合并 N 组同名标签」。只影响导入，不改变导出、合并与 restore 的语义。
+- **R18 特殊显示**：`packages/schema/src/tags.ts` 提供 `R18_TAG_NAME`、`isR18TagName`（`normalizeName` 相等）与 `isR18Tag`（主名或别名命中）；core 的 `hasR18PlotTag(snapshot, tagIds)` 只认 `category === 'plot'` 且能在快照里解析到的标签，角色标签或悬空 id 不触发。`FeaturedCard.r18` 与 `FavoriteEntry.r18` 由文章/系列的情节标签计算；`TagChip` 对情节 R18 用红色芯片，新增 `R18Badge`（`aria-label/title="含 R18 情节"`）。文章/系列详情、文章库卡片与系列组头、精选、收藏、搜索结果（文章与系列组）、首页最近文章、十连抽、编辑器文章/系列列表与标签列表都带徽章或红色芯片。新建/编辑文章与系列时，情节 `TagPicker` 上方新增 `R18Field`：勾选优先复用已在情节标签里的 R18，其次复用库里的 R18（含别名），都没有时调用 `createTag('plot','R18')` 新建并刷新快照；取消勾选会移除所有 R18 情节标签。R18 只是普通 plot 标签，不新增字段、不升 schemaVersion。
+- **测试与验证**：`corepack pnpm typecheck`、`corepack pnpm test`、`corepack pnpm check`、`corepack pnpm build:web` 全部通过。当前全仓 263 例：schema 28、platform 11、core 164、desktop 60；本轮新增 schema `tags.test.ts` 3 例、core `tag-merge.test.ts` 4 例 + `r18.test.ts` 3 例 + library 导入合并 1 例、desktop `filter.test.ts` 4 例 + drafts 编辑 id/目标/stableSerialize 3 例。`check` 额外跑依赖边界与“core/ui/schema 无 Tauri API”检查；`build:web` 329 个模块构建成功。仓库没有 React 组件测试库，UI 交互以 typecheck + 构建 + 手工验收为准。
+- **取舍**：搜索只补在多选面，未改已有选择器的交互；导入合并是自动的，但只在导入路径执行且限定同类别，避免跨语义合并；R18 只认 plot 类别，角色/通用标签同名不触发，别名命中会显示文章徽章但标签芯片按显示名判定；编辑草稿只在字段真的偏离 baseline 时落盘，图片元数据与推荐语/鸣谢保持原状；草稿信封新增字段是向后兼容的可选字段，不升 localStorage 版本。
 
 ---
 

@@ -32,6 +32,11 @@ export interface LibraryState {
 const describe = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
+const describeImport = (snapshot: DBSnapshot, mergedTags: number): string => {
+  const merged = mergedTags > 0 ? `，自动合并 ${mergedTags} 组同名标签` : '';
+  return `已导入「${snapshot.manifest.name}」：${snapshot.articles.length} 篇文章、${snapshot.series.length} 个系列${merged}`;
+};
+
 export function useLibrary(services: Services): LibraryState {
   const [status, setStatus] = useState<LibraryStatus>('loading');
   const [snapshot, setSnapshot] = useState<DBSnapshot | null>(null);
@@ -73,9 +78,7 @@ export function useLibrary(services: Services): LibraryState {
         setSnapshot(outcome.snapshot);
         setWarnings([...outcome.report.warnings]);
         setStatus('ready');
-        setMessage(
-          `已导入「${outcome.snapshot.manifest.name}」：${outcome.snapshot.articles.length} 篇文章、${outcome.snapshot.series.length} 个系列`,
-        );
+        setMessage(describeImport(outcome.snapshot, outcome.mergedTags));
       } catch (cause) {
         setError(describe(cause));
       } finally {
@@ -100,9 +103,7 @@ export function useLibrary(services: Services): LibraryState {
         setSnapshot(outcome.snapshot);
         setWarnings([...outcome.report.warnings]);
         setStatus('ready');
-        setMessage(
-          `已导入「${outcome.snapshot.manifest.name}」：${outcome.snapshot.articles.length} 篇文章、${outcome.snapshot.series.length} 个系列`,
-        );
+        setMessage(describeImport(outcome.snapshot, outcome.mergedTags));
       } catch (cause) {
         setError(describe(cause));
       } finally {

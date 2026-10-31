@@ -4,8 +4,12 @@ import {
   createDraftStore,
   DraftStorageError,
   draftKey,
+  editDraftId,
+  findDraftForTarget,
+  isEditDraft,
   MAX_DRAFTS,
   MAX_PAYLOAD_CHARS,
+  stableSerialize,
   type StorageLike,
 } from '../src/editor/drafts.js';
 
@@ -116,6 +120,46 @@ describe('drafts: 草稿箱纯逻辑', () => {
     const store = createDraftStore(storage, 'db_a');
 
     expect(store.list()).toEqual([]);
+  });
+
+  it('drafts-edit-id: 编辑草稿 id 稳定且带 targetId', () => {
+    expect(editDraftId('article', 'a_0000000000000001')).toBe('edit:article:a_0000000000000001');
+    expect(editDraftId('article', 'a_0000000000000001')).toBe(editDraftId('article', 'a_0000000000000001'));
+    expect(editDraftId('series', 's_0000000000000001')).toBe('edit:series:s_0000000000000001');
+  });
+
+  it('drafts-target-roundtrip: targetId 可往返，旧 envelope 仍可读', () => {
+    const storage = new FakeStorage();
+    const store = createDraftStore(storage, 'db_a');
+    const draft = createDraftEnvelope('article', '编辑', { title: '改' }, 'edit:article:a1', 'a1');
+    store.save(draft);
+
+    const found = store.list()[0];
+    expect(found?.targetId).toBe('a1');
+    expect(isEditDraft(found!)).toBe(true);
+    expect(findDraftForTarget(store.list(), 'article', 'a1')?.id).toBe('edit:article:a1');
+    expect(findDraftForTarget(store.list(), 'series', 'a1')).toBeUndefined();
+
+    // 模拟旧版本写下的草稿：没有 targetId 字段
+    const legacy = {
+      v: 1,
+      id: 'legacy',
+      kind: 'article',
+      label: '旧草稿',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      payload: { title: '旧' },
+    };
+    storage.map.set(draftKey('db_a'), JSON.stringify([legacy]));
+    const legacyStore = createDraftStore(storage, 'db_a');
+    expect(legacyStore.list()).toHaveLength(1);
+    expect(legacyStore.list()[0]?.targetId).toBeUndefined();
+    expect(isEditDraft(legacyStore.list()[0]!)).toBe(false);
+  });
+
+  it('drafts-stable-serialize: 忽略对象 key 顺序，保留数组顺序', () => {
+    expect(stableSerialize({ a: 1, b: [2, 3] })).toBe(stableSerialize({ b: [2, 3], a: 1 }));
+    expect(stableSerialize({ a: [1, 2] })).not.toBe(stableSerialize({ a: [2, 1] }));
+    expect(stableSerialize({ a: 1, b: undefined })).toBe('{"a":1}');
   });
 
   it('drafts-remove-clear: 删除单条与清空整箱', () => {

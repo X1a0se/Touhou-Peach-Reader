@@ -1,6 +1,6 @@
 import type { DBSnapshot, SearchItem, SearchResultRow } from '@tpr/core';
-import { groupSearchItems, resolveTags } from '@tpr/core';
-import { Button, cn, HighlightedText } from '@tpr/ui';
+import { groupSearchItems, hasR18PlotTag, resolveTags } from '@tpr/core';
+import { Button, cn, HighlightedText, R18Badge } from '@tpr/ui';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
@@ -44,6 +44,12 @@ function ResultRow({
       : snapshot && series
         ? resolveTags(snapshot, [...series.characterTagIds, ...series.plotTagIds])
         : [];
+  const r18 =
+    snapshot && article
+      ? hasR18PlotTag(snapshot, article.plotTagIds)
+      : snapshot && series
+        ? hasR18PlotTag(snapshot, series.plotTagIds)
+        : false;
 
   return (
     <li
@@ -73,6 +79,7 @@ function ResultRow({
               {badge}
             </span>
           ))}
+          {r18 ? <R18Badge /> : null}
           {to ? (
             <Link to={to} className="truncate text-sm font-medium hover:text-accent">
               {item.title}
@@ -126,6 +133,7 @@ function SeriesGroup({
     snapshot && entity
       ? resolveTags(snapshot, [...entity.characterTagIds, ...entity.plotTagIds])
       : [];
+  const r18 = snapshot && entity ? hasR18PlotTag(snapshot, entity.plotTagIds) : false;
 
   return (
     <li className="flex flex-col">
@@ -137,6 +145,7 @@ function SeriesGroup({
           <span className="rounded-full border border-border px-2 py-0.5 text-[0.65rem] text-muted-foreground">
             {series.status === 'completed' ? '已完结' : '连载中'}
           </span>
+          {r18 ? <R18Badge /> : null}
           <Link
             to={`/series/${series.id}`}
             className="truncate text-sm font-medium hover:text-accent"

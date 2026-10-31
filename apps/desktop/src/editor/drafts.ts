@@ -15,6 +15,8 @@ export interface DraftEnvelope<T = unknown> {
   label: string;
   updatedAt: string;
   payload: T;
+  /** 编辑已有实体时的目标 id；新建草稿没有这个字段 */
+  targetId?: string;
 }
 
 export interface StorageLike {
@@ -64,8 +66,50 @@ export function createDraftEnvelope<T>(
   label: string,
   payload: T,
   id: string = newDraftId(),
+  targetId?: string,
 ): DraftEnvelope<T> {
-  return { v: 1, id, kind, label, updatedAt: new Date().toISOString(), payload };
+  return {
+    v: 1,
+    id,
+    kind,
+    label,
+    updatedAt: new Date().toISOString(),
+    payload,
+    ...(targetId === undefined ? {} : { targetId }),
+  };
+}
+
+/** 编辑已有实体时的稳定草稿 id：同一实体永远对应同一条草稿。 */
+export function editDraftId(kind: DraftKind, targetId: string): string {
+  return `edit:${kind}:${targetId}`;
+}
+
+export function isEditDraft(draft: DraftEnvelope): boolean {
+  return typeof draft.targetId === 'string' && draft.targetId.length > 0;
+}
+
+export function findDraftForTarget(
+  drafts: readonly DraftEnvelope[],
+  kind: DraftKind,
+  targetId: string,
+): DraftEnvelope | undefined {
+  return drafts.find((draft) => draft.kind === kind && draft.targetId === targetId);
+}
+
+/** 递归按 key 排序后序列化，用于忽略对象 key 顺序的 payload 比较。 */
+export function stableSerialize(value: unknown): string {
+  const normalize = (input: unknown): unknown => {
+    if (Array.isArray(input)) return input.map(normalize);
+    if (input !== null && typeof input === 'object') {
+      const out: Record<string, unknown> = {};
+      for (const key of Object.keys(input as Record<string, unknown>).sort()) {
+        out[key] = normalize((input as Record<string, unknown>)[key]);
+      }
+      return out;
+    }
+    return input;
+  };
+  return JSON.stringify(normalize(value)) ?? 'null';
 }
 
 const KINDS: readonly DraftKind[] = [
@@ -87,7 +131,8 @@ function isDraft(value: unknown): value is DraftEnvelope {
     typeof draft.label === 'string' &&
     typeof draft.updatedAt === 'string' &&
     KINDS.includes(draft.kind as DraftKind) &&
-    'payload' in draft
+    'payload' in draft &&
+    (draft.targetId === undefined || typeof draft.targetId === 'string')
   );
 }
 

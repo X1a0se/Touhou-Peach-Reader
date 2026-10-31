@@ -78,7 +78,20 @@ export function createMergeService(platform: Platform, library: Library): MergeS
 
       const raw = await readDatabaseDir(io, dir);
       const { db } = normalizeDatabase(raw);
-      const snapshot = toSnapshot(db);
+
+      // 图片元数据存在但包内文件缺失/不可读时，不能让它进入合并结果：
+      // 否则 apply 只写元数据，SQLite 里会多出 data 为 NULL 的图片行。
+      const keptImages: typeof db.images = [];
+      const incomingHashes = new Map<string, string>();
+      for (const image of db.images) {
+        const bytes = await readIfExists(io.join(dir, image.file));
+        if (!bytes) continue;
+        keptImages.push(image);
+        incomingHashes.set(image.id, await sha256Hex(bytes));
+      }
+      const snapshot = toSnapshot(
+        keptImages.length === db.images.length ? db : { ...db, images: keptImages },
+      );
 
       const contents = new Map<string, string>();
       for (const article of db.articles) {
@@ -89,19 +102,13 @@ export function createMergeService(platform: Platform, library: Library): MergeS
           contents.set(article.id, '');
         }
       }
-      const imageFiles = new Map(db.images.map((image) => [image.id, { file: image.file }]));
+      const imageFiles = new Map(keptImages.map((image) => [image.id, { file: image.file }]));
 
       const baseHashes = new Map<string, string | null>();
-      const incomingHashes = new Map<string, string | null>();
       for (const image of baseSnapshot.images) {
         const bytes = await readImageBlob(platform, current.dir, image.id);
         baseHashes.set(image.id, bytes ? await sha256Hex(bytes) : null);
       }
-      for (const image of snapshot.images) {
-        const bytes = await readIfExists(io.join(dir, image.file));
-        incomingHashes.set(image.id, bytes ? await sha256Hex(bytes) : null);
-      }
-
       const result = await mergeDatabases(
         { snapshot: baseSnapshot, hashImage: (imageId) => Promise.resolve(baseHashes.get(imageId) ?? null) },
         { snapshot, hashImage: (imageId) => Promise.resolve(incomingHashes.get(imageId) ?? null) },

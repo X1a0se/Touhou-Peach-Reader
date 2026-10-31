@@ -62,7 +62,7 @@ export function ImportPage() {
       <SectionHeading
         eyebrow="入口"
         title="导入数据库"
-        description="拖入 .tpr 包、从本地选择，或填 GitHub 仓库 / release 地址在线下载。"
+        description="拖入 .tpr 包、从本地选择，或填 GitHub 仓库 / release 地址在线下载；导入时会自动合并同类别同名标签。"
       />
 
       {library.error ? (

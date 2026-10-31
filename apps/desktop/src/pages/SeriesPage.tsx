@@ -1,5 +1,5 @@
-import { getSeriesView, resolveTags } from '@tpr/core';
-import { Button, EmptyState, Panel, SectionHeading, cn } from '@tpr/ui';
+import { getSeriesView, hasR18PlotTag, resolveTags } from '@tpr/core';
+import { Button, EmptyState, Panel, R18Badge, SectionHeading, TagChip, cn } from '@tpr/ui';
 import { Link, useParams } from 'react-router';
 import { FavoriteButton } from '../components/FavoriteButton.js';
 import { TagLinks } from '../components/TagLinks.js';
@@ -98,6 +98,7 @@ export function SeriesPage() {
               >
                 {STATUS_LABEL[series.status] ?? series.status}
               </span>
+              {snapshot && hasR18PlotTag(snapshot, series.plotTagIds) ? <R18Badge /> : null}
               <span className="ml-auto flex items-center gap-2">
                 <FavoriteButton kind="series" id={series.id} />
                 <span className="font-mono text-[0.65rem] text-muted-foreground">{series.id}</span>
@@ -147,12 +148,8 @@ export function SeriesPage() {
             {(view.characterTags.length > 0 || view.plotTags.length > 0) && (
               <div className="flex flex-wrap gap-2">
                 {[...view.characterTags, ...view.plotTags].map((tag) => (
-                  <Link
-                    key={tag.id}
-                    to={`/search?q=${encodeURIComponent(tag.name)}`}
-                    className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-accent hover:text-accent"
-                  >
-                    {tag.name}
+                  <Link key={tag.id} to={`/search?q=${encodeURIComponent(tag.name)}`}>
+                    <TagChip name={tag.name} category={tag.category} />
                   </Link>
                 ))}
               </div>
@@ -182,6 +179,7 @@ export function SeriesPage() {
                     {String(index + 1).padStart(2, '0')}
                   </span>
                   <span className="truncate font-medium group-hover:text-accent">{article.title}</span>
+                  {snapshot && hasR18PlotTag(snapshot, article.plotTagIds) ? <R18Badge /> : null}
                   {article.summary ? (
                     <span className="ml-2 hidden truncate text-xs text-muted-foreground sm:inline">
                       {article.summary}

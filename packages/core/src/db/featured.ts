@@ -5,7 +5,7 @@
 import type { FeaturedTargetType, Recommendation } from '@tpr/schema';
 import type { DBSnapshot } from './snapshot.js';
 import type { ImageRef, TagRef } from './view.js';
-import { resolveImageRef, resolveTags, type ViewOptions } from './view.js';
+import { hasR18PlotTag, resolveImageRef, resolveTags, type ViewOptions } from './view.js';
 
 export type FeaturedPage = 'short' | 'series';
 
@@ -23,6 +23,8 @@ export interface FeaturedCard {
   cover: ImageRef | null;
   /** 目标的角色 + 情节标签（失效条目为空） */
   tags: TagRef[];
+  /** 目标的情节标签里是否含 R18（失效条目为 false） */
+  r18: boolean;
   /** 可点进的哈希路由；失效时为 null */
   to: string | null;
   kindLabel: string | null;
@@ -51,6 +53,7 @@ export function getFeaturedCards(snapshot: DBSnapshot, opts: ViewOptions, page: 
           summary: '',
           cover: null,
           tags: [],
+          r18: false,
           to: null,
           kindLabel: null,
         });
@@ -68,6 +71,7 @@ export function getFeaturedCards(snapshot: DBSnapshot, opts: ViewOptions, page: 
           summary: article.summary,
           cover: article.coverImageId ? resolveImageRef(snapshot, opts, article.coverImageId) : null,
           tags: resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds]),
+          r18: hasR18PlotTag(snapshot, article.plotTagIds),
           to: `/article/${article.id}`,
           kindLabel: '系列条目',
         });
@@ -84,6 +88,7 @@ export function getFeaturedCards(snapshot: DBSnapshot, opts: ViewOptions, page: 
         summary: article.summary,
         cover: article.coverImageId ? resolveImageRef(snapshot, opts, article.coverImageId) : null,
         tags: resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds]),
+        r18: hasR18PlotTag(snapshot, article.plotTagIds),
         to: `/article/${article.id}`,
         kindLabel: '短篇',
       });
@@ -103,6 +108,7 @@ export function getFeaturedCards(snapshot: DBSnapshot, opts: ViewOptions, page: 
         summary: '',
         cover: null,
         tags: [],
+        r18: false,
         to: null,
         kindLabel: null,
       });
@@ -119,6 +125,7 @@ export function getFeaturedCards(snapshot: DBSnapshot, opts: ViewOptions, page: 
       summary: series.summary,
       cover: series.coverImageId ? resolveImageRef(snapshot, opts, series.coverImageId) : null,
       tags: resolveTags(snapshot, [...series.characterTagIds, ...series.plotTagIds]),
+      r18: hasR18PlotTag(snapshot, series.plotTagIds),
       to: `/series/${series.id}`,
       kindLabel: series.status === 'completed' ? '系列 · 已完结' : '系列 · 连载中',
     });

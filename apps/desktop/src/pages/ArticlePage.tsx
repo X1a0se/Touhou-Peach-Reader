@@ -1,5 +1,11 @@
-import { type ArticleNeighbors, getArticleNeighbors, getArticleView, type ImageRef } from '@tpr/core';
-import { Markdown, Panel, TagChip } from '@tpr/ui';
+import {
+  type ArticleNeighbors,
+  getArticleNeighbors,
+  getArticleView,
+  hasR18PlotTag,
+  type ImageRef,
+} from '@tpr/core';
+import { Markdown, Panel, R18Badge, TagChip } from '@tpr/ui';
 import { useEffect, useState } from 'react';
 import { FavoriteButton } from '../components/FavoriteButton.js';
 import { Link, useParams } from 'react-router';
@@ -182,6 +188,7 @@ export function ArticlePage() {
                 <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 font-medium text-emerald-700 dark:text-emerald-300">
                   {TYPE_LABEL[article.type] ?? article.type}
                 </span>
+                {snapshot && hasR18PlotTag(snapshot, article.plotTagIds) ? <R18Badge /> : null}
                 <span className="ml-auto flex items-center gap-2">
                   <FavoriteButton kind="article" id={article.id} />
                   <span className="font-mono text-[0.65rem] text-muted-foreground">{article.id}</span>

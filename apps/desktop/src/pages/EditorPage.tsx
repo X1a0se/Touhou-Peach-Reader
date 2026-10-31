@@ -2,6 +2,7 @@ import type { DBSnapshot, Editor } from '@tpr/core';
 import {
   articleSeriesPosition,
   DOCUMENT_ACCEPT,
+  hasR18PlotTag,
   importDocument,
   validateDocumentFile,
 } from '@tpr/core';
@@ -15,18 +16,23 @@ import type {
   Tag,
   TagCategory,
 } from '@tpr/schema';
-import { normalizeName } from '@tpr/schema';
+import { isR18Tag, normalizeName } from '@tpr/schema';
+import { R18Badge } from '@tpr/ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArticleOrderPicker } from '../components/ArticleOrderPicker.js';
 import { AuthorPicker } from '../components/AuthorPicker.js';
+import { CompressImagesSwitch } from '../components/CompressImagesSwitch.js';
 import { DraftList } from '../components/DraftList.js';
 import { ImageFilePicker } from '../components/ImageFilePicker.js';
+import { ListSearchInput } from '../components/ListSearchInput.js';
+import { R18Field } from '../components/R18Field.js';
 import { SeriesPicker } from '../components/SeriesPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
 import { useServices } from '../context.js';
 import { imageSource } from '../lib/images.js';
-import type { DraftStore } from '../editor/drafts.js';
+import { editDraftId, findDraftForTarget, type DraftStore } from '../editor/drafts.js';
 import { formatBytes, prepareImageUpload, uploadNotice } from '../editor/image-upload.js';
+import { filterByQuery, joinSearchParts, matchesQuery } from '../editor/filter.js';
 import { IMAGE_ACCEPT, validateImageFile } from '../editor/images.js';
 import {
   EDITOR_KIND_LABEL,
@@ -192,6 +198,7 @@ function CoverField({
           }}
         />
       </div>
+      <CompressImagesSwitch compact />
       <span className="text-xs text-muted-foreground">
         {message ??
           '上传的图片会存进数据库的 images/ 目录，并自动选中；也可在「图片」标签页统一管理。'}
@@ -267,15 +274,20 @@ export function EditorPage() {
     if (event.key === 'Escape') setSearchOpen(false);
   };
 
-  const run = async (action: () => Promise<void>, done: string | (() => string)): Promise<void> => {
+  const run = async (
+    action: () => Promise<void>,
+    done: string | (() => string),
+  ): Promise<boolean> => {
     setError(null);
     setNotice(null);
     try {
       await action();
       await refresh();
       setNotice(typeof done === 'function' ? done() : done);
+      return true;
     } catch (cause) {
       setError(errorText(cause));
+      return false;
     }
   };
 
@@ -482,7 +494,7 @@ export function EditorPage() {
   );
 }
 
-type Run = (action: () => Promise<void>, done: string | (() => string)) => Promise<void>;
+type Run = (action: () => Promise<void>, done: string | (() => string)) => Promise<boolean>;
 
 /**
  * 搜索跳转：只在 focus.token 变化时执行一次。
@@ -557,14 +569,31 @@ function PickerRow({
   value: string[];
   onChange(next: string[]): void;
 }) {
+  const [query, setQuery] = useState('');
+  const matched = new Set(
+    filterByQuery(options, query, (option) => joinSearchParts([option.label, option.id])).map(
+      (option) => option.id,
+    ),
+  );
+  const visibleOptions = options.filter(
+    (option) => matched.has(option.id) || value.includes(option.id),
+  );
   return (
     <div className="flex flex-col gap-1.5">
       <span className={labelClass}>{title}</span>
+      <ListSearchInput
+        value={query}
+        onChange={setQuery}
+        ariaLabel={`搜索${title}`}
+        placeholder={`搜索${title}…`}
+      />
       <div className="flex max-h-40 flex-wrap gap-x-4 gap-y-1 overflow-auto rounded-md border border-border p-2">
         {options.length === 0 ? (
           <span className="text-xs text-muted-foreground">还没有可选条目</span>
+        ) : visibleOptions.length === 0 ? (
+          <span className="text-xs text-muted-foreground">没有匹配的条目</span>
         ) : null}
-        {options.map((option) => (
+        {visibleOptions.map((option) => (
           <label key={option.id} className="flex items-center gap-1.5 text-sm">
             <input
               type="checkbox"
@@ -607,13 +636,39 @@ function ArticlesPanel({
   const [creating, setCreating] = useState(false);
   const [draftPayload, setDraftPayload] = useState<ArticleDraftPayload | null>(null);
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const [exportQuery, setExportQuery] = useState('');
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+
+  const openExisting = (article: ArticleMeta) => {
+    if (editing?.id === article.id && box.draftId) return;
+    const existing = findDraftForTarget(store.list(), 'article', article.id);
+    box.activate(existing?.id ?? editDraftId('article', article.id));
+    setEditing(article);
+    setCreating(false);
+    setDraftPayload((existing?.payload as ArticleDraftPayload | undefined) ?? null);
+    setDraftNotice(null);
+  };
 
   const openDraft = (id: string) => {
     const draft = box.open(id);
     if (!draft) return;
+    if (draft.targetId) {
+      const target = snapshot.articles.find((article) => article.id === draft.targetId);
+      if (!target) {
+        box.discard(draft.id);
+        setDraftNotice('这条草稿对应的文章已不存在，已丢弃。');
+        return;
+      }
+      setEditing(target);
+      setCreating(false);
+      setDraftPayload((draft.payload as ArticleDraftPayload | undefined) ?? null);
+      setDraftNotice(null);
+      return;
+    }
     setEditing(null);
     setCreating(true);
     setDraftPayload((draft.payload as ArticleDraftPayload | undefined) ?? null);
+    setDraftNotice(null);
   };
 
   const startNew = () => {
@@ -621,12 +676,14 @@ function ArticlesPanel({
     setEditing(null);
     setCreating(true);
     setDraftPayload(null);
+    setDraftNotice(null);
   };
 
   const closeForm = () => {
     setEditing(null);
     setCreating(false);
     setDraftPayload(null);
+    setDraftNotice(null);
     box.close();
   };
 
@@ -643,13 +700,23 @@ function ArticlesPanel({
     ? snapshot.articles.filter((article) => visibleIds.has(article.id))
     : snapshot.articles;
 
+  const exportMatchedIds = new Set(
+    filterByQuery(snapshot.articles, exportQuery, (article) =>
+      joinSearchParts([
+        article.title,
+        article.summary,
+        article.seriesId ? snapshot.maps.series.get(article.seriesId)?.title : undefined,
+        ...article.authorIds.map((id) => snapshot.maps.authors.get(id)?.canonicalName),
+      ]),
+    ).map((article) => article.id),
+  );
+  const exportVisible = snapshot.articles.filter(
+    (article) => exportMatchedIds.has(article.id) || picked.has(article.id),
+  );
+
   useFocusJump(focus, (id) => {
     const target = snapshot.articles.find((article) => article.id === id);
-    if (!target) return;
-    box.close();
-    setCreating(false);
-    setDraftPayload(null);
-    setEditing(target);
+    if (target) openExisting(target);
   });
 
   return (
@@ -658,6 +725,11 @@ function ArticlesPanel({
         <button type="button" className={primaryClass} onClick={startNew}>
           新建文章
         </button>
+        {draftNotice ? (
+          <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive">
+            {draftNotice}
+          </p>
+        ) : null}
         <DraftList
           drafts={box.drafts}
           selectedId={box.draftId}
@@ -665,27 +737,35 @@ function ArticlesPanel({
           onDelete={(id) => {
             const wasOpen = box.draftId === id;
             box.discard(id);
-            if (wasOpen) {
-              setCreating(false);
-              setDraftPayload(null);
-            }
+            if (wasOpen) closeForm();
           }}
         />
         <details className="rounded-md border border-border px-3 py-2 text-sm">
           <summary className="cursor-pointer select-none text-muted-foreground">
             多选导出（已选 {picked.size}）
           </summary>
-          <div className="mt-2 flex max-h-48 flex-col gap-1 overflow-auto">
-            {snapshot.articles.map((article) => (
-              <label key={article.id} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={picked.has(article.id)}
-                  onChange={() => togglePicked(article.id)}
-                />
-                <span className="truncate">{article.title}</span>
-              </label>
-            ))}
+          <div className="mt-2 flex flex-col gap-1.5">
+            <ListSearchInput
+              value={exportQuery}
+              onChange={setExportQuery}
+              ariaLabel="搜索要导出的文章"
+              placeholder="搜索标题、简介、系列或作者…"
+            />
+            <div className="flex max-h-48 flex-col gap-1 overflow-auto">
+              {exportVisible.length === 0 ? (
+                <span className="text-xs text-muted-foreground">没有匹配的文章。</span>
+              ) : null}
+              {exportVisible.map((article) => (
+                <label key={article.id} className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={picked.has(article.id)}
+                    onChange={() => togglePicked(article.id)}
+                  />
+                  <span className="truncate">{article.title}</span>
+                </label>
+              ))}
+            </div>
           </div>
           <button
             type="button"
@@ -700,17 +780,13 @@ function ArticlesPanel({
           items={visible}
           selectedId={editing?.id ?? null}
           empty="没有匹配的文章。"
-          onSelect={(article) => {
-            setCreating(false);
-            setDraftPayload(null);
-            box.close();
-            setEditing(article);
-          }}
+          onSelect={openExisting}
           render={(article) => {
             const position = articleSeriesPosition(snapshot, article.id);
             return (
               <>
                 <span className="truncate">{article.title}</span>
+                {hasR18PlotTag(snapshot, article.plotTagIds) ? <R18Badge /> : null}
                 <span className="shrink-0 text-xs text-muted-foreground">
                   {article.type === 'short'
                     ? '短篇'
@@ -733,10 +809,13 @@ function ArticlesPanel({
           draftId={box.draftId}
           draftStore={store}
           onCancel={closeForm}
+          onDraftSaved={box.refresh}
+          isDraftDiscarded={box.wasDiscarded}
           onSubmit={async (draft) => {
-            await run(async () => {
+            const ok = await run(async () => {
               await editor.saveArticle(draft);
             }, '文章已保存');
+            if (!ok) return;
             if (box.draftId) box.discard(box.draftId);
             closeForm();
           }}
@@ -748,10 +827,13 @@ function ArticlesPanel({
               ? async () => {
                   if (!window.confirm(`删除《${editing.title}》？该操作会同时更新系列目录与精选。`))
                     return;
-                  await run(async () => {
-                    await editor.deleteArticle(editing.id);
+                  const deletedId = editing.id;
+                  const ok = await run(async () => {
+                    await editor.deleteArticle(deletedId);
                   }, '文章已删除');
-                  setEditing(null);
+                  if (!ok) return;
+                  box.discard(editDraftId('article', deletedId));
+                  closeForm();
                 }
               : undefined
           }
@@ -779,6 +861,20 @@ export interface ArticleDraftPayload {
   sourceUrl: string;
 }
 
+const EMPTY_ARTICLE_PAYLOAD: ArticleDraftPayload = {
+  title: '',
+  summary: '',
+  content: '',
+  authorIds: [],
+  translatorIds: [],
+  characterTagIds: [],
+  plotTagIds: [],
+  seriesId: '',
+  coverImageId: '',
+  illustrationImageIds: [],
+  sourceUrl: '',
+};
+
 function ArticleForm({
   snapshot,
   initial,
@@ -789,6 +885,8 @@ function ArticleForm({
   onCancel,
   onDelete,
   onExport,
+  onDraftSaved,
+  isDraftDiscarded,
 }: {
   snapshot: DBSnapshot;
   initial: ArticleMeta | null;
@@ -799,6 +897,8 @@ function ArticleForm({
   onCancel(): void;
   onDelete?: (() => Promise<void>) | undefined;
   onExport?: (() => void) | undefined;
+  onDraftSaved?: (() => void) | undefined;
+  isDraftDiscarded?: ((id: string) => boolean) | undefined;
 }) {
   const services = useServices();
   const { refresh } = useLibraryContext();
@@ -827,6 +927,8 @@ function ArticleForm({
     draft?.illustrationImageIds ?? initial?.illustrationImageIds ?? [],
   );
   const [sourceUrl, setSourceUrl] = useState(draft?.sourceUrl ?? initial?.sourceUrl ?? '');
+  const [baselineContent, setBaselineContent] = useState<string | null>(initial ? null : '');
+  const [contentLoadFailed, setContentLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [importBusy, setImportBusy] = useState(false);
   const [importNotice, setImportNotice] = useState<string | null>(null);
@@ -863,13 +965,35 @@ function ArticleForm({
       sourceUrl,
     ],
   );
+  const baselinePayload = useMemo<ArticleDraftPayload | null>(() => {
+    if (!initial) return EMPTY_ARTICLE_PAYLOAD;
+    if (baselineContent === null) return null;
+    return {
+      title: initial.title,
+      summary: initial.summary,
+      content: baselineContent,
+      authorIds: initial.authorIds,
+      translatorIds: initial.translatorIds,
+      characterTagIds: initial.characterTagIds,
+      plotTagIds: initial.plotTagIds,
+      seriesId: initial.seriesId ?? '',
+      coverImageId: initial.coverImageId ?? '',
+      illustrationImageIds: initial.illustrationImageIds ?? [],
+      sourceUrl: initial.sourceUrl ?? '',
+    };
+  }, [initial, baselineContent]);
+
   const { error: draftError } = useDraftAutosave({
     store: draftStore ?? null,
     draftId: draftId ?? null,
     kind: 'article',
     label: title.trim() || '未命名文章',
     payload: draftPayload,
-    enabled: !initial && Boolean(draftId && draftStore),
+    enabled: Boolean(draftId && draftStore),
+    baseline: baselinePayload,
+    ...(initial ? { targetId: initial.id } : {}),
+    ...(onDraftSaved ? { onSaved: onDraftSaved } : {}),
+    ...(isDraftDiscarded ? { isDiscarded: isDraftDiscarded } : {}),
   });
 
   /** 导入 .txt / .docx：替换正文；正文非空时先确认（受控 textarea 的 Ctrl+Z 不可靠） */
@@ -900,20 +1024,29 @@ function ArticleForm({
   const initialId = initial?.id ?? null;
   const hasDraft = Boolean(draft);
   useEffect(() => {
-    // 草稿里的正文以草稿为准，不能被「新建 = 空正文」的初始化覆盖
-    if (hasDraft) return;
+    // 草稿里的正文以草稿为准；编辑态即使有草稿也要读原正文，作为「是否改过」的基线
     if (!initialId) {
-      setContent('');
+      setBaselineContent('');
+      setContentLoadFailed(false);
+      if (!hasDraft) setContent('');
       return;
     }
     let cancelled = false;
-    setContent(null);
+    if (!hasDraft) setContent(null);
+    setContentLoadFailed(false);
     void services.library.readContent(initialId).then(
       (text) => {
-        if (!cancelled) setContent(text);
+        if (cancelled) return;
+        setBaselineContent(text);
+        setContentLoadFailed(false);
+        if (!hasDraft) setContent(text);
       },
       () => {
-        if (!cancelled) setContent('');
+        if (cancelled) return;
+        setBaselineContent('');
+        // 读取失败时让正文保持 null：保存元数据不会把空正文写回原文件。
+        setContentLoadFailed(true);
+        if (!hasDraft) setContent(null);
       },
     );
     return () => {
@@ -974,6 +1107,11 @@ function ArticleForm({
           草稿未保存：{draftError}
         </p>
       ) : null}
+      {draft ? (
+        <p className="rounded-lg border border-accent/30 bg-accent-soft/20 px-3 py-2 text-xs text-accent">
+          已恢复未保存的草稿；保存或取消前，改动会继续自动保留。
+        </p>
+      ) : null}
       <Field label="标题">
         <input
           className={inputClass}
@@ -998,7 +1136,7 @@ function ArticleForm({
           <button
             type="button"
             className={buttonClass}
-            disabled={importBusy || content === null}
+            disabled={importBusy || (content === null && !contentLoadFailed)}
             onClick={() => documentInputRef.current?.click()}
           >
             <span aria-hidden>📄</span> {importBusy ? '导入中…' : '导入 .txt / .docx'}
@@ -1008,7 +1146,7 @@ function ArticleForm({
             type="file"
             accept={DOCUMENT_ACCEPT}
             className="hidden"
-            disabled={importBusy || content === null}
+            disabled={importBusy || (content === null && !contentLoadFailed)}
             onChange={(event) => {
               const file = event.target.files?.[0];
               event.target.value = '';
@@ -1022,11 +1160,19 @@ function ArticleForm({
           rows={12}
           value={content ?? ''}
           onChange={(event) => setContent(event.target.value)}
-          placeholder={content === null ? '正在读取正文…' : '# 标题\n\n正文…'}
+          placeholder={
+            content === null
+              ? contentLoadFailed
+                ? '正文读取失败；可直接输入新正文，留空保存会保留原正文'
+                : '正在读取正文…'
+              : '# 标题\n\n正文…'
+          }
         />
         <span className="text-xs text-muted-foreground">
           {importNotice ??
-            '保存后写到 articles/{id}.md；编辑元数据时不会覆盖正文。导入的 .txt / .docx 只取纯文字（不含图片与表格样式）。'}
+            (contentLoadFailed && content === null
+              ? '正文读取失败；未修改正文时保存不会覆盖原正文。'
+              : '保存后写到 articles/{id}.md；编辑元数据时不会覆盖正文。导入的 .txt / .docx 只取纯文字（不含图片与表格样式）。')}
         </span>
       </div>
 
@@ -1066,6 +1212,12 @@ function ArticleForm({
         value={characterTagIds}
         onChange={setCharacterTagIds}
         onCreate={(name) => createTag('character', name)}
+      />
+      <R18Field
+        plotTagIds={plotTagIds}
+        plotTags={snapshot.tags.filter((tag) => tag.category === 'plot')}
+        onChange={setPlotTagIds}
+        onCreate={(name) => createTag('plot', name)}
       />
       <TagPicker
         title="情节标签"
@@ -1128,6 +1280,19 @@ export interface SeriesDraftPayload {
   sourceUrl: string;
 }
 
+const EMPTY_SERIES_PAYLOAD: SeriesDraftPayload = {
+  title: '',
+  summary: '',
+  status: 'ongoing',
+  articleIds: [],
+  authorIds: [],
+  translatorIds: [],
+  characterTagIds: [],
+  plotTagIds: [],
+  coverImageId: '',
+  sourceUrl: '',
+};
+
 function SeriesPanel({
   snapshot,
   run,
@@ -1150,13 +1315,46 @@ function SeriesPanel({
   const [editing, setEditing] = useState<Series | null>(null);
   const [creating, setCreating] = useState(false);
   const [draftPayload, setDraftPayload] = useState<SeriesDraftPayload | null>(null);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+
+  const openExisting = (series: Series) => {
+    if (editing?.id === series.id && box.draftId) return;
+    const existing = findDraftForTarget(store.list(), 'series', series.id);
+    box.activate(existing?.id ?? editDraftId('series', series.id));
+    setEditing(series);
+    setCreating(false);
+    setDraftPayload((existing?.payload as SeriesDraftPayload | undefined) ?? null);
+    setDraftNotice(null);
+  };
 
   const openDraft = (id: string) => {
     const draft = box.open(id);
     if (!draft) return;
+    if (draft.targetId) {
+      const target = snapshot.series.find((series) => series.id === draft.targetId);
+      if (!target) {
+        box.discard(draft.id);
+        setDraftNotice('这条草稿对应的系列已不存在，已丢弃。');
+        return;
+      }
+      setEditing(target);
+      setCreating(false);
+      setDraftPayload((draft.payload as SeriesDraftPayload | undefined) ?? null);
+      setDraftNotice(null);
+      return;
+    }
     setEditing(null);
     setCreating(true);
     setDraftPayload((draft.payload as SeriesDraftPayload | undefined) ?? null);
+    setDraftNotice(null);
+  };
+
+  const startNew = () => {
+    box.start();
+    setEditing(null);
+    setCreating(true);
+    setDraftPayload(null);
+    setDraftNotice(null);
   };
 
   const visible = visibleIds
@@ -1165,35 +1363,28 @@ function SeriesPanel({
 
   useFocusJump(focus, (id) => {
     const target = snapshot.series.find((series) => series.id === id);
-    if (!target) return;
-    box.close();
-    setCreating(false);
-    setDraftPayload(null);
-    setEditing(target);
+    if (target) openExisting(target);
   });
 
   const closeForm = () => {
     setEditing(null);
     setCreating(false);
     setDraftPayload(null);
+    setDraftNotice(null);
     box.close();
   };
 
   return (
     <div className="grid gap-5 lg:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
       <div className="flex flex-col gap-3">
-        <button
-          type="button"
-          className={primaryClass}
-          onClick={() => {
-            box.start();
-            setEditing(null);
-            setCreating(true);
-            setDraftPayload(null);
-          }}
-        >
+        <button type="button" className={primaryClass} onClick={startNew}>
           新建系列
         </button>
+        {draftNotice ? (
+          <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive">
+            {draftNotice}
+          </p>
+        ) : null}
         <DraftList
           drafts={box.drafts}
           selectedId={box.draftId}
@@ -1201,25 +1392,18 @@ function SeriesPanel({
           onDelete={(id) => {
             const wasOpen = box.draftId === id;
             box.discard(id);
-            if (wasOpen) {
-              setCreating(false);
-              setDraftPayload(null);
-            }
+            if (wasOpen) closeForm();
           }}
         />
         <PanelList
           items={visible}
           empty="没有匹配的系列。"
           selectedId={editing?.id ?? null}
-          onSelect={(series) => {
-            setCreating(false);
-            setDraftPayload(null);
-            box.close();
-            setEditing(series);
-          }}
+          onSelect={openExisting}
           render={(series) => (
             <>
               <span className="truncate">{series.title}</span>
+              {hasR18PlotTag(snapshot, series.plotTagIds) ? <R18Badge /> : null}
               <span className="shrink-0 text-xs text-muted-foreground">
                 {series.articleIds.length} 篇
               </span>
@@ -1238,10 +1422,13 @@ function SeriesPanel({
           draftStore={store}
           onOpenArticle={onOpenArticle}
           onCancel={closeForm}
+          onDraftSaved={box.refresh}
+          isDraftDiscarded={box.wasDiscarded}
           onSubmit={async (draft) => {
-            await run(async () => {
+            const ok = await run(async () => {
               await editor.saveSeries(draft);
             }, '系列已保存');
+            if (!ok) return;
             if (box.draftId) box.discard(box.draftId);
             closeForm();
           }}
@@ -1249,10 +1436,13 @@ function SeriesPanel({
             editing
               ? async () => {
                   if (!window.confirm(`删除《${editing.title}》？系列内文章会变成短篇。`)) return;
-                  await run(async () => {
-                    await editor.deleteSeries(editing.id);
+                  const deletedId = editing.id;
+                  const ok = await run(async () => {
+                    await editor.deleteSeries(deletedId);
                   }, '系列已删除');
-                  setEditing(null);
+                  if (!ok) return;
+                  box.discard(editDraftId('series', deletedId));
+                  closeForm();
                 }
               : undefined
           }
@@ -1276,6 +1466,8 @@ function SeriesForm({
   onSubmit,
   onCancel,
   onDelete,
+  onDraftSaved,
+  isDraftDiscarded,
 }: {
   snapshot: DBSnapshot;
   initial: Series | null;
@@ -1286,6 +1478,8 @@ function SeriesForm({
   onSubmit(draft: Parameters<Editor['saveSeries']>[0]): Promise<void>;
   onCancel(): void;
   onDelete?: (() => Promise<void>) | undefined;
+  onDraftSaved?: (() => void) | undefined;
+  isDraftDiscarded?: ((id: string) => boolean) | undefined;
 }) {
   const services = useServices();
   const { refresh } = useLibraryContext();
@@ -1341,13 +1535,32 @@ function SeriesForm({
       sourceUrl,
     ],
   );
+  const baselinePayload = useMemo<SeriesDraftPayload | null>(() => {
+    if (!initial) return EMPTY_SERIES_PAYLOAD;
+    return {
+      title: initial.title,
+      summary: initial.summary,
+      status: initial.status,
+      articleIds: initial.articleIds,
+      authorIds: initial.authorIds,
+      translatorIds: initial.translatorIds,
+      characterTagIds: initial.characterTagIds,
+      plotTagIds: initial.plotTagIds,
+      coverImageId: initial.coverImageId ?? '',
+      sourceUrl: initial.sourceUrl ?? '',
+    };
+  }, [initial]);
   const { error: draftError } = useDraftAutosave({
     store: draftStore ?? null,
     draftId: draftId ?? null,
     kind: 'series',
     label: title.trim() || '未命名系列',
     payload: draftPayload,
-    enabled: !initial && Boolean(draftId && draftStore),
+    baseline: baselinePayload,
+    enabled: Boolean(draftId && draftStore),
+    ...(initial ? { targetId: initial.id } : {}),
+    ...(onDraftSaved ? { onSaved: onDraftSaved } : {}),
+    ...(isDraftDiscarded ? { isDiscarded: isDraftDiscarded } : {}),
   });
 
   const createTag = async (
@@ -1390,6 +1603,11 @@ function SeriesForm({
       {draftError ? (
         <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
           草稿未保存：{draftError}
+        </p>
+      ) : null}
+      {draft ? (
+        <p className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-xs text-foreground/80">
+          已恢复未保存的草稿；保存或取消前，改动会继续自动保留。
         </p>
       ) : null}
       <div className="grid gap-4 sm:grid-cols-2">
@@ -1450,6 +1668,12 @@ function SeriesForm({
         value={characterTagIds}
         onChange={setCharacterTagIds}
         onCreate={(name) => createTag('character', name)}
+      />
+      <R18Field
+        plotTagIds={plotTagIds}
+        plotTags={snapshot.tags.filter((tag) => tag.category === 'plot')}
+        onChange={setPlotTagIds}
+        onCreate={(name) => createTag('plot', name)}
       />
       <TagPicker
         title="情节标签"
@@ -1523,14 +1747,35 @@ function AuthorsPanel({
     notes: string;
     sourceUrl: string;
   } | null>(null);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
+
+  const authorToPayload = (author: (typeof snapshot.authors)[number]): AuthorDraftPayload => ({
+    canonicalName: author.canonicalName,
+    aliases: author.aliases.join('，'),
+    notes: author.notes ?? '',
+    sourceUrl: author.sourceUrl ?? '',
+  });
 
   const startNew = () => {
     box.start();
     setEditing({ canonicalName: '', aliases: '', notes: '', sourceUrl: '' });
+    setDraftNotice(null);
   };
   const openDraft = (id: string) => {
     const draft = box.open(id);
     if (!draft) return;
+    if (draft.targetId) {
+      const author = snapshot.authors.find((item) => item.id === draft.targetId);
+      if (!author) {
+        box.discard(draft.id);
+        setDraftNotice('这条草稿对应的作者已不存在，已丢弃。');
+        return;
+      }
+      const payload = (draft.payload as AuthorDraftPayload | undefined) ?? authorToPayload(author);
+      setEditing({ ...payload, id: author.id });
+      setDraftNotice(null);
+      return;
+    }
     const payload = (draft.payload as AuthorDraftPayload | undefined) ?? {
       canonicalName: '',
       aliases: '',
@@ -1538,27 +1783,26 @@ function AuthorsPanel({
       sourceUrl: '',
     };
     setEditing({ ...payload });
+    setDraftNotice(null);
   };
   const visibleAuthors = visibleIds
     ? snapshot.authors.filter((author) => visibleIds.has(author.id))
     : snapshot.authors;
 
-  const startEdit = (id: string) => {
+  const openExisting = (id: string) => {
     const author = snapshot.authors.find((item) => item.id === id);
     if (!author) return;
-    box.close();
-    setEditing({
-      id: author.id,
-      canonicalName: author.canonicalName,
-      aliases: author.aliases.join('，'),
-      notes: author.notes ?? '',
-      sourceUrl: author.sourceUrl ?? '',
-    });
+    if (editing?.id === author.id && box.draftId) return;
+    const existing = findDraftForTarget(store.list(), 'author', author.id);
+    box.activate(existing?.id ?? editDraftId('author', author.id));
+    const payload = (existing?.payload as AuthorDraftPayload | undefined) ?? authorToPayload(author);
+    setEditing({ ...payload, id: author.id });
+    setDraftNotice(null);
   };
 
   const draftPayload = useMemo<AuthorDraftPayload | null>(
     () =>
-      editing && !editing.id
+      editing
         ? {
             canonicalName: editing.canonicalName,
             aliases: editing.aliases,
@@ -1568,8 +1812,18 @@ function AuthorsPanel({
         : null,
     [editing],
   );
+  const baselinePayload = useMemo<AuthorDraftPayload>(() => {
+    if (!editing?.id) return { canonicalName: '', aliases: '', notes: '', sourceUrl: '' };
+    const author = snapshot.authors.find((item) => item.id === editing.id);
+    return author ? authorToPayload(author) : { canonicalName: '', aliases: '', notes: '', sourceUrl: '' };
+  }, [editing?.id, snapshot.authors]);
 
-  useFocusJump(focus, startEdit);
+  const closeForm = () => {
+    setEditing(null);
+    box.close();
+  };
+
+  useFocusJump(focus, openExisting);
 
   const { error: draftError } = useDraftAutosave({
     store,
@@ -1577,7 +1831,11 @@ function AuthorsPanel({
     kind: 'author',
     label: editing?.canonicalName.trim() || '未命名作者',
     payload: draftPayload,
-    enabled: Boolean(draftPayload) && editing?.id === undefined,
+    baseline: baselinePayload,
+    enabled: Boolean(draftPayload && box.draftId),
+    ...(editing?.id ? { targetId: editing.id } : {}),
+    onSaved: box.refresh,
+    isDiscarded: box.wasDiscarded,
   });
 
   return (
@@ -1586,6 +1844,11 @@ function AuthorsPanel({
         <button type="button" className={primaryClass} onClick={startNew}>
           新建作者
         </button>
+        {draftNotice ? (
+          <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive">
+            {draftNotice}
+          </p>
+        ) : null}
         <DraftList
           drafts={box.drafts}
           selectedId={box.draftId}
@@ -1593,14 +1856,14 @@ function AuthorsPanel({
           onDelete={(id) => {
             const wasOpen = box.draftId === id;
             box.discard(id);
-            if (wasOpen) setEditing(null);
+            if (wasOpen) closeForm();
           }}
         />
         <PanelList
           items={visibleAuthors}
           empty="没有匹配的作者。"
           selectedId={editing?.id ?? null}
-          onSelect={(author) => startEdit(author.id)}
+          onSelect={(author) => openExisting(author.id)}
           render={(author) => (
             <>
               <span className="truncate">{author.canonicalName}</span>
@@ -1617,20 +1880,23 @@ function AuthorsPanel({
           className="flex flex-col gap-4 rounded-xl border border-border bg-surface/60 p-4"
           onSubmit={(event) => {
             event.preventDefault();
-            void run(async () => {
-              await editor.saveAuthor({
-                ...(editing.id ? { id: editing.id } : {}),
-                canonicalName: editing.canonicalName,
-                aliases: editing.aliases
-                  .split(/[，,、\n]/)
-                  .map((item) => item.trim())
-                  .filter(Boolean),
-                notes: editing.notes,
-                sourceUrl: editing.sourceUrl,
-              });
-            }, '作者已保存');
-            if (box.draftId) box.discard(box.draftId);
-            setEditing(null);
+            void (async () => {
+              const ok = await run(async () => {
+                await editor.saveAuthor({
+                  ...(editing.id ? { id: editing.id } : {}),
+                  canonicalName: editing.canonicalName,
+                  aliases: editing.aliases
+                    .split(/[，,、\n]/)
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                  notes: editing.notes,
+                  sourceUrl: editing.sourceUrl,
+                });
+              }, '作者已保存');
+              if (!ok) return;
+              if (box.draftId) box.discard(box.draftId);
+              closeForm();
+            })();
           }}
         >
           {draftError ? (
@@ -1673,7 +1939,7 @@ function AuthorsPanel({
             <button type="submit" className={primaryClass}>
               保存
             </button>
-            <button type="button" className={buttonClass} onClick={() => setEditing(null)}>
+            <button type="button" className={buttonClass} onClick={closeForm}>
               取消
             </button>
             {editing.id ? (
@@ -1682,10 +1948,16 @@ function AuthorsPanel({
                 className={`${buttonClass} ml-auto border-destructive/40 text-destructive`}
                 onClick={() => {
                   if (!window.confirm('删除作者会从所有文章/系列中移除引用，继续？')) return;
-                  void run(async () => {
-                    if (editing.id) await editor.deleteAuthor(editing.id);
-                  }, '作者已删除');
-                  setEditing(null);
+                  const deletedId = editing.id;
+                  if (!deletedId) return;
+                  void (async () => {
+                    const ok = await run(async () => {
+                      await editor.deleteAuthor(deletedId);
+                    }, '作者已删除');
+                    if (!ok) return;
+                    box.discard(editDraftId('author', deletedId));
+                    closeForm();
+                  })();
                 }}
               >
                 删除
@@ -1733,47 +2005,79 @@ function TagsPanel({
   } | null>(null);
   const [filter, setFilter] = useState<'all' | TagCategory>('all');
   const [merging, setMerging] = useState(false);
+  const [draftNotice, setDraftNotice] = useState<string | null>(null);
   // 搜索期间忽略类别筛选：否则命中项可能被 filter 挡掉，列表显示为空但右侧已打开
   const list = visibleIds
     ? snapshot.tags.filter((tag) => visibleIds.has(tag.id))
     : snapshot.tags.filter((tag) => filter === 'all' || tag.category === filter);
 
+  const tagToPayload = (tag: Tag): TagDraftPayload => ({
+    category: tag.category,
+    name: tag.name,
+    aliases: tag.aliases?.join('，') ?? '',
+  });
+
   const startNew = () => {
     box.start();
     setMerging(false);
     setEditing({ category: 'character', name: '', aliases: '' });
+    setDraftNotice(null);
   };
   const openDraft = (id: string) => {
     const draft = box.open(id);
     if (!draft) return;
     setMerging(false);
+    if (draft.targetId) {
+      const tag = snapshot.tags.find((item) => item.id === draft.targetId);
+      if (!tag) {
+        box.discard(draft.id);
+        setDraftNotice('这条草稿对应的标签已不存在，已丢弃。');
+        return;
+      }
+      const payload = (draft.payload as TagDraftPayload | undefined) ?? tagToPayload(tag);
+      setEditing({ ...payload, id: tag.id });
+      setDraftNotice(null);
+      return;
+    }
     const payload = (draft.payload as TagDraftPayload | undefined) ?? {
       category: 'character',
       name: '',
       aliases: '',
     };
     setEditing({ category: payload.category, name: payload.name, aliases: payload.aliases });
+    setDraftNotice(null);
+  };
+  const openExisting = (id: string) => {
+    const tag = snapshot.tags.find((item) => item.id === id);
+    if (!tag) return;
+    if (editing?.id === tag.id && box.draftId) return;
+    setMerging(false);
+    const existing = findDraftForTarget(store.list(), 'tag', tag.id);
+    box.activate(existing?.id ?? editDraftId('tag', tag.id));
+    const payload = (existing?.payload as TagDraftPayload | undefined) ?? tagToPayload(tag);
+    setEditing({ ...payload, id: tag.id });
+    setDraftNotice(null);
+  };
+  const closeForm = () => {
+    setEditing(null);
+    setMerging(false);
+    box.close();
   };
 
   const draftPayload = useMemo<TagDraftPayload | null>(
     () =>
-      editing && !editing.id
+      editing
         ? { category: editing.category, name: editing.name, aliases: editing.aliases }
         : null,
     [editing],
   );
-  useFocusJump(focus, (id) => {
-    const tag = snapshot.tags.find((item) => item.id === id);
-    if (tag) {
-      setMerging(false);
-      setEditing({
-        id: tag.id,
-        category: tag.category,
-        name: tag.name,
-        aliases: tag.aliases?.join('，') ?? '',
-      });
-    }
-  });
+  const baselinePayload = useMemo<TagDraftPayload>(() => {
+    if (!editing?.id) return { category: 'character', name: '', aliases: '' };
+    const tag = snapshot.tags.find((item) => item.id === editing.id);
+    return tag ? tagToPayload(tag) : { category: 'character', name: '', aliases: '' };
+  }, [editing?.id, snapshot.tags]);
+
+  useFocusJump(focus, openExisting);
 
   const { error: draftError } = useDraftAutosave({
     store,
@@ -1781,7 +2085,11 @@ function TagsPanel({
     kind: 'tag',
     label: editing?.name.trim() || '未命名标签',
     payload: draftPayload,
-    enabled: Boolean(draftPayload) && editing?.id === undefined,
+    baseline: baselinePayload,
+    enabled: Boolean(draftPayload && box.draftId),
+    ...(editing?.id ? { targetId: editing.id } : {}),
+    onSaved: box.refresh,
+    isDiscarded: box.wasDiscarded,
   });
 
   return (
@@ -1796,11 +2104,17 @@ function TagsPanel({
           onClick={() => {
             setMerging(true);
             setEditing(null);
+            setDraftNotice(null);
             box.close();
           }}
         >
           合并标签…
         </button>
+        {draftNotice ? (
+          <p className="rounded-md border border-destructive/30 bg-destructive/5 px-2 py-1 text-xs text-destructive">
+            {draftNotice}
+          </p>
+        ) : null}
         <DraftList
           drafts={box.drafts}
           selectedId={box.draftId}
@@ -1808,7 +2122,7 @@ function TagsPanel({
           onDelete={(id) => {
             const wasOpen = box.draftId === id;
             box.discard(id);
-            if (wasOpen) setEditing(null);
+            if (wasOpen) closeForm();
           }}
         />
         <select
@@ -1826,18 +2140,11 @@ function TagsPanel({
           items={list}
           empty="没有匹配的标签。"
           selectedId={editing?.id ?? null}
-          onSelect={(tag: Tag) => {
-            setMerging(false);
-            setEditing({
-              id: tag.id,
-              category: tag.category,
-              name: tag.name,
-              aliases: tag.aliases?.join('，') ?? '',
-            });
-          }}
+          onSelect={(tag: Tag) => openExisting(tag.id)}
           render={(tag) => (
             <>
               <span className="truncate">{tag.name}</span>
+              {tag.category === 'plot' && isR18Tag(tag) ? <R18Badge /> : null}
               <span className="shrink-0 text-xs text-muted-foreground">
                 {TAG_CATEGORY_LABEL[tag.category]}
               </span>
@@ -1858,19 +2165,22 @@ function TagsPanel({
           className="flex flex-col gap-4 rounded-xl border border-border bg-surface/60 p-4"
           onSubmit={(event) => {
             event.preventDefault();
-            void run(async () => {
-              await editor.saveTag({
-                ...(editing.id ? { id: editing.id } : {}),
-                category: editing.category,
-                name: editing.name,
-                aliases: editing.aliases
-                  .split(/[，,、\n]/)
-                  .map((item) => item.trim())
-                  .filter(Boolean),
-              });
-            }, '标签已保存');
-            if (box.draftId) box.discard(box.draftId);
-            setEditing(null);
+            void (async () => {
+              const ok = await run(async () => {
+                await editor.saveTag({
+                  ...(editing.id ? { id: editing.id } : {}),
+                  category: editing.category,
+                  name: editing.name,
+                  aliases: editing.aliases
+                    .split(/[，,、\n]/)
+                    .map((item) => item.trim())
+                    .filter(Boolean),
+                });
+              }, '标签已保存');
+              if (!ok) return;
+              if (box.draftId) box.discard(box.draftId);
+              closeForm();
+            })();
           }}
         >
           {draftError ? (
@@ -1912,7 +2222,7 @@ function TagsPanel({
             <button type="submit" className={primaryClass}>
               保存
             </button>
-            <button type="button" className={buttonClass} onClick={() => setEditing(null)}>
+            <button type="button" className={buttonClass} onClick={closeForm}>
               取消
             </button>
             {editing.id ? (
@@ -1921,10 +2231,16 @@ function TagsPanel({
                 className={`${buttonClass} ml-auto border-destructive/40 text-destructive`}
                 onClick={() => {
                   if (!window.confirm('删除标签会从所有文章/系列中移除引用，继续？')) return;
-                  void run(async () => {
-                    if (editing.id) await editor.deleteTag(editing.id);
-                  }, '标签已删除');
-                  setEditing(null);
+                  const deletedId = editing.id;
+                  if (!deletedId) return;
+                  void (async () => {
+                    const ok = await run(async () => {
+                      await editor.deleteTag(deletedId);
+                    }, '标签已删除');
+                    if (!ok) return;
+                    box.discard(editDraftId('tag', deletedId));
+                    closeForm();
+                  })();
                 }}
               >
                 删除
@@ -1960,14 +2276,24 @@ function MergeTagsForm({
 }) {
   const [targetId, setTargetId] = useState('');
   const [sourceIds, setSourceIds] = useState<string[]>([]);
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState(false);
   const target = snapshot.tags.find((tag) => tag.id === targetId) ?? null;
   const candidates = target
     ? snapshot.tags.filter((tag) => tag.id !== target.id && tag.category === target.category)
     : [];
   const selected = candidates.filter((tag) => sourceIds.includes(tag.id));
+  const tagHaystack = (tag: Tag): string =>
+    joinSearchParts([tag.name, ...(tag.aliases ?? []), TAG_CATEGORY_LABEL[tag.category] ?? tag.category]);
+  const targetMatched = snapshot.tags.filter(
+    (tag) => tag.id === targetId || matchesQuery(tagHaystack(tag), query),
+  );
+  const visibleCandidates = candidates.filter(
+    (tag) => sourceIds.includes(tag.id) || matchesQuery(tagHaystack(tag), query),
+  );
 
-  const submit = (): void => {
-    if (!target || selected.length === 0) return;
+  const submit = async (): Promise<void> => {
+    if (!target || selected.length === 0 || busy) return;
     const names = selected.map((tag) => `「${tag.name}」`).join('、');
     if (
       !window.confirm(
@@ -1976,13 +2302,18 @@ function MergeTagsForm({
     ) {
       return;
     }
-    void run(async () => {
-      await editor.mergeTags(
-        selected.map((tag) => tag.id),
-        target.id,
-      );
-    }, `已合并 ${selected.length} 个标签到「${target.name}」`);
-    onDone();
+    setBusy(true);
+    try {
+      const ok = await run(async () => {
+        await editor.mergeTags(
+          selected.map((tag) => tag.id),
+          target.id,
+        );
+      }, `已合并 ${selected.length} 个标签到「${target.name}」`);
+      if (ok) onDone();
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -1993,6 +2324,13 @@ function MergeTagsForm({
           把同一类别的多个标签合并到一个目标标签：名称与别名并入目标，文章/系列的引用改指目标，源标签随后删除。操作不可撤销。
         </p>
       </div>
+
+      <ListSearchInput
+        value={query}
+        onChange={setQuery}
+        ariaLabel="搜索要合并的标签"
+        placeholder="搜索标签名或别名（同时过滤目标与候选）…"
+      />
 
       <Field label="目标标签">
         <select
@@ -2006,7 +2344,7 @@ function MergeTagsForm({
         >
           <option value="">请选择目标标签</option>
           {TAG_CATEGORIES.map((category) => {
-            const tags = snapshot.tags.filter((tag) => tag.category === category);
+            const tags = targetMatched.filter((tag) => tag.category === category);
             if (tags.length === 0) return null;
             return (
               <optgroup key={category} label={TAG_CATEGORY_LABEL[category] ?? category}>
@@ -2028,9 +2366,11 @@ function MergeTagsForm({
           <p className="text-xs text-muted-foreground">先选择目标标签。</p>
         ) : candidates.length === 0 ? (
           <p className="text-xs text-muted-foreground">该类别没有其他标签可合并。</p>
+        ) : visibleCandidates.length === 0 ? (
+          <p className="text-xs text-muted-foreground">没有匹配的标签；已勾选的标签仍会保留。</p>
         ) : (
           <div className="flex max-h-56 flex-col gap-1 overflow-auto rounded-lg border border-border bg-surface/40 p-2">
-            {candidates.map((tag) => (
+            {visibleCandidates.map((tag) => (
               <label key={tag.id} className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -2058,10 +2398,10 @@ function MergeTagsForm({
         <button
           type="button"
           className={primaryClass}
-          disabled={!target || selected.length === 0}
-          onClick={submit}
+          disabled={!target || selected.length === 0 || busy}
+          onClick={() => void submit()}
         >
-          合并 {selected.length} 个标签
+          {busy ? '合并中…' : `合并 ${selected.length} 个标签`}
         </button>
         <button type="button" className={buttonClass} onClick={onDone}>
           取消
@@ -2087,13 +2427,11 @@ function ImagesPanel({
   focus?: { id: string; token: number } | null;
 }) {
   const services = useServices();
-  const { settings, ready: settingsReady, save } = useSettingsContext();
+  const { settings, ready: settingsReady } = useSettingsContext();
   const [kind, setKind] = useState<ImageKind>('cover');
   const [caption, setCaption] = useState('');
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
-  const [savingCompress, setSavingCompress] = useState(false);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<Record<string, { kind: ImageKind; caption: string }>>({});
   const loaded = services.library.current();
   const toUrl = (image: { id: string; file: string }) =>
@@ -2107,18 +2445,6 @@ function ImagesPanel({
       .querySelector(`[data-image-id="${id}"]`)
       ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   });
-
-  const changeCompress = async (checked: boolean): Promise<void> => {
-    setSavingCompress(true);
-    setSettingsError(null);
-    try {
-      await save({ compressImages: checked });
-    } catch (error) {
-      setSettingsError(`保存开关失败：${errorText(error)}`);
-    } finally {
-      setSavingCompress(false);
-    }
-  };
 
   return (
     <div className="flex flex-col gap-5">
@@ -2153,29 +2479,7 @@ function ImagesPanel({
             上传后会出现在下方列表，可继续修改类型与配文。
           </span>
         </div>
-        <label className="flex items-start justify-between gap-4 rounded-lg border border-border bg-surface/60 px-3 py-2.5">
-          <span className="flex min-w-0 flex-col gap-0.5">
-            <span className="text-sm font-medium text-foreground">压缩上传图片</span>
-            <span className="text-xs text-muted-foreground">
-              开启后 PNG/JPEG 会转成 WebP（最长边 2560），GIF/WebP 保持原样；关闭后按原图保存。
-            </span>
-            {settingsError ? (
-              <span className="text-xs text-destructive">{settingsError}</span>
-            ) : null}
-          </span>
-          <input
-            type="checkbox"
-            role="switch"
-            aria-label="压缩上传图片"
-            aria-checked={settings.compressImages}
-            className="mt-1 h-5 w-5 shrink-0 accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
-            checked={settings.compressImages}
-            disabled={!settingsReady || savingCompress}
-            onChange={(event) => {
-              void changeCompress(event.target.checked);
-            }}
-          />
-        </label>
+        <CompressImagesSwitch />
         <ImageFilePicker file={file} disabled={busy || !settingsReady} onChange={setFile} />
 
         <div className="grid gap-3 sm:grid-cols-[10rem_minmax(0,1fr)_auto] sm:items-end">
@@ -2475,10 +2779,12 @@ function FeaturedPanel({
               row.author ? { author: row.author, text: row.text } : { text: row.text },
             );
           if (!targetId || cleaned.length === 0) return;
+          const draftId = box.draftId;
           void run(async () => {
             await editor.saveFeatured(targetType, targetId, cleaned);
-          }, '推荐语已保存');
-          if (box.draftId) box.discard(box.draftId);
+          }, '推荐语已保存').then((ok) => {
+            if (ok && draftId) box.discard(draftId);
+          });
         }}
       >
         <div className="grid gap-3 sm:grid-cols-2">
@@ -2646,10 +2952,12 @@ function CreditsPanel({
             ...(row.note?.trim() ? { note: row.note.trim() } : {}),
           }))
           .filter((row) => row.name.length > 0);
+        const draftId = box.draftId;
         void run(async () => {
           await editor.saveCredits(cleaned);
-        }, '鸣谢已保存');
-        if (box.draftId) box.discard(box.draftId);
+        }, '鸣谢已保存').then((ok) => {
+          if (ok && draftId) box.discard(draftId);
+        });
       }}
     >
       <div className="flex flex-wrap items-center gap-2">

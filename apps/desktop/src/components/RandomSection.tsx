@@ -1,5 +1,12 @@
-import { type DBSnapshot, type TenPullResult, randomOne, resolveTags, tenPull } from '@tpr/core';
-import { Button, EmptyState, Panel, SectionHeading } from '@tpr/ui';
+import {
+  type DBSnapshot,
+  type TenPullResult,
+  hasR18PlotTag,
+  randomOne,
+  resolveTags,
+  tenPull,
+} from '@tpr/core';
+import { Button, EmptyState, Panel, R18Badge, SectionHeading } from '@tpr/ui';
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useServices } from '../context.js';
@@ -87,8 +94,11 @@ export function RandomSection({ snapshot }: { snapshot: DBSnapshot }) {
                     <span className="line-clamp-2 text-xs font-medium group-hover:text-accent">
                       {article.title}
                     </span>
-                    <span className="truncate text-[0.65rem] text-muted-foreground">
-                      {series ? series.title : article.type === 'short' ? '短篇' : '未归系列'}
+                    <span className="flex items-center gap-1.5 truncate text-[0.65rem] text-muted-foreground">
+                      {hasR18PlotTag(snapshot, article.plotTagIds) ? <R18Badge /> : null}
+                      <span className="truncate">
+                        {series ? series.title : article.type === 'short' ? '短篇' : '未归系列'}
+                      </span>
                     </span>
                   </Link>
                   <TagLinks

@@ -1,9 +1,10 @@
 import { createMemoryPlatform } from '@tpr/platform/memory';
 import type { RawDatabase } from '@tpr/schema';
-import { makeArticle, makeDatabase } from '@tpr/schema/testing';
+import { makeArticle, makeDatabase, makeImage } from '@tpr/schema/testing';
 import { describe, expect, it } from 'vitest';
 import { createLibrary } from '../src/db/library.js';
 import { toSnapshot, type DBSnapshot } from '../src/db/snapshot.js';
+import { databasePathOf } from '../src/db/sql/store.js';
 import { ioFor } from '../src/db/workspace.js';
 import { serializeDatabase, writeDatabaseDir } from '../src/db/write.js';
 import { applyConflicts, mergeDatabases, type MergeSide } from '../src/merge/merge.js';
@@ -46,11 +47,13 @@ async function seedZip(
   platform: ReturnType<typeof createMemoryPlatform>,
   dir: string,
   raw: RawDatabase,
+  omitImageIds: ReadonlySet<string> = new Set(),
 ): Promise<string> {
   const io = ioFor(platform);
   const markdown = new Map(raw.articles.map((article) => [article.id, `# ${article.title}\n\n正文 ${article.id}\n`]));
   await writeDatabaseDir(io, dir, serializeDatabase(raw, markdown));
   for (const image of raw.images) {
+    if (omitImageIds.has(image.id)) continue;
     const path = platform.paths.join(dir, image.file);
     await platform.fs.mkdir(platform.paths.dirname(path));
     await platform.fs.writeBytes(path, new Uint8Array([1, 2, 3, 4]));
@@ -178,6 +181,75 @@ describe('merge: 多库合并（Goal 10）', () => {
     expect(roundtrip?.articles.length).toBe(after?.articles.length);
     expect(roundtrip?.authors.length).toBe(after?.authors.length);
     expect(roundtrip?.series.length).toBe(after?.series.length);
+  });
+
+  it('merge-null-blob: base 的 NULL 图片不崩，incoming 缺图不新增 NULL 行', async () => {
+    const baseRaw = makeDatabase();
+    const baseImage = baseRaw.images[0];
+    if (!baseImage) throw new Error('夹具缺少图片');
+
+    const basePlatform = createMemoryPlatform({ dataDir: '/app' });
+    const library = createLibrary(basePlatform);
+    await library.importBytes(
+      await basePlatform.fs.readBytes(await seedZip(basePlatform, '/seed-base', baseRaw)),
+    );
+    const loaded = library.current();
+    if (!loaded) throw new Error('导入后未加载数据库');
+    await basePlatform.sql.batch(databasePathOf(basePlatform, loaded.dir), [
+      { sql: 'UPDATE images SET data = NULL, byte_size = NULL WHERE id = ?', params: [baseImage.id] },
+    ]);
+
+    const present = makeImage({ kind: 'illustration' });
+    const missing = makeImage({ kind: 'cover' });
+    const incomingRaw = clone(baseRaw);
+    incomingRaw.images = [present, missing];
+
+    const incomingPlatform = createMemoryPlatform({ dataDir: '/inc' });
+    const incomingZip = await seedZip(
+      incomingPlatform,
+      '/inc/data',
+      incomingRaw,
+      new Set([missing.id]),
+    );
+    const staged = basePlatform.paths.join(basePlatform.paths.dataDir, 'incoming-null.tpr');
+    await basePlatform.fs.mkdir(basePlatform.paths.dirname(staged));
+    await basePlatform.fs.writeBytes(staged, await incomingPlatform.fs.readBytes(incomingZip));
+
+    // Tauri 的 rusqlite 遇到 NULL 会抛这个错误；旧 SQL 没有 data IS NOT NULL，必须复现失败。
+    const strictPlatform: typeof basePlatform = {
+      ...basePlatform,
+      sql: {
+        ...basePlatform.sql,
+        readBlob: async (...args: Parameters<typeof basePlatform.sql.readBlob>) => {
+          if (!args[1].includes('data IS NOT NULL')) {
+            throw new Error(
+              'EIO: SQLite 操作失败: Invalid column type Null at index 0, name: data',
+            );
+          }
+          return basePlatform.sql.readBlob(...args);
+        },
+      },
+    };
+
+    const merge = createMergeService(strictPlatform, library);
+    const preview = await merge.prepare(staged);
+    expect(preview.snapshot.images.map((image) => image.id)).toEqual([present.id]);
+    expect(preview.result.report.added.images).toBe(incomingRaw.images.length - 1);
+
+    await merge.apply(preview, {});
+    const dbPath = databasePathOf(basePlatform, loaded.dir);
+    const nullRows = await basePlatform.sql.query(dbPath, 'SELECT id FROM images WHERE data IS NULL');
+    expect(nullRows.map((row) => row.id)).toEqual([baseImage.id]);
+    expect(
+      await basePlatform.sql.query(dbPath, 'SELECT id FROM images WHERE id = ?', [missing.id]),
+    ).toEqual([]);
+    expect(
+      await basePlatform.sql.query(
+        dbPath,
+        'SELECT id FROM images WHERE id = ? AND data IS NOT NULL',
+        [present.id],
+      ),
+    ).toEqual([{ id: present.id }]);
   });
 
   it('merge-dangling: 合并后悬空引用进 report.dangling 而不是抛错', async () => {

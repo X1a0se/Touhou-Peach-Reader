@@ -96,6 +96,11 @@ fn cell_of(value: ValueRef<'_>) -> Result<SqlCell, String> {
     }
 }
 
+/// 读取第 0 列的 BLOB；SQLite NULL 也映射为 None，而不是让 rusqlite 抛类型错误。
+fn optional_blob_bytes(row: &rusqlite::Row<'_>) -> rusqlite::Result<Option<Vec<u8>>> {
+    row.get::<_, Option<Vec<u8>>>(0)
+}
+
 /// 普通查询：结果只允许 null / 整数 / 浮点 / 文本。
 #[tauri::command]
 pub async fn sql_query(
@@ -170,10 +175,9 @@ pub async fn sql_read_blob(
         let mut statement = connection.prepare(&sql).map_err(sql_err)?;
         let values = bind_params(&params)?;
         let mut rows = statement.query(params_from_iter(values)).map_err(sql_err)?;
-        if let Some(row) = rows.next().map_err(sql_err)? {
-            row.get::<_, Vec<u8>>(0).map_err(sql_err)
-        } else {
-            Ok(Vec::new())
+        match rows.next().map_err(sql_err)? {
+            Some(row) => Ok(optional_blob_bytes(row).map_err(sql_err)?.unwrap_or_default()),
+            None => Ok(Vec::new()),
         }
     })
     .await
@@ -200,7 +204,9 @@ pub async fn sql_read_blob_to_file(
         let Some(row) = rows.next().map_err(sql_err)? else {
             return Ok(false);
         };
-        let bytes = row.get::<_, Vec<u8>>(0).map_err(sql_err)?;
+        let Some(bytes) = optional_blob_bytes(row).map_err(sql_err)? else {
+            return Ok(false);
+        };
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|e| format!("EIO: {e}"))?;
         }
@@ -330,13 +336,15 @@ pub fn image_response<R: tauri::Runtime>(
             .map_err(sql_err)?;
         connection.busy_timeout(Duration::from_secs(5)).map_err(sql_err)?;
         let mut statement = connection
-            .prepare("SELECT data, mime FROM images WHERE id = ?1")
+            .prepare("SELECT data, mime FROM images WHERE id = ?1 AND data IS NOT NULL")
             .map_err(sql_err)?;
         let mut rows = statement.query([image_id]).map_err(sql_err)?;
         let Some(row) = rows.next().map_err(sql_err)? else {
             return Err("ENOENT: 图片不存在".to_string());
         };
-        let bytes = row.get::<_, Vec<u8>>(0).map_err(sql_err)?;
+        let bytes = optional_blob_bytes(row)
+            .map_err(sql_err)?
+            .ok_or_else(|| "ENOENT: 图片不存在".to_string())?;
         let mime = mime_of(row.get::<_, Option<String>>(1).map_err(sql_err)?);
         Ok((bytes, mime))
     })();
@@ -372,5 +380,33 @@ mod sqlite_path_tests {
             sqlite_path(Path::new(r"C:\Temp\a.sqlite")),
             PathBuf::from(r"C:\Temp\a.sqlite")
         );
+    }
+}
+
+#[cfg(test)]
+mod blob_tests {
+    use super::optional_blob_bytes;
+    use rusqlite::Connection;
+
+    #[test]
+    fn reads_null_blob_as_none_and_bytes_as_some() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE images(id TEXT PRIMARY KEY, data BLOB);
+                 INSERT INTO images(id, data) VALUES ('null-row', NULL), ('blob-row', x'0102');",
+            )
+            .unwrap();
+        let mut statement = connection
+            .prepare("SELECT data FROM images WHERE id = ?1")
+            .unwrap();
+        let null_row = statement
+            .query_row(["null-row"], |row| optional_blob_bytes(row))
+            .unwrap();
+        assert_eq!(null_row, None);
+        let blob_row = statement
+            .query_row(["blob-row"], |row| optional_blob_bytes(row))
+            .unwrap();
+        assert_eq!(blob_row, Some(vec![1, 2]));
     }
 }

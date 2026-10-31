@@ -1,5 +1,6 @@
 import type { Platform, RejectedEntry } from '@tpr/platform';
 import {
+  type Issue,
   type RawDatabase,
   type ValidateResult,
   migrateDatabase,
@@ -8,6 +9,7 @@ import {
 import { articleMd } from './layout.js';
 import { computeCounts, normalizeDatabase } from './normalize.js';
 import { readDatabaseDir } from './read.js';
+import { mergeDuplicateTags } from './tag-merge.js';
 import { toSnapshot, type DBSnapshot } from './snapshot.js';
 import { databasePathOf, writeSqliteDatabase } from './sql/store.js';
 import { DB_LAYOUT, commitWorkspace, ioFor, removeTree } from './workspace.js';
@@ -17,6 +19,8 @@ export interface ImportOutcome {
   report: ValidateResult;
   migrations: number[];
   rejected: RejectedEntry[];
+  /** 导入时自动合并的同类别同名标签组数 */
+  mergedTags: number;
 }
 
 export class ImportError extends Error {
@@ -43,20 +47,52 @@ async function runImport(
     const raw = await readDatabaseDir(io, staging);
     const { db: migrated, applied } = migrateDatabase(raw, raw.manifest.schemaVersion);
     // 注意：migrate 可能改形状，所以先迁移、再归一化正文、最后校验
-    const { db: normalized, markdown } = normalizeDatabase(migrated);
+    const { db: normalizedInput, markdown } = normalizeDatabase(migrated);
+    // 导入前合并同类别同名标签：别名并入目标、引用改写、标签去重。
+    const tagMerge = mergeDuplicateTags(normalizedInput);
+    const normalized = tagMerge.db;
     // 内联正文归一化后变成虚拟的 articles/{id}.md，校验前补进文件集合。
     const filePaths = new Set(normalized.filePaths ?? []);
     for (const [id] of markdown) filePaths.add(articleMd(id));
     for (const article of normalized.articles) {
       if (typeof article.content === 'object' && article.content !== null) filePaths.add(article.content.file);
     }
+    // 旧版导出包可能包含“有元数据但没有 BLOB”的图片：导出端当时只记警告，
+    // images.json 仍指向不存在的文件。这里在校验前剔除这些条目并补一条导入警告，
+    // 让坏包仍可导入；不保留 NULL BLOB 行（Tauri 侧读 NULL 会报错），相关引用降级为
+    // W_DANGLING_IMAGE 警告。
+    const missingImages = normalized.images.filter((image) => !filePaths.has(image.file));
+    const images =
+      missingImages.length === 0
+        ? normalized.images
+        : normalized.images.filter((image) => filePaths.has(image.file));
     const ready: RawDatabase = {
       ...normalized,
-      manifest: { ...normalized.manifest, counts: computeCounts(normalized), updatedAt: normalized.manifest.updatedAt },
+      images,
+      manifest: { ...normalized.manifest, counts: computeCounts({ ...normalized, images }), updatedAt: normalized.manifest.updatedAt },
       filePaths,
     };
 
     const report = validateDatabase(ready);
+    const missingImageIssues: Issue[] = missingImages.map((image) => ({
+      code: 'W_IMAGE_FILE_MISSING',
+      severity: 'warning',
+      entity: 'image',
+      entityId: image.id,
+      field: 'file',
+      message: `图片文件「${image.file}」在包内不存在，已跳过该图片`,
+    }));
+    report.warnings.unshift(...missingImageIssues);
+    if (tagMerge.groups.length > 0) {
+      const removed = tagMerge.groups.reduce((sum, group) => sum + group.removedIds.length, 0);
+      const names = tagMerge.groups.slice(0, 5).map((group) => group.name).join('、');
+      report.warnings.unshift({
+        code: 'W_IMPORT_TAG_MERGED',
+        severity: 'warning',
+        entity: 'tag',
+        message: `导入时已自动合并 ${tagMerge.groups.length} 组同类别同名标签（共 ${removed} 个）${names ? `：${names}${tagMerge.groups.length > 5 ? ' 等' : ''}` : ''}`,
+      });
+    }
     if (!report.ok) {
       throw new ImportError(`导入失败：数据库校验未通过（${report.errors.length} 个错误）`, report);
     }
@@ -83,6 +119,7 @@ async function runImport(
       report,
       migrations: applied,
       rejected: extracted.rejected,
+      mergedTags: tagMerge.groups.length,
     };
   } finally {
     await removeTree(platform, staging);

@@ -201,7 +201,7 @@ async function prepareExport(
   source: ExportSource,
   selection: ExportSelection,
 ): Promise<PreparedExport> {
-  const { db, warnings } = selectSubset(source.db, selection);
+  let { db, warnings } = selectSubset(source.db, selection);
 
   const markdown = new Map<string, string>();
   for (const article of db.articles) {
@@ -221,18 +221,32 @@ async function prepareExport(
     `${at}-${Date.now().toString(36)}`,
   );
   try {
+    // 图片 BLOB 先落盘、再序列化 JSON：若某条图片元数据没有可读的 BLOB，必须把它从
+    // 本次导出中剔除，否则 images.json 会引用不存在的文件，导入端报 E_IMAGE_FILE_MISSING。
+    const keptImages: RawDatabase['images'] = [];
+    for (const image of db.images) {
+      // image.file 已是包内相对路径（images/{kind}/{name}）；字节从 SQLite BLOB 直接落盘。
+      const to = platform.paths.join(workDir, image.file);
+      await platform.fs.mkdir(platform.paths.dirname(to));
+      const written = await readImageBlobToFile(platform, source.dir, image.id, to);
+      if (written) {
+        keptImages.push(image);
+      } else {
+        warnings.push(skipped(`图片缺失：${image.file}（已从导出包移除）`, 'image', image.id));
+      }
+    }
+    if (keptImages.length !== db.images.length) {
+      db = {
+        ...db,
+        images: keptImages,
+        manifest: { ...db.manifest, counts: computeCounts({ ...db, images: keptImages }) },
+      };
+    }
+
     for (const file of serializeDatabase(db, markdown)) {
       const path = platform.paths.join(workDir, file.path);
       await platform.fs.mkdir(platform.paths.dirname(path));
       await platform.fs.writeText(path, file.text);
-    }
-    for (const image of db.images) {
-      // image.file 已是包内相对路径（images/{kind}/{name}）；字节从 SQLite BLOB 直接落盘。
-      const to = platform.paths.join(workDir, image.file);
-      const written = await readImageBlobToFile(platform, source.dir, image.id, to);
-      if (!written) {
-        warnings.push(skipped(`图片缺失：${image.file}`, 'image', image.id));
-      }
     }
     return { dir: workDir, stamp: at, name: db.manifest.name, counts: db.manifest.counts, warnings };
   } catch (error) {

@@ -979,13 +979,17 @@ export async function writeImageBlob(
   );
 }
 
-/** 导出/合并读取图片 BLOB；不存在时返回 null。 */
+/** 导出/合并读取图片 BLOB；行不存在或 data 为 NULL 时返回 null。 */
 export async function readImageBlob(
   platform: Platform,
   dir: string,
   imageId: string,
 ): Promise<Uint8Array | null> {
-  return platform.sql.readBlob(dbPathOf(platform, dir), 'SELECT data FROM images WHERE id = ?', [imageId]);
+  return platform.sql.readBlob(
+    dbPathOf(platform, dir),
+    'SELECT data FROM images WHERE id = ? AND data IS NOT NULL',
+    [imageId],
+  );
 }
 
 /** 导出时把图片 BLOB 直接落成 .tpr 里的文件，避免大图经过 JS。 */

@@ -1,5 +1,5 @@
 import { Button, cn } from '@tpr/ui';
-import type { DraftEnvelope } from '../editor/drafts.js';
+import { isEditDraft, type DraftEnvelope } from '../editor/drafts.js';
 
 function formatTime(iso: string): string {
   const date = new Date(iso);
@@ -40,6 +40,14 @@ export function DraftList({ drafts, selectedId, onOpen, onDelete }: DraftListPro
               )}
             >
               <span className="truncate">{draft.label || '未命名'}</span>
+              {isEditDraft(draft) ? (
+                <span
+                  className="shrink-0 rounded border border-border px-1 py-px text-[0.6rem] text-muted-foreground"
+                  title="已有内容的未保存改动"
+                >
+                  编辑
+                </span>
+              ) : null}
               <span className="ml-auto shrink-0 text-[0.65rem] text-muted-foreground">
                 {formatTime(draft.updatedAt)}
               </span>

@@ -1,4 +1,4 @@
-import { Button, EmptyState, Panel, SectionHeading, cn } from '@tpr/ui';
+import { Button, EmptyState, Panel, R18Badge, SectionHeading, cn } from '@tpr/ui';
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
@@ -64,6 +64,7 @@ export function FavoritesPage() {
                       已失效
                     </span>
                   ) : null}
+                  {entry.r18 ? <R18Badge /> : null}
                   {entry.to ? (
                     <Link to={entry.to} className="truncate text-sm font-medium hover:text-accent">
                       {entry.title}

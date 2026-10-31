@@ -3,9 +3,10 @@ import {
   type ArticleListRow,
   type DBSnapshot,
   groupArticlesBySeries,
+  hasR18PlotTag,
   resolveTags,
 } from '@tpr/core';
-import { Button, EmptyState, SectionHeading, cn } from '@tpr/ui';
+import { Button, EmptyState, R18Badge, SectionHeading, cn } from '@tpr/ui';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
@@ -77,6 +78,7 @@ function ArticleCard({
           >
             {TYPE_LABEL[article.type]}
           </span>
+          {snapshot && hasR18PlotTag(snapshot, article.plotTagIds) ? <R18Badge /> : null}
           {position ? (
             <span className="rounded-full bg-accent-soft px-2 py-0.5 font-medium text-accent">
               第 {position} 篇
@@ -130,6 +132,7 @@ function ArticleSeriesGroup({
         <span className="rounded-full border border-border px-2 py-0.5 text-[0.68rem] text-muted-foreground">
           {STATUS_LABEL[row.series.status] ?? row.series.status}
         </span>
+        {hasR18PlotTag(snapshot, row.series.plotTagIds) ? <R18Badge /> : null}
         <Link
           to={`/series/${row.series.id}`}
           className="truncate text-sm font-medium hover:text-accent"

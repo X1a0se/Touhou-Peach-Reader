@@ -10,6 +10,8 @@ export { Markdown } from './components/Markdown.js';
 export type { MarkdownProps } from './components/Markdown.js';
 export { TagChip, tagChipClass } from './components/TagChip.js';
 export type { TagChipProps } from './components/TagChip.js';
+export { R18Badge } from './components/R18Badge.js';
+export type { R18BadgeProps } from './components/R18Badge.js';
 export { Button } from './components/Button.js';
 export type { ButtonProps, ButtonSize, ButtonVariant } from './components/Button.js';
 export { Panel } from './components/Panel.js';

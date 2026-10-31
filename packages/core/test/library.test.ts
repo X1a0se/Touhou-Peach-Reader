@@ -1,6 +1,6 @@
 import { createMemoryPlatform } from '@tpr/platform/memory';
 import type { RawDatabase } from '@tpr/schema';
-import { makeDatabase } from '@tpr/schema/testing';
+import { makeArticle, makeDatabase, makeTag } from '@tpr/schema/testing';
 import { describe, expect, it } from 'vitest';
 import { createLibrary } from '../src/db/library.js';
 import { ioFor } from '../src/db/workspace.js';
@@ -50,6 +50,37 @@ describe('library: 导入 / 持久化 / 导出 round-trip', () => {
     expect(outcome.snapshot.manifest.databaseId).toBe(db.manifest.databaseId);
     expect(outcome.snapshot.articles.length).toBe(db.articles.length);
     expect(outcome.snapshot.manifest.counts.articles).toBe(db.articles.length);
+  });
+
+  it('import-tag-merge: 同类别同名标签自动合并、改写引用并报告', async () => {
+    const target = makeTag({ id: 't_000000000001', category: 'plot', name: 'R18' });
+    const duplicate = makeTag({
+      id: 't_000000000002',
+      category: 'plot',
+      name: 'ｒ１８',
+      aliases: ['成人'],
+    });
+    const article = makeArticle({
+      id: 'a_0000000000000001',
+      title: '合并测试',
+      plotTagIds: [target.id, duplicate.id],
+    });
+    const db = makeDatabase(
+      { tags: [target, duplicate], articles: [article], series: [], featured: [], credits: [] },
+      { withFiles: true },
+    );
+    const { bytes } = await packDatabase(db, '/seed');
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const outcome = await createLibrary(platform).importBytes(bytes);
+
+    expect(outcome.report.ok).toBe(true);
+    expect(outcome.mergedTags).toBe(1);
+    expect(outcome.snapshot.tags).toHaveLength(1);
+    expect(outcome.snapshot.tags[0]?.id).toBe(target.id);
+    expect(outcome.snapshot.tags[0]?.aliases).toContain('成人');
+    expect(outcome.snapshot.articles[0]?.plotTagIds).toEqual([target.id]);
+    expect(outcome.report.warnings.some((issue) => issue.code === 'W_IMPORT_TAG_MERGED')).toBe(true);
+    expect(outcome.report.warnings.some((issue) => issue.code === 'W_DUPLICATE_NAME')).toBe(false);
   });
 
   it('import-restart: 重新建库对象后 restore() 仍能读回同一份数据', async () => {

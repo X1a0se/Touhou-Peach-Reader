@@ -1,5 +1,5 @@
 import { type FeaturedPage as FeaturedPageKind, getFeaturedCards } from '@tpr/core';
-import { Button, EmptyState, Panel, SectionHeading } from '@tpr/ui';
+import { Button, EmptyState, Panel, R18Badge, SectionHeading } from '@tpr/ui';
 import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
 import { useServices } from '../context.js';
@@ -68,6 +68,7 @@ export function FeaturedPage({ page }: { page: FeaturedPageKind }) {
             <div className="flex min-w-0 flex-col gap-1.5">
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 {card.kindLabel ? <span>{card.kindLabel}</span> : null}
+                {card.r18 ? <R18Badge /> : null}
                 <span className="ml-auto font-mono text-[0.65rem]">{card.targetId}</span>
               </div>
               <h3 className="truncate text-lg font-semibold">

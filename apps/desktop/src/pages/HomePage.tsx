@@ -1,5 +1,5 @@
-import { resolveTags } from '@tpr/core';
-import { Button, DropZone, EmptyState, Panel, SectionHeading, StatTile } from '@tpr/ui';
+import { hasR18PlotTag, resolveTags } from '@tpr/core';
+import { Button, DropZone, EmptyState, Panel, R18Badge, SectionHeading, StatTile } from '@tpr/ui';
 import { Link } from 'react-router';
 import { RandomSection } from '../components/RandomSection.js';
 import { TagLinks } from '../components/TagLinks.js';
@@ -113,6 +113,7 @@ export function HomePage() {
                       >
                         {article.type === 'short' ? '短篇' : '系列'}
                       </span>
+                      {hasR18PlotTag(snapshot, article.plotTagIds) ? <R18Badge /> : null}
                       <span className="truncate group-hover:text-accent">{article.title}</span>
                       <span className="ml-auto shrink-0 font-mono text-[0.65rem] text-muted-foreground">
                         {article.id}

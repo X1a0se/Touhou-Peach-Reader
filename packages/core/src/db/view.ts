@@ -2,7 +2,7 @@
  * 详情页的只读视图（Goal 5）：把 id 关系解析成人能直接渲染的结构。
  * 纯函数、零 IO；正文仍由 `Library.readContent()` 按需读取（design §10）。
  */
-import type { ArticleMeta, ImageAsset, Series, TagCategory } from '@tpr/schema';
+import { isR18Tag, type ArticleMeta, type ImageAsset, type Series, type TagCategory } from '@tpr/schema';
 import type { DBSnapshot } from './snapshot.js';
 
 export interface PersonRef {
@@ -66,6 +66,19 @@ const tagRef = (snapshot: DBSnapshot, id: string): TagRef | null => {
   const tag = snapshot.maps.tags.get(id);
   return tag ? { id: tag.id, name: tag.name, category: tag.category } : null;
 };
+
+/**
+ * 情节标签里是否含 R18。只认 category === 'plot' 的标签；
+ * 角色标签即使同名也不触发，悬空 id 直接忽略。
+ */
+export function hasR18PlotTag(snapshot: DBSnapshot, tagIds: readonly string[] | undefined): boolean {
+  if (!tagIds) return false;
+  for (const id of tagIds) {
+    const tag = snapshot.maps.tags.get(id);
+    if (tag && tag.category === 'plot' && isR18Tag(tag)) return true;
+  }
+  return false;
+}
 
 /** 按传入顺序解析标签 id：去重、跳过悬空 id。缩略卡片与详情页共用。 */
 export function resolveTags(snapshot: DBSnapshot, ids: readonly string[] | undefined): TagRef[] {
