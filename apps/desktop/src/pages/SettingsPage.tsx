@@ -270,7 +270,9 @@ export function SettingsPage() {
     setError(null);
     setUpdate(null);
     try {
-      const result = await services.github.checkUpdate(target, currentVersion);
+      const result = await services.github.checkUpdate(target, currentVersion, {
+        localUpdatedAt: snapshot?.manifest.updatedAt ?? null,
+      });
       setUpdate(result);
     } catch (cause) {
       setError(describe(cause));
@@ -296,7 +298,12 @@ export function SettingsPage() {
           );
         },
       });
-      await library.importBytes(result.bytes);
+      const outcome = await library.importBytes(result.bytes);
+      if (!outcome.ok) {
+        setStatus(null);
+        setError(outcome.error);
+        return;
+      }
       setStatus(`已导入 ${result.fileName}（${result.tag}）`);
       setUpdate(null);
     } catch (cause) {
@@ -436,7 +443,7 @@ export function SettingsPage() {
           <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm">
             <p>
               源：<span className="font-mono">{update.owner}/{update.repo}</span>
-              {update.assetName ? `（${update.assetName}）` : ''}
+              {update.assetName ? `（${update.assetName}）` : '（没有 .tpr 资产）'}
             </p>
             <p className="mt-1">
               当前版本：<span className="font-mono">{update.current ?? '未导入数据库'}</span> · 最新版本：
@@ -447,6 +454,44 @@ export function SettingsPage() {
             </p>
           </div>
         )}
+
+        <div className="grid gap-3 rounded-lg border border-border bg-surface/50 p-4">
+          <p className="text-sm font-medium">自动更新</p>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1 shrink-0 accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+              checked={settings.autoCheckDatabaseUpdate}
+              disabled={!ready}
+              onChange={(event) =>
+                void persist({ autoCheckDatabaseUpdate: event.target.checked })
+              }
+            />
+            <span>
+              启动时自动检查数据库更新
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                只检查并提示，不会覆盖当前数据库；检查失败会静默忽略。
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1 shrink-0 accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+              checked={settings.autoImportDatabaseUpdate}
+              disabled={!ready || !settings.autoCheckDatabaseUpdate}
+              onChange={(event) =>
+                void persist({ autoImportDatabaseUpdate: event.target.checked })
+              }
+            />
+            <span>
+              发现更新后自动下载并导入
+              <span className="mt-0.5 block text-xs text-muted-foreground">
+                会用新数据库覆盖当前库的内容；默认关闭，建议先备份再开启。
+              </span>
+            </span>
+          </label>
+        </div>
       </Panel>
 
       <Panel className="grid gap-3">

@@ -12,6 +12,11 @@ import {
 
 export type LibraryStatus = 'loading' | 'empty' | 'ready';
 
+/** importBytes 的结果：调用方需要据此判断是否真的导入成功（不再吞错） */
+export type ImportBytesOutcome =
+  | { readonly ok: true; readonly error: null }
+  | { readonly ok: false; readonly error: string };
+
 export interface LibraryState {
   status: LibraryStatus;
   snapshot: DBSnapshot | null;
@@ -19,7 +24,7 @@ export interface LibraryState {
   message: string | null;
   error: string | null;
   warnings: Issue[];
-  importBytes(bytes: Uint8Array): Promise<void>;
+  importBytes(bytes: Uint8Array): Promise<ImportBytesOutcome>;
   importPath(path: string): Promise<void>;
   exportAll(): Promise<void>;
   /** 导出单篇/选中（Goal 10）。 */
@@ -67,8 +72,10 @@ export function useLibrary(services: Services): LibraryState {
   }, [services]);
 
   const importBytes = useCallback(
-    async (bytes: Uint8Array) => {
-      if (busy) return;
+    async (bytes: Uint8Array): Promise<ImportBytesOutcome> => {
+      if (busy) {
+        return { ok: false, error: '正在导入另一个数据库，请稍候再试' };
+      }
       setBusy(true);
       setError(null);
       setMessage(null);
@@ -79,8 +86,11 @@ export function useLibrary(services: Services): LibraryState {
         setWarnings([...outcome.report.warnings]);
         setStatus('ready');
         setMessage(describeImport(outcome.snapshot, outcome.mergedTags));
+        return { ok: true, error: null };
       } catch (cause) {
-        setError(describe(cause));
+        const message = describe(cause);
+        setError(message);
+        return { ok: false, error: message };
       } finally {
         setBusy(false);
       }

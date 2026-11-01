@@ -113,6 +113,45 @@ describe('settings: 图片压缩开关（Goal 25）', () => {
   });
 });
 
+describe('settings: 数据库自动更新开关', () => {
+  it('update-check-default: 默认自动检查开启、自动导入关闭，旧设置缺字段也回退', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const loaded = await createSettings(platform).load();
+    expect(loaded.autoCheckDatabaseUpdate).toBe(true);
+    expect(loaded.autoImportDatabaseUpdate).toBe(false);
+
+    const legacy = createMemoryPlatform({
+      dataDir: '/app',
+      files: { '/app/settings.json': '{"theme":"dark"}' },
+    });
+    const old = await createSettings(legacy).load();
+    expect(old.autoCheckDatabaseUpdate).toBe(true);
+    expect(old.autoImportDatabaseUpdate).toBe(false);
+  });
+
+  it('update-check-roundtrip: 两个开关能分别保存，重启仍保持', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const first = createSettings(platform);
+    await first.load();
+    await first.save({ autoCheckDatabaseUpdate: false, autoImportDatabaseUpdate: true });
+
+    const loaded = await createSettings(platform).load();
+    expect(loaded.autoCheckDatabaseUpdate).toBe(false);
+    expect(loaded.autoImportDatabaseUpdate).toBe(true);
+    const saved = JSON.parse(await platform.fs.readText('/app/settings.json'));
+    expect(saved.autoCheckDatabaseUpdate).toBe(false);
+    expect(saved.autoImportDatabaseUpdate).toBe(true);
+  });
+
+  it('update-check-parse: 非布尔值逐项回退默认值', () => {
+    expect(parseSettings({ autoCheckDatabaseUpdate: 'no' })?.autoCheckDatabaseUpdate).toBe(true);
+    expect(parseSettings({ autoImportDatabaseUpdate: 'yes' })?.autoImportDatabaseUpdate).toBe(false);
+    expect(
+      parseSettings({ autoCheckDatabaseUpdate: false, autoImportDatabaseUpdate: true }),
+    ).toMatchObject({ autoCheckDatabaseUpdate: false, autoImportDatabaseUpdate: true });
+  });
+});
+
 describe('settings: 外观（Goal 14）', () => {
   it('appearance-defaults: 默认 peach + 两个空壁纸槽', async () => {
     const platform = createMemoryPlatform({ dataDir: '/app' });

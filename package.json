@@ -31,6 +31,7 @@
     "release:install": "node scripts/release.mjs install",
     "release:portable": "node scripts/release.mjs portable",
     "release:publish": "node scripts/publish-release.mjs",
+    "release:db": "node scripts/publish-db.mjs",
     "format": "biome format --write .",
     "lint": "biome check ."
   },

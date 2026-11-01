@@ -2,6 +2,7 @@ import { VersionBadge, cn } from '@tpr/ui';
 import { Suspense } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import { BackButton } from '../components/BackButton.js';
+import { DatabaseUpdateBanner } from '../components/DatabaseUpdateBanner.js';
 import { WallpaperLayer } from '../components/WallpaperLayer.js';
 import { useServices } from '../context.js';
 
@@ -77,6 +78,7 @@ export function Layout() {
       </header>
 
       <main className="relative z-10 mx-auto flex max-w-6xl flex-col gap-8 px-6 py-8">
+        <DatabaseUpdateBanner />
         <Suspense fallback={<p className="text-sm text-muted-foreground">载入中…</p>}>
           <Outlet />
         </Suspense>

@@ -31,12 +31,12 @@
 |---|---|
 | 安装版（推荐） | `TouhouPeachReader-0.1.9-x64-setup.exe` |
 | 免安装版 | `TouhouPeachReader-0.1.9-portable.exe` |
-| 数据库 | `TouhouPeachReader-DB-1.0.0.tpr` |
+| 数据库 | [TouhouPeachReader-DB-*.tpr](https://github.com/X1a0se/Touhou-Peach-Reader/releases/latest) |
 
 发布页：<https://github.com/X1a0se/Touhou-Peach-Reader/releases/latest>
 
-- 应用内置的默认数据库源就指向上面的发布页；`/import` 与「设置 → 数据库源」都能直接下载。
-- Release 标签跟随**数据库版本**（`v1.0.0` = 数据库 1.0.0），应用版本看「设置 → 关于」。
+- 应用内置的默认数据库源就指向上面的发布页；`/import` 与「设置 → 数据库源」都能直接下载。程序启动后会自动检查一次数据库更新（可在设置里关掉）。
+- Release 标签跟随**数据库版本**，默认格式是 `<数据库名>-<年-月-日-时分秒>`（例如 `v纯文字文章1029-2026-10-31-121918`）；早期版本仍是 `v1.0.0` 这样的纯数字。应用版本看「设置 → 关于」。
 - 喜欢这个项目就给个 Star ⭐：<https://github.com/X1a0se/Touhou-Peach-Reader>
 
 ## 功能
@@ -52,8 +52,8 @@
 - **编辑器**：文章 / 系列 / 作者 / 标签 / 图片 / 推荐语 / 鸣谢 全量 CRUD，每次保存先校验再落盘；顶部全实体搜索（标题/简介/作者/标签/图片/推荐语/鸣谢，不含正文）可 ↑↓ 选择、Enter 跳转并定位到具体条目；文章表单里可直接新建系列、作者、译者与标签，系列目录用编号列表排序（上下移动/移除，保存即写回 `articleIds`），点击目录里的文章标题可直接跳到该文章的编辑表单。图片页新增「压缩上传图片」开关（默认开启，随设置持久化），新建/编辑文章与系列时封面内联上传处也有同一个开关：开启后 PNG/JPEG 转为 WebP（最长边 2560、质量 0.85），GIF/WebP 保持原样，压缩收益不足时保留原图；不追溯已上传图片。多选导出、标签合并与插图多选都带搜索框，已选项始终保留。文章/系列表单的情节标签上方有「R18 内容」勾选：勾选会自动在情节标签里选中 R18（库里没有时按 `createTag('plot','R18')` 新建并复用），取消会移除情节标签里的所有 R18。文章正文框可直接导入 .txt / .docx：.txt 自动识别 UTF-8 / UTF-16(BOM) / GBK（按 GB18030 兜底），.docx 取段落、标题、无序列表、粗斜体与段内换行（图片与表格样式不进正文）；正文已有内容时先确认再替换，旧版 .doc 需用 Word 另存为 .docx。
 - **草稿箱**：新建或编辑文章 / 系列 / 作者 / 标签时自动存草稿（按库隔离、写在 `localStorage`，600 ms 防抖 + 切页补写；编辑草稿带「编辑」标记，且只在真的有改动时才写），新建推荐语 / 鸣谢同样有草稿；关闭编辑器或重启后可从左侧草稿列表继续。保存实体成功后草稿自动清除；取消、切换条目或直接关掉编辑器时草稿保留，删除实体成功后才清掉对应编辑草稿。
 - **合并**：选另一个 `.tpr`，按 id + 更新时间归并，同一时刻内容不同才需要人工裁决，附疑似重复与悬空引用报告。
-- **在线下载**：`/import` 支持 GitHub 仓库 / release / 资产直链；内置默认源指向本项目的 GitHub 最新 Release。
-- **设置**：默认数据库源（附「恢复内置默认」）、项目仓库入口「喜欢就给个star⭐吧」、主题（浅色 / 深色 / 跟随系统）、5 套配色（桃夭 / 竹青 / 月白 / 绯红 / 墨染）、主界面与文章页各一张壁纸（可调不透明度与模糊）、当前数据库重命名（只改显示名与导出文件名，不动 databaseId 与内容）；「关于」显示当前 exe 版本、程序路径与数据目录（区分安装版 / 免安装版）。
+- **在线下载**：`/import` 支持 GitHub 仓库 / release / 资产直链；内置默认源指向本项目的 GitHub 最新 Release。启动后会自动检查一次数据库更新，发现新版本时在页面顶部提示，可一键下载并导入；也能在设置里改成自动导入。
+- **设置**：默认数据库源（附「恢复内置默认」）、数据库自动更新（分别开关启动自动检查与发现新版本后自动下载导入，自动导入默认关闭）、项目仓库入口「喜欢就给个star⭐吧」、主题（浅色 / 深色 / 跟随系统）、5 套配色（桃夭 / 竹青 / 月白 / 绯红 / 墨染）、主界面与文章页各一张壁纸（可调不透明度与模糊）、当前数据库重命名（只改显示名与导出文件名，不动 databaseId 与内容）；「关于」显示当前 exe 版本、程序路径与数据目录（区分安装版 / 免安装版）。
 - **界面**：粘性顶栏 + pill 导航、半透明磨砂面板、统一的按钮/空态/统计块组件、阅读排版（`.reading`）。
 - **桌面打包**：`tauri build` 产出 NSIS 安装包；`pnpm release:*` 负责版本一致性与覆盖安装（见下）。
 
@@ -87,6 +87,7 @@ corepack pnpm test         # 全包单测
 corepack pnpm check        # typecheck + test + 依赖边界 + Tauri 泄漏检查
 corepack pnpm release      # 一条命令更新安装版与 dist/portable 免安装版（也可双击 发布更新.cmd）
 corepack pnpm release:publish  # 把 dist/release 里的安装包与免安装版补发到 GitHub Release
+corepack pnpm release:db <文件.tpr>  # 只发数据库：默认改写成「库名-时间」版本并新建 Release，--tag 指定已存在标签才原地替换（也可双击 发布数据库.cmd）
 ```
 
 > Windows 上若 `corepack enable` 因权限失败，直接用 `corepack pnpm <script>` 即可；`tauri.conf.json` 的 `before*Command` 也已写成这种形式。
@@ -120,8 +121,9 @@ node scripts/release.mjs --set 0.2.0   # 需要升版本号时，先统一改 5 
 ## 公开发布
 
 - 仓库：<https://github.com/X1a0se/Touhou-Peach-Reader>（公开）。
-- 每个 Release 提供三件套：NSIS 安装版、免安装 exe、`.tpr` 数据库；标签跟随**数据库版本**，应用版本见「设置 → 关于」。
+- 每个 Release 提供三件套：NSIS 安装版、免安装 exe、`.tpr` 数据库；标签跟随**数据库版本**，`release:db` 默认用 `<数据库名>-<年-月-日-时分秒>`（早期 `v1.0.0` 仍可比较），应用版本见「设置 → 关于」。
 - 数据库版本没变、只更新程序时，用 `corepack pnpm release:publish` 更新同一个 Release（换资产、改标题、删掉旧版本的安装包），不要另开标签——`/releases/latest` 必须始终挂着 `.tpr`。凭据读 `GH_TOKEN`，没设就直接用 git 已经配好的凭据管理器账号。
+- 数据库单独更新（不动程序版本）时，双击仓库根目录的 `发布数据库.cmd`（可直接把 `.tpr` 拖到它上面），或 `corepack pnpm release:db <文件.tpr>`。脚本读包内 `manifest.json` 的 `name`，默认把新版本写成 `<数据库名>-<年-月-日-时分秒>`、`updatedAt` 写成当前时间，再新建 `v<版本>` Release 并把上一版的安装包/免安装 exe 一起复制过去（保证 `/releases/latest` 仍是三件套）；需要覆盖旧标签时用 `--tag <标签>`，只有标签已存在才原地替换 `.tpr`。原 `.tpr` 不会被修改，脚本只在内存里重写 ZIP 里的 `manifest.json`。默认先打印计划再确认，`--dry-run` 只预览；一个 Release 只保留一份 `.tpr`（应用只取第一个），成功后会把重写后的包同步到 `dist/release` 并清掉其它 `TouhouPeachReader-DB-*.tpr`。
 - 应用内置默认数据库源 = `https://github.com/X1a0se/Touhou-Peach-Reader/releases/latest`；不再支持镜像前缀，GitHub API 与下载都直连。
 
 ## 结构
@@ -135,9 +137,10 @@ packages/
 apps/
   desktop/   Tauri 2 壳 + 路由 + 页面组装
              src-tauri/src/commands/  fs / zip（含导出直写）（Rust）
-scripts/     依赖边界检查、Tauri 泄漏检查、图标生成、发布一致性（release.mjs）、发布到 GitHub Release（publish-release.mjs）
+scripts/     依赖边界检查、Tauri 泄漏检查、图标生成、发布一致性（release.mjs）、发布到 GitHub Release（publish-release.mjs、publish-db.mjs）
 dist/        发布产物（git 忽略）：portable/ 免安装目录、安装包
 发布更新.cmd  双击更新两版（内部 corepack pnpm release）
+发布数据库.cmd 双击把自选 .tpr 发到 GitHub Release（内部 node scripts/publish-db.mjs）
 ```
 
 ## 数据位置

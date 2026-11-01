@@ -49,7 +49,12 @@ export function ImportPage() {
         },
       });
       setProgress(`已下载 ${result.fileName}（${result.tag}），正在导入…`);
-      await library.importBytes(result.bytes);
+      const outcome = await library.importBytes(result.bytes);
+      if (!outcome.ok) {
+        setGithubError(outcome.error);
+        setProgress(null);
+        return;
+      }
       setProgress(null);
     } catch (cause) {
       setGithubError(isGitHubError(cause) ? `${cause.code}：${cause.message}` : describe(cause));

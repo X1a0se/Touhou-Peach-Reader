@@ -44,6 +44,10 @@ export interface AppSettings {
   defaultSource: string;
   /** 上传图片时是否在浏览器端压缩（Goal 25；默认开启，减少数据库体积） */
   compressImages: boolean;
+  /** 启动时自动检查数据库更新（默认开启） */
+  autoCheckDatabaseUpdate: boolean;
+  /** 发现数据库更新后自动下载并导入（默认关闭；会覆盖当前库的内容） */
+  autoImportDatabaseUpdate: boolean;
   /** 解压限额覆盖（默认取 design §7.4 的 512MB / 8GB / 20 万条 / 200 倍） */
   extractLimits?: Partial<ZipLimits>;
 }
@@ -55,6 +59,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   language: 'zh-CN',
   defaultSource: DEFAULT_DATABASE_SOURCE,
   compressImages: true,
+  autoCheckDatabaseUpdate: true,
+  autoImportDatabaseUpdate: false,
 };
 
 const WALLPAPER_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -138,6 +144,14 @@ export function parseSettings(value: unknown): AppSettings | null {
       typeof raw.compressImages === 'boolean'
         ? raw.compressImages
         : DEFAULT_SETTINGS.compressImages,
+    autoCheckDatabaseUpdate:
+      typeof raw.autoCheckDatabaseUpdate === 'boolean'
+        ? raw.autoCheckDatabaseUpdate
+        : DEFAULT_SETTINGS.autoCheckDatabaseUpdate,
+    autoImportDatabaseUpdate:
+      typeof raw.autoImportDatabaseUpdate === 'boolean'
+        ? raw.autoImportDatabaseUpdate
+        : DEFAULT_SETTINGS.autoImportDatabaseUpdate,
   };
   if (
     raw.extractLimits !== null &&
@@ -202,6 +216,14 @@ function sanitize(input: AppSettings): AppSettings {
       typeof input.compressImages === 'boolean'
         ? input.compressImages
         : DEFAULT_SETTINGS.compressImages,
+    autoCheckDatabaseUpdate:
+      typeof input.autoCheckDatabaseUpdate === 'boolean'
+        ? input.autoCheckDatabaseUpdate
+        : DEFAULT_SETTINGS.autoCheckDatabaseUpdate,
+    autoImportDatabaseUpdate:
+      typeof input.autoImportDatabaseUpdate === 'boolean'
+        ? input.autoImportDatabaseUpdate
+        : DEFAULT_SETTINGS.autoImportDatabaseUpdate,
   };
   if (input.extractLimits !== undefined && Object.keys(input.extractLimits).length > 0) {
     next.extractLimits = { ...input.extractLimits };

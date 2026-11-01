@@ -130,7 +130,7 @@
 
 **验收**：
 - 在 `/import` 输入 GitHub release URL（或仓库 URL），通过 `INetwork` 下载 ZIP 并走正常导入流程。
-- `/settings` 可保存默认数据库源地址、检查更新（比对 manifest 版本）、触发重新下载。
+- `/settings` 可保存默认数据库源地址、检查更新（`isNewerDatabaseVersion` 比较时间戳 / 数字 / 发布或本地更新时间）、触发重新下载；启动后可按设置自动检查并可选自动导入。
 - `/credits` 从 `credits.json` 渲染特别鸣谢，支持链接跳转。
 
 ---

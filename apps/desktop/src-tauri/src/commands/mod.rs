@@ -2,6 +2,7 @@
 
 pub mod app;
 pub mod fs;
+pub mod network;
 pub mod sql;
 pub mod wallpaper;
 pub mod zip;

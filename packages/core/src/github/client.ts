@@ -8,6 +8,7 @@
 import type { Platform } from '@tpr/platform';
 import type { GitHubRef } from './url.js';
 import { parseGitHubInput } from './url.js';
+import { isNewerDatabaseVersion } from './version.js';
 
 export interface GitHubAsset {
   readonly name: string;
@@ -19,6 +20,8 @@ export interface ResolvedRelease {
   readonly owner: string;
   readonly repo: string;
   readonly tag: string;
+  /** GitHub 的 release 发布时间；资产直链解析时为 null */
+  readonly publishedAt: string | null;
   readonly assets: readonly GitHubAsset[];
   /** 自动挑中的数据库资产（`.tpr` 优先，其次 `.zip`；都没有为 null） */
   readonly database: GitHubAsset | null;
@@ -34,11 +37,16 @@ export interface DownloadedDatabase {
 export interface UpdateCheck {
   readonly owner: string;
   readonly repo: string;
-  /** 当前库的 manifest.version；未导入库时为 null */
+  /** 当前库的 manifest.version（原样返回）；未导入库时为 null */
   readonly current: string | null;
+  /** release 标签（保留 v 前缀，下载时要用原始标签） */
+  readonly tag: string;
   readonly latest: string;
+  readonly publishedAt: string | null;
   readonly upToDate: boolean;
   readonly assetName: string | null;
+  /** 数据库资产直链；下载时可直接使用，避免第二次 API 请求。 */
+  readonly assetUrl: string | null;
 }
 
 export type GitHubErrorCode = 'E_NETWORK' | 'E_API' | 'E_NO_ASSET' | 'E_TOO_LARGE';
@@ -56,7 +64,11 @@ export class GitHubError extends Error {
 export interface GitHubService {
   resolve(input: string): Promise<ResolvedRelease>;
   download(input: string, opts?: { onProgress?: (received: number, total: number | undefined) => void }): Promise<DownloadedDatabase>;
-  checkUpdate(input: string, currentVersion: string | null): Promise<UpdateCheck>;
+  checkUpdate(
+    input: string,
+    currentVersion: string | null,
+    opts?: { localUpdatedAt?: string | null },
+  ): Promise<UpdateCheck>;
 }
 
 export interface GitHubServiceOptions {
@@ -74,6 +86,12 @@ interface RawAsset {
   browser_download_url?: unknown;
   url?: unknown;
   size?: unknown;
+}
+
+interface RawRelease {
+  tag_name?: unknown;
+  published_at?: unknown;
+  assets?: unknown;
 }
 
 function normalizeVersion(tag: string): string {
@@ -136,6 +154,7 @@ export function createGitHubService(
         owner: ref.owner,
         repo: ref.repo,
         tag: ref.tag ?? 'asset',
+        publishedAt: null,
         assets: [asset],
         database: asset,
       };
@@ -148,13 +167,21 @@ export function createGitHubService(
     if (body === null || typeof body !== 'object') {
       throw new GitHubError('E_API', 'GitHub 返回了无法识别的 release 数据');
     }
-    const raw = body as { tag_name?: unknown; assets?: unknown };
+    const raw = body as RawRelease;
     const tag = typeof raw.tag_name === 'string' ? raw.tag_name : (ref.tag ?? '');
     if (tag.length === 0) {
       throw new GitHubError('E_API', '该 release 没有 tag，无法判断版本');
     }
+    const publishedAt = typeof raw.published_at === 'string' ? raw.published_at : null;
     const assets = readAssets(raw.assets);
-    return { owner: ref.owner, repo: ref.repo, tag, assets, database: pickDatabaseAsset(assets) };
+    return {
+      owner: ref.owner,
+      repo: ref.repo,
+      tag,
+      publishedAt,
+      assets,
+      database: pickDatabaseAsset(assets),
+    };
   }
 
   async function resolve(input: string): Promise<ResolvedRelease> {
@@ -193,17 +220,30 @@ export function createGitHubService(
     return { bytes, fileName: asset.name, tag: release.tag, release };
   }
 
-  async function checkUpdate(input: string, currentVersion: string | null): Promise<UpdateCheck> {
+  async function checkUpdate(
+    input: string,
+    currentVersion: string | null,
+    opts: { localUpdatedAt?: string | null } = {},
+  ): Promise<UpdateCheck> {
     const release = await resolve(input);
     const latest = normalizeVersion(release.tag);
-    const current = currentVersion === null ? null : normalizeVersion(currentVersion);
+    const current = currentVersion;
     return {
       owner: release.owner,
       repo: release.repo,
       current,
+      tag: release.tag,
       latest,
-      upToDate: current !== null && current === latest,
+      publishedAt: release.publishedAt,
+      upToDate:
+        current !== null &&
+        !isNewerDatabaseVersion(current, {
+          version: latest,
+          publishedAt: release.publishedAt,
+          localUpdatedAt: opts.localUpdatedAt ?? null,
+        }),
       assetName: release.database?.name ?? null,
+      assetUrl: release.database?.url ?? null,
     };
   }
 

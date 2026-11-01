@@ -50,6 +50,14 @@ function stripUrlNoise(input: string): string {
   return input.trim().replace(/[?#].*$/, '').replace(/\/+$/, '');
 }
 
+function decodeSegment(segment: string, raw: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw new GitHubUrlError('E_GITHUB_URL', `GitHub 地址里的转义编码不合法：${raw}`);
+  }
+}
+
 export function parseGitHubInput(input: string): GitHubRef {
   const raw = input.trim();
   if (raw.length === 0) {
@@ -61,19 +69,29 @@ export function parseGitHubInput(input: string): GitHubRef {
     stripUrlNoise(raw),
   );
   if (assetMatch) {
-    const [, owner, repo, tag, name] = assetMatch;
-    if (owner === undefined || repo === undefined || tag === undefined || name === undefined) {
+    const [, owner, repo, encodedTag, encodedName] = assetMatch;
+    if (
+      owner === undefined ||
+      repo === undefined ||
+      encodedTag === undefined ||
+      encodedName === undefined
+    ) {
       throw new GitHubUrlError('E_GITHUB_URL', `GitHub 地址不合法：${raw}`);
     }
     assertNames(owner, repo);
-    if (name.length === 0) {
+    if (encodedName.length === 0) {
       throw new GitHubUrlError('E_GITHUB_URL', '资产直链缺少文件名');
     }
+    const tag = decodeSegment(encodedTag, raw);
+    const name = decodeSegment(encodedName, raw);
     return {
       owner,
       repo,
       tag,
-      asset: { url: `https://github.com/${owner}/${repo}/releases/download/${tag}/${name}`, name },
+      asset: {
+        url: `https://github.com/${owner}/${repo}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`,
+        name,
+      },
       raw,
     };
   }
@@ -119,7 +137,7 @@ export function parseGitHubInput(input: string): GitHubRef {
     return { owner, repo, raw };
   }
   if (sub === 'tag') {
-    const tag = rest.join('/');
+    const tag = rest.map((segment) => decodeSegment(segment, raw)).join('/');
     if (tag.length === 0) {
       throw new GitHubUrlError('E_GITHUB_URL', 'release/tag 地址缺少 tag');
     }

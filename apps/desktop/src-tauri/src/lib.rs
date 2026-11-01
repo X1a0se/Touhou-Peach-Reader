@@ -57,6 +57,7 @@ pub fn run() {
             commands::sql::sql_write_blob,
             commands::app::app_info,
             commands::app::install_info,
+            commands::network::network_download,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

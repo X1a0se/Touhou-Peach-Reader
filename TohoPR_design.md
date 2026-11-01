@@ -1830,21 +1830,23 @@ async fn zip_extract_all(app: tauri::AppHandle, zip_path: String, dest_dir: Stri
 | `app_info` | `apps/desktop/src/platform/app-info.ts` | 只读：返回 `{version, exePath, dataDir}`。`version` 取 `app.package_info()`（与 `tauri.conf.json` / `Cargo.toml` 同源）（Goal 19） |
 | `install_info` | `apps/desktop/src/platform/app-info.ts` | 只读：查 `HKCU\…\Uninstall\东方桃图吧大书库` 的 `InstallLocation` / `DisplayVersion`，返回 `{location, version}` 或 `null`；用于判断当前 exe 是安装版还是免安装版（Goal 20） |
 | `import_wallpaper` | `IWallpaperStore.importFile` | 壁纸源在 app data 之外（用户任意目录），读入后复制到 `$APPDATA/wallpapers/wp-{epoch_ms}.{ext}`；校验绝对路径、扩展名白名单、≤20 MB、magic bytes（PNG/JPEG/WebP）；返回 `{fileName, bytes}` |
-| `http_*` | — | **不实现**：网络走 JS `fetch`（见 14.5），避免把 reqwest/TLS 拖进首次编译 |
+| `network_download` | `INetwork.download` | **资产下载走 Rust**：用 `ureq`（native-tls）同步下载，返回 `tauri::ipc::Response` 原始字节；只允许 GitHub 的 https 域名；经 Tauri Channel 上报进度；上限 256 MB。GitHub API 元数据仍由前端 `fetch` 读取（§14.5） |
 
 - 除 `zip_*` 外，其余命令都在 `spawn_blocking` 里跑，避免阻塞 async runtime。
 - 外部路径的例外只有三条：`zip_create_from_dir_to`（把导出包写到用户选的位置）、`import_wallpaper`（读用户选的壁纸）、`stage_import`（把拖入/选中的 `.tpr` 复制进 app data）。三者都只服务"用户在对话框/拖拽里明确指定的单个文件"，并各自校验后缀、绝对路径与大小上限。旧 `save_export` 已删除，避免出现"ZIP 字节先回传 JS 再写盘"的第二条路径。
 - zip 9 的 API 细节（实测）：`entry.name()` 返回 `Result<Cow<str>, ZipError>`；`ZipFile<'_, R>` 带泛型参数，辅助函数要写成 `fn is_symlink<R: Read + ?Sized>(f: &ZipFile<'_, R>)`。
 - 错误统一 `Err("ECODE: 可读信息")` 字符串，TS 侧用一个 `mapNativeError()` 转成 `PlatformError`（§5.3）。改错误文案不会破坏分类，因为分类只看 `ECODE` 前缀。
 
-### 14.5 网络为什么不进 Rust
+### 14.5 网络：元数据走 JS，资产下载走 Rust
 
-`INetwork` 在 `apps/desktop/src/platform/network.ts` 用标准 `fetch` + `ReadableStream` 实现：
+`INetwork` 拆成两条路径：
 
-- GitHub API 与 release 资产都允许跨域；CSP 已放行相应域。
-- 下载进度来自 `Content-Length` 与流式读取，无需额外依赖。
-- 代价：首次编译不引入 reqwest/openssl/rustls，cargo build 时间显著更短。
-- 触发回退的信号：GitHub 改 CORS、或大文件下载在 WebView2 里频繁中断 → 此时再加一个 `download_to_file` Rust 命令（用 `ureq` 而非 reqwest，同步且轻量），接口不变。
+- `fetchJson` 仍在 `apps/desktop/src/platform/tauri.ts` 用浏览器 `fetch`：GitHub API 允许跨域，CSP 已放行。
+- `download` 走 `network_download` Rust 命令：GitHub Release 资产最终 302 到 `release-assets.githubusercontent.com`，该 CDN 响应没有 `Access-Control-Allow-Origin`，WebView 的 `fetch` 会被 CORS 拒绝（实测报 `Failed to fetch`）。Rust 端用 `ureq`（`native-tls`）同步下载，`spawn_blocking` 执行，通过 Tauri Channel 上报进度，返回 `tauri::ipc::Response` 的原始字节，避免 16 MB 数据被序列化成 JSON 数组。
+- 代理：环境变量优先，其次读 Windows 系统代理（`HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings` 的 `ProxyEnable` / `ProxyServer`），只支持 HTTP 代理；GitHub 直连超时的网络也能下载。
+- 安全边界：命令只接受 `https`、无 userinfo、端口为空或 443、主机属于 GitHub 域名白名单的 URL，不把它变成任意 SSRF 代理。
+- 上限 256 MB，与 core 的 `DEFAULT_MAX_BYTES` 一致。
+- 该回退正是原方案预留的信号：CORS 触发，于是落地 `ureq`，接口不变。
 
 ### 14.6 开发与构建
 
@@ -1940,7 +1942,7 @@ const FORBIDDEN = [/@tauri-apps\//, /window\.__TAURI__/, /\bconvertFileSrc\b/, /
 | R7 | Windows 文件被占用导致 rename 失败 | 中 | 导入/保存失败 | 暂存 + 换名 + 指数退避 5 次；失败提示关闭占用程序 | `EPERM`/`EACCES` on rename |
 | R8 | FlexSearch 0.8 API 与文档漂移 | 中 | 搜索挂掉 | 适配层 `engine.ts` 单点隔离（§11.4） | 类型报错 / 运行时报 `doc.search is not a function` |
 | R9 | `Intl.Segmenter` 在某些 WebView2 版本缺失 | 低 | 中文分词退化 | 已有 `fallbackSplit` 分支（§11.2）；测试强制走 fallback 也能过 | `typeof Intl.Segmenter === 'undefined'` |
-| R10 | GitHub CORS / 重定向阻断下载 | 中 | Goal 11 卡住 | CSP 已白名单；回退方案 = 加 `download_to_file` Rust 命令（§14.5） | 浏览器控制台 CORS 错误 |
+| R10 | GitHub CORS / 重定向阻断下载 | 已发生 | Goal 11 卡住 | 已落地：资产下载改走 Rust `network_download`（`ureq` + Channel 进度，§14.5）；API 元数据仍走 JS `fetch` | 浏览器控制台 CORS 错误 / `Failed to fetch` |
 | R11 | 虚拟标签与物理 tag 混淆 | 中 | 数据污染（`v:` 被写进 tags.json） | `v:` 前缀隔离 + 导入丢弃并告警 + 校验码 `W_VIRTUAL_TAG_IN_FILE` | tags.json 里出现 `v:` 开头 id |
 | R12 | 合并时的字段级误合并预期 | 低 | 数据不可预期 | 明确"整条实体取舍、不做字段级合并"（§10.2），UI 展示差异字段但不逐字段选 | 用户反馈"合并后标题和简介对不上" |
 
@@ -2088,8 +2090,8 @@ Goal 11 追加记录：
 - **URL 解析是纯函数** `parseGitHubInput(input)`（`packages/core/src/github/url.ts`）：支持仓库首页、`/releases`、`/releases/latest`、`/releases/tag/{tag}`、资产直链、`owner/repo` 速记；非 github 域报 `E_GITHUB_HOST`，其余格式错误报 `E_GITHUB_URL`，错误类 `GitHubUrlError`（**故意不继承** `GitHubError`，调用方按类区分"地址错"和"网络错"）。
 - **API 与下载都直连**：`createGitHubService(platform)` 的 `resolve` 打 `https://api.github.com/repos/{owner}/{repo}/releases/{latest|tags/{tag}}`，`download` 直接下载 `browser_download_url`。不提供镜像前缀（没有可用的镜像站）。
 - **资产挑选**：`.tpr` 优先，其次 `.zip`（`pickDatabaseAsset`）；都没有报 `E_NO_ASSET` 并列出资产名。下载上限默认 256 MB（`E_TOO_LARGE`），避免把内存打满。
-- **版本比较**：`checkUpdate` 把 tag 与 `manifest.version` 都去掉前缀 `v` 再比；tag 可能带仓库前缀（如 `tauri-v3.0.0`），此时只会判为"不同版本"，不会误判为相同。
-- **设置文件** `settings.json`（`createSettings`）：`{ theme, language, defaultSource, extractLimits }`；宽容解析（坏字段逐个回退默认值，整份坏 JSON 回退全默认），写盘 tmp+rename；`settings.path` 直接暴露给设置页展示。core **不依赖 zod**，手写 `parseSettings`；`defaultSource` 缺省/坏值回退到内置 GitHub Release 地址。
+- **版本比较**：`checkUpdate` 保留 `manifest.version` 原样返回，比较交给 `isNewerDatabaseVersion`（`packages/core/src/github/version.ts`）：优先解析 `<前缀>-YYYY-MM-DD-HHmmss` 时间戳并比时间，其次比数字版本，再回退 `publishedAt` / 本地 `updatedAt` 日期，最后版本不同即视为更新；`upToDate` 只在当前版本存在且不比最新旧时成立。中文标签走 tags API 时用 `encodeURIComponent`，地址解析对 `%` 转义做解码。
+- **设置文件** `settings.json`（`createSettings`）：`{ theme, palette, wallpapers, language, defaultSource, compressImages, autoCheckDatabaseUpdate, autoImportDatabaseUpdate, extractLimits? }`；宽容解析（坏字段逐个回退默认值，整份坏 JSON 回退全默认），写盘 tmp+rename；`settings.path` 直接暴露给设置页展示。core **不依赖 zod**，手写 `parseSettings`；`defaultSource` 缺省/坏值回退到内置 GitHub Release 地址。
 - **主题三档**：`SettingsProvider` 在 `<html>` 上挂/去 `dark` 类，`system` 档监听 `prefers-color-scheme` 变化；切换即时生效并落盘。
 - **页面**：`/import`（DropZone + 原生拖拽 + GitHub 地址下载，默认源从设置预填）、`/credits`（`credits.json` 渲染，外链走 `IOpener`）、`/settings`（默认源 + 恢复内置默认、主题、检查更新、重新下载并导入、项目仓库入口）。导航加到 10 项并改成 `flex-wrap`。
 - 单测 `test/github.test.ts` + `test/settings.test.ts` 覆盖 URL 解析、资产挑选、版本比较、设置持久化与内置默认源；真机 CDP 13 项断言全过，其中真实调用 GitHub API 两次（`tauri-apps/tauri` 检查更新、`cli/cli` 解析 release 并验证 `.zip` 兜底），下载链路用注入的假 network 验证导入闭环。
@@ -2219,7 +2221,7 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 
 - **仓库即默认源**：仓库地址收敛到 `packages/core/src/repo.ts`（`REPOSITORY_URL` / `DEFAULT_DATABASE_SOURCE`），设置页「项目仓库」按钮与 `DEFAULT_SETTINGS.defaultSource` 都从它派生；默认源用 `https://github.com/X1a0se/Touhou-Peach-Reader/releases/latest`，同一个 Release 里放安装包、免安装 exe 与 `.tpr`，`pickDatabaseAsset()` 自动挑数据库。
 - **移除镜像前缀**：`AppSettings.mirrorPrefix`、`applyMirrorPrefix()`、设置页输入框与相关单测全部删除；旧 `settings.json` 里的该字段由宽容解析忽略，下次保存自动消失。`createGitHubService(platform)` 不再需要 `SettingsService`，API 与下载都直连。
-- **发布约定**：Release 标签 = 数据库版本（首个版本 `v1.0.0`，数据库 manifest `1.0.0`），应用版本独立（0.1.5，见「设置 → 关于」）；这样 `checkUpdate` 的 tag/manifest 比较语义不变，不会误报「有新版本」。
+- **发布约定（Goal 26 起调整）**：Release 标签默认 = `<数据库名>-<年-月-日-时分秒>`（如 `v纯文字文章1029-2026-10-31-121918`），早期纯数字标签 `v1.0.0` 仍可比较；应用版本独立（见「设置 → 关于」）。比较语义由 `isNewerDatabaseVersion` 负责，不再要求标签与 manifest.version 逐字相等。
 - **设置页**：数据库源下方展示内置默认地址并提供「恢复内置默认」；新增「项目仓库」面板与「喜欢就给个star⭐吧」按钮（`IOpener.openExternal`，失败时面板内报错）。
 
 ## Goal 23 追加记录：数据库重命名
@@ -2273,6 +2275,18 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 
 ---
 
+## Goal 26 追加记录：数据库时间戳版本与自动更新
+
+- **上传即改版本**：`scripts/publish-db.mjs` 不再沿用包内 `manifest.version`。默认把版本写成 `<清洗后的数据库名>-<本机年-月-日-时分秒>`（前缀最多 46 字符、总长 ≤64；空白/控制符清洗，`\ / : * ? " < > | ~ ^ [ ]` 等替换为 `-`，连续 `..` 与 `@{` 归一化，首尾 `.-` 去掉），`updatedAt` 同时写成当前 ISO 时间；默认标签 `v<版本>`、新建 Release 并复制上一版程序 exe，`--tag` 只用于指定已存在的标签做原地替换。资产名保持 ASCII：版本全为 ASCII 时 `TouhouPeachReader-DB-<版本>.tpr`，否则 `TouhouPeachReader-DB-<时间戳>.tpr`。原 `.tpr` 不落盘修改。
+- **ZIP 无依赖重写**：新增 `readArchive` / `rewriteArchive`，解析 EOCD、中央目录与本地头，逐条 inflate + CRC 校验；复制除 `manifest.json` 外的本地记录（含 data descriptor、间隙与前缀），用 `JSON.stringify(..., null, 2)` + `deflateRawSync` 重建 manifest，再按原中央目录顺序重建 CD/EOCD（保留注释）。拒绝 ZIP64/加密/多盘/不支持的压缩方法与尾随数据。
+- **版本比较**：新增 `packages/core/src/github/version.ts` 的 `parseTimestampedVersion` 与 `isNewerDatabaseVersion`，优先级为时间戳（`<前缀>-YYYY-MM-DD-HHmmss`，校验月/日/时/分/秒）> 数字版本 > `publishedAt` / 本地 `updatedAt` 日期 > 版本不同即更新；`current` 为 null 视为更新、相同视为不更新。`checkUpdate` 的 `current` 保留 `manifest.version` 原样，新增 `tag` / `publishedAt`，`upToDate` 只在当前版本存在且不旧时成立。
+- **URL 转义**：`url.ts` 对 release/tag 与资产直链的 `%` 转义段解码，非法转义报 `E_GITHUB_URL`；构造 tags API 与资产 URL 时再 `encodeURIComponent`，中文标签不再二次编码。
+- **设置与界面**：`AppSettings` 新增 `autoCheckDatabaseUpdate`（默认 true）与 `autoImportDatabaseUpdate`（默认 false），旧设置缺字段/坏类型回退默认；`DatabaseUpdateBanner` 挂在 Layout 主内容顶部，启动后延迟 1.5s 自动检查一次（StrictMode 去重），失败静默，发现更新时提示「立即更新 / 稍后」，自动导入开启时直接下载并 `importBytes`。`useLibrary.importBytes` 返回 `{ ok, error }`，设置页与导入页据此显示失败，修掉此前“下载成功但导入失败仍提示成功”的误报。
+- **测试与验证**：core 新增 `version.test.ts` 8 例、github URL 中文转义与 tags API 编码、settings 自动更新开关 3 例；`corepack pnpm --filter @tpr/core test` 22 文件 177 例通过，`corepack pnpm check` 全仓 276 例、类型检查、依赖边界与 Tauri 泄漏检查全部通过。上传器用真实 1137 条目、16.0 MB 的包做 dry-run：默认生成 `纯文字文章1029-2026-10-31-121918`，重写后 16,778,610 B，可再次被 `readArchive` 校验；`--tag v1.0.0` 走更新模式，`--tag v1.2.3` 走新建模式。
+- **取舍**：不引入 zip 依赖，重写只替换 manifest；时间戳用本机墙上时间，不保证跨机器严格单调，所以比较器保留数字/日期兜底；自动导入默认关闭，因为它会覆盖当前库。
+
+---
+
 ## 附：文档自检
 
 | 检查项 | 结论 |
@@ -2284,6 +2298,6 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–25 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复、公开发布、数据库重命名、导出直写与 Goal 25 已追加） |
+| Goal 1–26 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复、公开发布、数据库重命名、导出直写、Goal 25 与 Goal 26 已追加） |
 
 

@@ -11,6 +11,7 @@ import {
 
 const RELEASE_JSON = {
   tag_name: 'v1.4.0',
+  published_at: '2026-10-20T10:00:00Z',
   assets: [
     {
       name: 'notes.txt',
@@ -91,6 +92,22 @@ describe('github: URL 解析（Goal 11）', () => {
     expect(() => parseGitHubInput('https://github.com/example/tpr-db/releases/tag/')).toThrow(/tag/);
     expect(() => parseGitHubInput('not a url')).toThrow(/无法识别/);
   });
+
+  it('github-url: 中文标签与资产直链的转义编码能往返', () => {
+    const tag = '纯文字文章1029-2026-10-31-121918';
+    const name = 'TouhouPeachReader-DB-2026-10-31-121918.tpr';
+    const tagUrl = `https://github.com/example/tpr-db/releases/tag/${encodeURIComponent(tag)}`;
+    expect(parseGitHubInput(tagUrl).tag).toBe(tag);
+
+    const assetUrl = `https://github.com/example/tpr-db/releases/download/${encodeURIComponent(tag)}/${name}`;
+    const asset = parseGitHubInput(assetUrl);
+    expect(asset.asset?.name).toBe(name);
+    expect(asset.asset?.url).toBe(assetUrl);
+
+    expect(() =>
+      parseGitHubInput('https://github.com/example/tpr-db/releases/tag/%E0%A4%A'),
+    ).toThrow(/转义编码/);
+  });
 });
 
 describe('github: release 解析与下载（Goal 11）', () => {
@@ -117,16 +134,54 @@ describe('github: release 解析与下载（Goal 11）', () => {
     expect(Array.from(result.bytes)).toEqual([1, 2, 3]);
   });
 
-  it('github-check-update: 比对 manifest 版本，忽略前缀 v', async () => {
+  it('github-check-update: 保留当前版本原样，比较时忽略前缀 v', async () => {
     const calls: Calls = { json: [], downloads: [] };
     const platform = fakePlatform(calls);
     const service = createGitHubService(platform);
     const same = await service.checkUpdate('example/tpr-db', 'v1.4.0');
-    expect(same).toMatchObject({ current: '1.4.0', latest: '1.4.0', upToDate: true });
+    expect(same).toMatchObject({
+      current: 'v1.4.0',
+      latest: '1.4.0',
+      tag: 'v1.4.0',
+      publishedAt: '2026-10-20T10:00:00Z',
+      upToDate: true,
+      assetName: 'tpr-db-v1.4.0.tpr',
+      assetUrl: 'https://github.com/example/tpr-db/releases/download/v1.4.0/tpr-db-v1.4.0.tpr',
+    });
     const older = await service.checkUpdate('example/tpr-db', '1.3.0');
     expect(older.upToDate).toBe(false);
     const none = await service.checkUpdate('example/tpr-db', null);
-    expect(none.upToDate).toBe(false);
+    expect(none).toMatchObject({ current: null, latest: '1.4.0', upToDate: false });
+  });
+
+  it('github-check-update: 中文时间戳标签能比较新旧，并按 tags API 编码', async () => {
+    const tag = '纯文字文章1029-2026-10-31-121918';
+    const current = '纯文字文章1029-2026-10-30-121918';
+    const calls: Calls = { json: [], downloads: [] };
+    const platform = fakePlatform(calls, {
+      release: {
+        tag_name: tag,
+        published_at: '2026-10-31T04:19:18Z',
+        assets: [
+          {
+            name: 'TouhouPeachReader-DB-2026-10-31-121918.tpr',
+            browser_download_url: 'https://example.invalid/db.tpr',
+            size: 4096,
+          },
+        ],
+      },
+    });
+    const service = createGitHubService(platform);
+    const result = await service.checkUpdate(
+      `https://github.com/example/tpr-db/releases/tag/${encodeURIComponent(tag)}`,
+      current,
+      { localUpdatedAt: '2026-10-30T12:19:18Z' },
+    );
+    expect(calls.json).toEqual([
+      `https://api.github.com/repos/example/tpr-db/releases/tags/${encodeURIComponent(tag)}`,
+    ]);
+    expect(result).toMatchObject({ current, latest: tag, tag, upToDate: false });
+    expect((await service.checkUpdate('example/tpr-db', tag)).upToDate).toBe(true);
   });
 
   it('github-no-asset: release 里没有包时报 E_NO_ASSET 并列出资产名', async () => {

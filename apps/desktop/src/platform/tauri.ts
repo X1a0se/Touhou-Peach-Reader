@@ -1,4 +1,4 @@
-import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import { Channel, convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { appDataDir } from '@tauri-apps/api/path';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { PlatformError, mapNativeError } from '@tpr/platform';
@@ -228,38 +228,12 @@ const network: INetwork = {
     url: string,
     onProgress?: (received: number, total: number | undefined) => void,
   ): Promise<Uint8Array> {
-    const response = await fetch(url);
-    if (!response.ok) {
-      throw new PlatformError('EIO', `下载失败（HTTP ${response.status}）：${url}`);
-    }
-    const lengthHeader = response.headers.get('content-length');
-    const total = lengthHeader ? Number(lengthHeader) : undefined;
-
-    if (!response.body) {
-      const buffer = new Uint8Array(await response.arrayBuffer());
-      onProgress?.(buffer.byteLength, total);
-      return buffer;
-    }
-
-    const reader = response.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let received = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        chunks.push(value);
-        received += value.byteLength;
-        onProgress?.(received, total);
-      }
-    }
-    const merged = new Uint8Array(received);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return merged;
+    const channel = new Channel<{ received: number; total: number | null }>();
+    channel.onmessage = ({ received, total }) => {
+      onProgress?.(received, total ?? undefined);
+    };
+    const buffer = await call<ArrayBuffer>('network_download', { url, progress: channel });
+    return new Uint8Array(buffer);
   },
 };
 
