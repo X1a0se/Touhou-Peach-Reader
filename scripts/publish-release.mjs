@@ -2,7 +2,7 @@
 /**
  * 发布到 GitHub Releases（一条命令补发当前版本）。
  *
- * 背景：Release 的标签跟随**数据库版本**（v1.0.0 = 数据库 1.0.0），应用版本只体现在
+ * 背景：Release 的标签跟随**数据库版本**（v<库名>-<时间>），应用版本只体现在
  * 资产文件名与标题里。所以同一份数据库上重发程序，正确做法是**更新已有 release**，
  * 而不是开新标签——新标签会让内置默认数据库源（/releases/latest）指向没有 .tpr 的版本。
  *
@@ -58,6 +58,8 @@ function storedCredential() {
       input: 'protocol=https\nhost=github.com\n\n',
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'ignore'],
+      timeout: 8000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'Never' },
     });
     const fields = Object.fromEntries(
       out
@@ -85,7 +87,7 @@ const auth = credential
 const version = JSON.parse(readFileSync(TAURI_CONF, 'utf8')).version;
 
 const HEADERS = {
-  authorization: auth,
+  ...(auth ? { authorization: auth } : {}),
   accept: 'application/vnd.github+json',
   'user-agent': 'touhou-peach-reader',
 };
@@ -99,6 +101,7 @@ async function api(method, path, body) {
         method,
         headers: body ? { ...HEADERS, 'content-type': 'application/json' } : HEADERS,
         body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(30000),
       });
       const text = await res.text();
       return { ok: res.ok, status: res.status, json: text ? JSON.parse(text) : null };
@@ -125,6 +128,7 @@ async function upload(releaseId, file) {
             'content-length': String(data.byteLength),
           },
           body: data,
+          signal: AbortSignal.timeout(300000),
         },
       );
       const text = await res.text();
@@ -161,8 +165,10 @@ function collectAssets() {
 }
 
 const main = async () => {
-  if (!auth) fail('缺少凭据：设置 GH_TOKEN，或先让 git 能访问 GitHub（凭据管理器里有账号即可）');
-  console.log('仓库 ' + REPO + ' · 应用版本 ' + version + ' · 凭据 ' + credential.source);
+  if (!auth && !dryRun) fail('缺少凭据：设置 GH_TOKEN，或先让 git 能访问 GitHub（凭据管理器里有账号即可）');
+  console.log(
+    '仓库 ' + REPO + ' · 应用版本 ' + version + ' · 凭据 ' + (credential?.source ?? '无（只读 dry-run）'),
+  );
 
   const files = collectAssets();
   if (files.length === 0) fail('dist/release 里没有可发布的资产');
@@ -177,7 +183,10 @@ const main = async () => {
   if (!release) fail('找不到 release（标签 ' + (tag ?? '自动') + '），请用 --tag 指定');
 
   const dbAsset = release.assets.find((a) => a.name.endsWith('.tpr'));
-  const dbVersion = dbAsset ? (/DB-(\d+\.\d+\.\d+)\.tpr$/.exec(dbAsset.name)?.[1] ?? '未知') : '未知';
+  const dbVersion =
+    release.tag_name.replace(/^v/i, '') ||
+    (dbAsset ? /DB-(.+)\.tpr$/i.exec(dbAsset.name)?.[1] : null) ||
+    '未知';
   const title = '东方桃图吧大书库 ' + version + ' · 数据库 ' + dbVersion;
   const body = notesPath ? readFileSync(notesPath, 'utf8') : release.body;
 
