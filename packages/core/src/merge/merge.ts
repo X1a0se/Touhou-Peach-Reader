@@ -101,7 +101,7 @@ function labelOf(collection: CollectionKey, entity: { title?: string; name?: str
   return entity.title ?? entity.name ?? entity.id;
 }
 
-function mergeEntityCollection<T extends { id: string; updatedAt?: string }>(
+function mergeEntityCollection<T extends { id: string; updatedAt?: string | undefined }>(
   collection: CollectionKey,
   baseItems: T[],
   incomingItems: T[],

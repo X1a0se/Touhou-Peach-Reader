@@ -5,6 +5,8 @@ import { rowText } from './sql/codec.js';
 
 export interface ContentStore {
   read(articleId: string): Promise<string>;
+  /** 批量读取正文；缺失的 id 不会出现在结果里，也不抛错（用于字数统计）。 */
+  readMany(articleIds: readonly string[]): Promise<Map<string, string>>;
   write(articleId: string, markdown: string): Promise<void>;
   has(articleId: string): Promise<boolean>;
   invalidate(articleId: string): void;
@@ -20,6 +22,22 @@ export function createContentStore(platform: Platform, dbPath: string, capacity 
   const cache = new Map<string, string>();
 
   return {
+    async readMany(articleIds: readonly string[]): Promise<Map<string, string>> {
+      const ids = [...new Set(articleIds)];
+      const result = new Map<string, string>();
+      for (let offset = 0; offset < ids.length; offset += 200) {
+        const chunk = ids.slice(offset, offset + 200);
+        const placeholders = chunk.map(() => '?').join(',');
+        const rows = await platform.sql.query(
+          dbPath,
+          `SELECT article_id, markdown FROM article_contents WHERE article_id IN (${placeholders})`,
+          chunk,
+        );
+        for (const row of rows) result.set(rowText(row, 'article_id'), rowText(row, 'markdown'));
+      }
+      return result;
+    },
+
     async read(articleId: string): Promise<string> {
       const hit = cache.get(articleId);
       if (hit !== undefined) {

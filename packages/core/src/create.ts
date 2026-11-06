@@ -1,8 +1,10 @@
 import type { Platform } from '@tpr/platform';
 import { createLibrary, type Library } from './db/library.js';
 import { createEditor, type Editor } from './editor/index.js';
+import { createBlocklist, type BlocklistService } from './blocklist.js';
 import { createFavorites, type Favorites } from './favorites.js';
 import { createGitHubService, type GitHubService } from './github/client.js';
+import { createReading, type ReadingService } from './reading.js';
 import { createMergeService, type MergeService } from './merge/service.js';
 import { createSearchService, type SearchService } from './search/service.js';
 import { createSettings, type SettingsService } from './settings/index.js';
@@ -22,6 +24,8 @@ export interface Services {
   readonly app: AppService;
   readonly library: Library;
   readonly favorites: Favorites;
+  readonly reading: ReadingService;
+  readonly blocklist: BlocklistService;
   readonly search: SearchService;
   readonly editor: Editor;
   readonly merge: MergeService;
@@ -37,6 +41,8 @@ export function createServices(platform: Platform): Services {
     app: { getName, getVersion },
     library,
     favorites: createFavorites(platform, () => library.current()?.databaseId ?? null),
+    reading: createReading(platform, () => library.current()?.databaseId ?? null),
+    blocklist: createBlocklist(platform, () => library.current()?.databaseId ?? null),
     search: createSearchService(library),
     editor: createEditor(platform, library),
     merge: createMergeService(platform, library),

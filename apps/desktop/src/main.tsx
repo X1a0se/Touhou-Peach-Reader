@@ -3,8 +3,10 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { RouterProvider } from 'react-router';
 import { ServicesProvider } from './context.js';
+import { BlocklistProvider } from './blocklist/BlocklistProvider.js';
 import { FavoritesProvider } from './favorites/FavoritesProvider.js';
 import { LibraryProvider } from './library/LibraryProvider.js';
+import { ReadingProvider } from './reading/ReadingProvider.js';
 import { SettingsProvider } from './settings/SettingsProvider.js';
 import { createPlatform } from './platform/index.js';
 import { router } from './router.js';
@@ -27,7 +29,11 @@ createRoot(rootElement).render(
       <SettingsProvider>
         <LibraryProvider>
           <FavoritesProvider>
-            <RouterProvider router={router} />
+            <ReadingProvider>
+              <BlocklistProvider>
+                <RouterProvider router={router} />
+              </BlocklistProvider>
+            </ReadingProvider>
           </FavoritesProvider>
         </LibraryProvider>
       </SettingsProvider>

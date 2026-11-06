@@ -207,6 +207,23 @@ describe('search 多标签（Goal 25）', () => {
     ]);
     expect(engine.search('', { tags: ['魔法 森林'] }).map((hit) => hit.id)).toEqual(['1']);
   });
+
+  it('排除标签按名称或 id 生效，连标签自身一起排除', async () => {
+    const { engine, entry, short, series, character, author } = await buildFixture();
+    const excluded = new Set([entry.id, short.id, series.id, character.id]);
+
+    const byName = engine.search('魔理沙', { excludeTags: ['雾雨魔理沙'] });
+    expect(byName.some((hit) => excluded.has(hit.id))).toBe(false);
+    expect(byName.some((hit) => hit.kind === 'author' && hit.id === author.id)).toBe(true);
+
+    const byId = engine.search('魔理沙', { excludeTagIds: [character.id] });
+    expect(byId.map((hit) => hit.id)).toEqual(byName.map((hit) => hit.id));
+
+    // 不相关查询不应因排除逻辑误删文档。
+    const unrelated = engine.search('译者乙', { excludeTagIds: [character.id] });
+    expect(unrelated.length).toBeGreaterThan(0);
+    expect(unrelated.every((hit) => !excluded.has(hit.id))).toBe(true);
+  });
 });
 
 describe('createSearchEngine', () => {

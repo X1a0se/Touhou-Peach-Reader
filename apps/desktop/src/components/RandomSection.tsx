@@ -12,6 +12,7 @@ import { Link, useNavigate } from 'react-router';
 import { useServices } from '../context.js';
 import { imageSource } from '../lib/images.js';
 import { TagLinks } from './TagLinks.js';
+import { WordCount } from './WordCount.js';
 
 export function RandomSection({ snapshot }: { snapshot: DBSnapshot }) {
   const services = useServices();
@@ -99,6 +100,7 @@ export function RandomSection({ snapshot }: { snapshot: DBSnapshot }) {
                       <span className="truncate">
                         {series ? series.title : article.type === 'short' ? '短篇' : '未归系列'}
                       </span>
+                      <WordCount ids={[article.id]} className="ml-auto shrink-0" />
                     </span>
                   </Link>
                   <TagLinks

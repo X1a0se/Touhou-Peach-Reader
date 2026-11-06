@@ -13,6 +13,7 @@ const NAV = [
   { to: '/featured/short', label: '精选短文' },
   { to: '/featured/series', label: '精选系列' },
   { to: '/favorites', label: '收藏' },
+  { to: '/reading', label: '足迹' },
   { to: '/editor', label: '编辑器' },
   { to: '/merge', label: '合并' },
   { to: '/import', label: '导入' },

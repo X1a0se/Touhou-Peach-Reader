@@ -104,6 +104,26 @@ describe('selectSubset: 部分导出的闭包与词表（B1–B4）', () => {
     expect(subset.series).toEqual([]);
   });
 
+  it('partial-series-illustrations: 导出系列时把系列插图 BLOB 一并收进包', () => {
+    const base = makeDatabase();
+    const target = base.series[0];
+    if (!target) throw new Error('夹具缺少系列');
+    const image = makeImage({ kind: 'illustration' });
+    const db: RawDatabase = {
+      ...base,
+      images: [...base.images, image],
+      series: base.series.map((series) =>
+        series.id === target.id ? { ...series, illustrationImageIds: [image.id] } : series,
+      ),
+    };
+
+    const { db: subset } = selectSubset(db, { series: [target.id] });
+    expect(subset.series.find((series) => series.id === target.id)?.illustrationImageIds).toEqual([
+      image.id,
+    ]);
+    expect(subset.images.map((item) => item.id)).toContain(image.id);
+  });
+
   it('partial-warns-missing-refs: 不存在的文章与悬空标签引用都报 W_EXPORT_SKIPPED', () => {
     const { db } = withUnusedEntities();
     const short = db.articles.find((article) => article.type === 'short');

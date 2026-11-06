@@ -229,35 +229,55 @@ body {
 
 /* 阅读页正文：Markdown 渲染结果的排版（Goal 13/14） */
 .reading {
-  font-size: 1rem;
-  line-height: 1.85;
+  font-family: var(--reading-font-family, inherit);
+  font-size: var(--reading-font-size, 1rem);
+  line-height: var(--reading-line-height, 1.85);
   color: var(--foreground);
 }
 
-.reading > * + * {
-  margin-top: 0.9em;
+.reading > * + *,
+.reading .markdown-body > * + * {
+  margin-top: var(--reading-paragraph-gap, 0.9em);
 }
 
 .reading h1,
 .reading h2,
 .reading h3,
-.reading h4 {
+.reading h4,
+.reading h5,
+.reading h6 {
   font-weight: 600;
   line-height: 1.35;
   margin-top: 1.6em;
 }
 
+/* Markdown 内部的通用段间距会命中标题；标题需要更大的上间距。 */
+.reading .markdown-body > h1,
+.reading .markdown-body > h2,
+.reading .markdown-body > h3,
+.reading .markdown-body > h4,
+.reading .markdown-body > h5,
+.reading .markdown-body > h6 {
+  margin-top: 1.6em;
+}
+
 .reading h1 {
-  font-size: 1.5rem;
+  font-size: 1.5em;
 }
 .reading h2 {
-  font-size: 1.3rem;
+  font-size: 1.3em;
 }
 .reading h3 {
-  font-size: 1.12rem;
+  font-size: 1.12em;
 }
 .reading h4 {
-  font-size: 1rem;
+  font-size: 1em;
+}
+.reading h5 {
+  font-size: 0.95em;
+}
+.reading h6 {
+  font-size: 0.9em;
 }
 
 .reading blockquote {

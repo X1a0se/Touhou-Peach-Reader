@@ -2,6 +2,7 @@ import type { FilterKind } from '@tpr/core';
 import { Button, cn, EmptyState, Panel, SectionHeading } from '@tpr/ui';
 import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
+import { useBlocklist } from '../blocklist/BlocklistProvider.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { SearchResults } from '../search/SearchResults.js';
@@ -26,7 +27,17 @@ const FILTERS: ReadonlyArray<{ value: FilterKind; label: string }> = [
 export function SearchPage() {
   const services = useServices();
   const { status: libraryStatus, snapshot } = useLibraryContext();
-  const search = useSearch(services, libraryStatus === 'ready');
+  const blocklist = useBlocklist();
+  const [applyBlocklist, setApplyBlocklist] = useState(true);
+  const excludeTags = useMemo(
+    () => (applyBlocklist ? blocklist.tags.map((tag) => tag.name) : []),
+    [applyBlocklist, blocklist.tags],
+  );
+  const excludeTagIds = useMemo(
+    () => (applyBlocklist ? blocklist.tags.map((tag) => tag.id) : []),
+    [applyBlocklist, blocklist.tags],
+  );
+  const search = useSearch(services, libraryStatus === 'ready', excludeTags, excludeTagIds);
   const [params, setParams] = useSearchParams();
   const queryParam = params.get('q') ?? '';
   const tagParamKey = JSON.stringify(params.getAll('tag'));
@@ -199,6 +210,20 @@ export function SearchPage() {
             onClear={() => changeTags([])}
           />
         </div>
+        {blocklist.tags.length > 0 ? (
+          <label className="mt-3 flex cursor-pointer items-center gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={applyBlocklist}
+              onChange={(event) => setApplyBlocklist(event.target.checked)}
+              className="h-3.5 w-3.5 accent-[var(--accent)]"
+            />
+            搜索结果排除已拉黑的标签（{blocklist.tags.length}）
+            <Link to="/settings" className="ml-auto text-accent hover:opacity-80">
+              管理屏蔽 →
+            </Link>
+          </label>
+        ) : null}
       </Panel>
 
       {libraryStatus !== 'ready' ? (

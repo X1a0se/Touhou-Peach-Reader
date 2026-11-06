@@ -3,6 +3,7 @@ import { Button, DropZone, EmptyState, Panel, R18Badge, SectionHeading, StatTile
 import { Link } from 'react-router';
 import { RandomSection } from '../components/RandomSection.js';
 import { TagLinks } from '../components/TagLinks.js';
+import { WordCount } from '../components/WordCount.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { readFileBytes } from '../library/useLibrary.js';
 
@@ -115,8 +116,9 @@ export function HomePage() {
                       </span>
                       {hasR18PlotTag(snapshot, article.plotTagIds) ? <R18Badge /> : null}
                       <span className="truncate group-hover:text-accent">{article.title}</span>
-                      <span className="ml-auto shrink-0 font-mono text-[0.65rem] text-muted-foreground">
-                        {article.id}
+                      <span className="ml-auto flex shrink-0 items-center gap-2 font-mono text-[0.65rem] text-muted-foreground">
+                        <WordCount ids={[article.id]} className="font-sans" />
+                        <span>{article.id}</span>
                       </span>
                     </Link>
                     <TagLinks

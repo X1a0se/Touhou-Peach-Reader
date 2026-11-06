@@ -3,9 +3,11 @@ import { Button, EmptyState, Panel, R18Badge, SectionHeading, TagChip, cn } from
 import { Link, useParams } from 'react-router';
 import { FavoriteButton } from '../components/FavoriteButton.js';
 import { TagLinks } from '../components/TagLinks.js';
+import { WordCount } from '../components/WordCount.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { imageSource } from '../lib/images.js';
+import { useReading } from '../reading/ReadingProvider.js';
 
 const STATUS_LABEL: Record<string, string> = {
   ongoing: '连载中',
@@ -21,6 +23,7 @@ export function SeriesPage() {
   const { id = '' } = useParams();
   const services = useServices();
   const { snapshot, status } = useLibraryContext();
+  const { series: readingSeries } = useReading();
 
   const loaded = services.library.current();
   const view =
@@ -55,6 +58,11 @@ export function SeriesPage() {
   }
 
   const { series } = view;
+  const lastRead = readingSeries(series.id);
+  // 文章可能被移动/删除，显示时以当前目录为准，避免「上次读到」指向不存在的篇目。
+  const lastReadIndex =
+    lastRead === null ? null : view.articles.findIndex((article) => article.id === lastRead.articleId) + 1;
+  const lastReadArticle = lastReadIndex !== null && lastReadIndex > 0 ? view.articles[lastReadIndex - 1] : null;
   const toUrl = (image: { id: string; file: string }) =>
     loaded ? imageSource(services.platform, loaded.dir, image) : '';
 
@@ -109,6 +117,19 @@ export function SeriesPage() {
             {series.summary ? (
               <p className="text-sm leading-6 text-muted-foreground">{series.summary}</p>
             ) : null}
+            {lastRead && lastReadArticle ? (
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <span>
+                  上次读到第 {lastReadIndex} 篇（{lastRead.lastReadAt.slice(0, 10)}）
+                </span>
+                <Link
+                  to={`/article/${lastReadArticle.id}`}
+                  className="rounded-full border border-accent/40 bg-accent-soft px-2.5 py-0.5 font-medium text-accent transition-opacity hover:opacity-80"
+                >
+                  从上次位置继续阅读 →
+                </Link>
+              </div>
+            ) : null}
 
             <dl className="grid grid-cols-[4rem_1fr] gap-x-3 gap-y-1.5 text-sm">
               {view.authors.length > 0 ? (
@@ -127,6 +148,10 @@ export function SeriesPage() {
               <dd>{view.articles.length}</dd>
               <dt className="text-muted-foreground">更新</dt>
               <dd>{series.updatedAt.slice(0, 10)}</dd>
+              <dt className="text-muted-foreground">总字数</dt>
+              <dd>
+                <WordCount ids={view.articles.map((article) => article.id)} />
+              </dd>
               {view.sourceUrl ? (
                 <>
                   <dt className="text-muted-foreground">原出处</dt>
@@ -170,21 +195,37 @@ export function SeriesPage() {
         ) : (
           <ol className="mt-3 flex flex-col divide-y divide-border">
             {view.articles.map((article, index) => (
-              <li key={article.id} className="flex flex-col gap-1 py-3">
+              <li
+                key={article.id}
+                className={cn(
+                  'flex flex-col gap-1 py-3',
+                  lastReadArticle?.id === article.id && 'bg-accent-soft/40',
+                )}
+              >
                 <Link
                   to={`/article/${article.id}`}
+                  aria-current={lastReadArticle?.id === article.id ? 'true' : undefined}
                   className="group flex items-baseline gap-3 text-sm"
                 >
                   <span className="w-7 shrink-0 text-right font-mono text-xs text-accent">
                     {String(index + 1).padStart(2, '0')}
                   </span>
                   <span className="truncate font-medium group-hover:text-accent">{article.title}</span>
+                  {lastReadArticle?.id === article.id ? (
+                    <span className="shrink-0 rounded-full bg-accent-soft px-2 py-0.5 text-[0.65rem] text-accent">
+                      上次读到
+                    </span>
+                  ) : null}
                   {snapshot && hasR18PlotTag(snapshot, article.plotTagIds) ? <R18Badge /> : null}
                   {article.summary ? (
                     <span className="ml-2 hidden truncate text-xs text-muted-foreground sm:inline">
                       {article.summary}
                     </span>
                   ) : null}
+                  <WordCount
+                    ids={[article.id]}
+                    className="ml-auto shrink-0 text-xs text-muted-foreground"
+                  />
                 </Link>
                 <TagLinks
                   tags={snapshot ? resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds]) : []}
@@ -196,6 +237,25 @@ export function SeriesPage() {
           </ol>
         )}
       </Panel>
+
+      {view.illustrations.length > 0 ? (
+        <section className="flex flex-col gap-5">
+          <h2 className="text-sm font-medium text-muted-foreground">系列插图</h2>
+          {view.illustrations.map((image) => (
+            <figure key={image.id} className="flex flex-col gap-2">
+              <img
+                src={toUrl(image)}
+                alt={image.caption ?? '系列插图'}
+                className="w-full rounded-xl border border-border"
+                loading="lazy"
+              />
+              {image.caption ? (
+                <figcaption className="text-center text-xs text-muted-foreground">{image.caption}</figcaption>
+              ) : null}
+            </figure>
+          ))}
+        </section>
+      ) : null}
     </article>
   );
 }

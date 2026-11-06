@@ -122,6 +122,7 @@ export function selectSubset(
     for (const id of item.characterTagIds ?? []) tagIds.add(id);
     for (const id of item.plotTagIds ?? []) tagIds.add(id);
     if (item.coverImageId !== undefined) imageIds.add(item.coverImageId);
+    for (const id of item.illustrationImageIds ?? []) imageIds.add(id);
   }
 
   // B1：作者与标签是库级词表，部分导出也全量带走（否则"新建未挂接"的标签会丢）；

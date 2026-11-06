@@ -1,18 +1,21 @@
-import { DEFAULT_DATABASE_SOURCE, REPOSITORY_URL } from '@tpr/core';
+import { DEFAULT_DATABASE_SOURCE, READING_FONT_FAMILIES, REPOSITORY_URL } from '@tpr/core';
 import type {
+  AppUpdateCheck,
   PaletteId,
+  ReadingTypographySettings,
   SettingsPatch,
   ThemeMode,
   UpdateCheck,
   WallpaperSettings,
 } from '@tpr/core';
 import { Button, Panel, SectionHeading } from '@tpr/ui';
-import { useEffect, useState } from 'react';
+import { type CSSProperties, useEffect, useMemo, useState } from 'react';
+import { useBlocklist } from '../blocklist/BlocklistProvider.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { getAppRuntimeInfo, hasTauriInvoke, type AppRuntimeInfo } from '../platform/app-info.js';
 import { pickWallpaperFile } from '../platform/files.js';
-import { useSettingsContext } from '../settings/SettingsProvider.js';
+import { READING_FONT_STACKS, useSettingsContext } from '../settings/SettingsProvider.js';
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -203,6 +206,7 @@ export function SettingsPage() {
   const services = useServices();
   const library = useLibraryContext();
   const { settings, ready, save } = useSettingsContext();
+  const blocklist = useBlocklist();
 
   const snapshot = library.snapshot;
   const currentVersion = snapshot?.manifest.version ?? null;
@@ -212,6 +216,11 @@ export function SettingsPage() {
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [update, setUpdate] = useState<UpdateCheck | null>(null);
+  const [appChecking, setAppChecking] = useState(false);
+  const [appUpdate, setAppUpdate] = useState<AppUpdateCheck | null>(null);
+  const [appError, setAppError] = useState<string | null>(null);
+  const [readingDraft, setReadingDraft] = useState<ReadingTypographySettings>(settings.reading);
+  const [tagQuery, setTagQuery] = useState('');
   const [runtime, setRuntime] = useState<AppRuntimeInfo | null>(null);
   const [runtimeLoading, setRuntimeLoading] = useState(true);
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -219,6 +228,20 @@ export function SettingsPage() {
   const [renaming, setRenaming] = useState(false);
   const [nameError, setNameError] = useState<string | null>(null);
   const [nameNotice, setNameNotice] = useState<string | null>(null);
+  const appVersion = runtime?.version ?? services.app.getVersion();
+  const availableTags = useMemo(() => {
+    const keyword = tagQuery.trim().toLowerCase();
+    const blocked = new Set(blocklist.ids);
+    return (snapshot?.tags ?? [])
+      .filter((tag) => !blocked.has(tag.id))
+      .filter(
+        (tag) =>
+          keyword === '' ||
+          tag.name.toLowerCase().includes(keyword) ||
+          tag.aliases?.some((alias) => alias.toLowerCase().includes(keyword)) === true,
+      )
+      .slice(0, 60);
+  }, [snapshot?.tags, blocklist.ids, tagQuery]);
 
   useEffect(() => {
     let alive = true;
@@ -240,6 +263,17 @@ export function SettingsPage() {
   useEffect(() => {
     setDatabaseName(snapshot?.manifest.name ?? '');
   }, [snapshot?.manifest.name]);
+
+  useEffect(() => {
+    if (!ready) return;
+    setReadingDraft(settings.reading);
+  }, [
+    ready,
+    settings.reading.fontFamily,
+    settings.reading.fontSize,
+    settings.reading.lineHeight,
+    settings.reading.paragraphSpacing,
+  ]);
 
   const persist = async (patch: SettingsPatch): Promise<void> => {
     setError(null);
@@ -279,6 +313,48 @@ export function SettingsPage() {
     } finally {
       setChecking(false);
     }
+  };
+
+  const checkAppUpdate = async (): Promise<void> => {
+    setAppChecking(true);
+    setAppError(null);
+    setAppUpdate(null);
+    try {
+      const result = await services.github.checkAppUpdate(REPOSITORY_URL, appVersion);
+      setAppUpdate(result);
+    } catch (cause) {
+      setAppError(describe(cause));
+    } finally {
+      setAppChecking(false);
+    }
+  };
+
+  const openExternal = async (url: string): Promise<void> => {
+    setRepoError(null);
+    try {
+      await services.platform.opener.openExternal(url);
+    } catch (cause) {
+      setRepoError(describe(cause));
+    }
+  };
+
+  const openAppLink = async (url: string): Promise<void> => {
+    setAppError(null);
+    try {
+      await services.platform.opener.openExternal(url);
+    } catch (cause) {
+      setAppError(describe(cause));
+    }
+  };
+
+  const commitReadingDraft = (): void => {
+    void persist({ reading: readingDraft });
+  };
+
+  const chooseReadingFont = (fontFamily: ReadingTypographySettings['fontFamily']): void => {
+    const next = { ...readingDraft, fontFamily };
+    setReadingDraft(next);
+    void persist({ reading: next });
   };
 
   const redownload = async (): Promise<void> => {
@@ -385,6 +461,219 @@ export function SettingsPage() {
                 {item.label}
               </Button>
             ))}
+          </div>
+        </div>
+      </Panel>
+
+      <Panel className="grid gap-5">
+        <SectionHeading
+          title="阅读排版"
+          description="只作用于文章正文；书签、足迹与系列进度不受影响。滑动后松手即保存。"
+        />
+        <div className="grid gap-2">
+          <span className="text-sm font-medium">字体</span>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="正文字体">
+            {READING_FONT_FAMILIES.map((item) => (
+              <Button
+                key={item.value}
+                size="sm"
+                variant={readingDraft.fontFamily === item.value ? 'primary' : 'secondary'}
+                aria-pressed={readingDraft.fontFamily === item.value}
+                disabled={!ready}
+                onClick={() => chooseReadingFont(item.value)}
+              >
+                {item.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
+          <div className="grid content-start gap-4">
+            <label className="grid gap-1 text-sm">
+              <span className="flex items-center justify-between">
+                <span className="font-medium">字号</span>
+                <span className="font-mono text-xs text-muted-foreground">{readingDraft.fontSize}px</span>
+              </span>
+              <input
+                type="range"
+                min={14}
+                max={24}
+                step={1}
+                value={readingDraft.fontSize}
+                disabled={!ready}
+                aria-label="正文字号"
+                className="w-full accent-[var(--accent)]"
+                onChange={(event) =>
+                  setReadingDraft((prev) => ({ ...prev, fontSize: Number(event.target.value) }))
+                }
+                onPointerUp={commitReadingDraft}
+                onKeyUp={commitReadingDraft}
+              />
+            </label>
+
+            <label className="grid gap-1 text-sm">
+              <span className="flex items-center justify-between">
+                <span className="font-medium">行间距</span>
+                <span className="font-mono text-xs text-muted-foreground">
+                  {readingDraft.lineHeight.toFixed(2)}
+                </span>
+              </span>
+              <input
+                type="range"
+                min={1.4}
+                max={2.2}
+                step={0.05}
+                value={readingDraft.lineHeight}
+                disabled={!ready}
+                aria-label="正文行间距"
+                className="w-full accent-[var(--accent)]"
+                onChange={(event) =>
+                  setReadingDraft((prev) => ({ ...prev, lineHeight: Number(event.target.value) }))
+                }
+                onPointerUp={commitReadingDraft}
+                onKeyUp={commitReadingDraft}
+              />
+            </label>
+
+            <label className="grid gap-1 text-sm">
+              <span className="flex items-center justify-between">
+                <span className="font-medium">段间距</span>
+                <span className="font-mono text-xs text-muted-foreground">
+                  {readingDraft.paragraphSpacing.toFixed(1)}em
+                </span>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={2}
+                step={0.1}
+                value={readingDraft.paragraphSpacing}
+                disabled={!ready}
+                aria-label="正文段间距"
+                className="w-full accent-[var(--accent)]"
+                onChange={(event) =>
+                  setReadingDraft((prev) => ({ ...prev, paragraphSpacing: Number(event.target.value) }))
+                }
+                onPointerUp={commitReadingDraft}
+                onKeyUp={commitReadingDraft}
+              />
+            </label>
+          </div>
+
+          <div className="rounded-xl border border-border bg-surface/60 p-4">
+            <div className="mb-2 text-xs text-muted-foreground">预览</div>
+            <div
+              className="reading max-h-64 overflow-y-auto"
+              style={
+                {
+                  '--reading-font-family': READING_FONT_STACKS[readingDraft.fontFamily],
+                  '--reading-font-size': `${readingDraft.fontSize}px`,
+                  '--reading-line-height': String(readingDraft.lineHeight),
+                  '--reading-paragraph-gap': `${readingDraft.paragraphSpacing}em`,
+                } as CSSProperties
+              }
+            >
+              <h2>幻想乡的午后</h2>
+              <p>
+                博丽神社的台阶被春日的阳光晒得发暖。灵梦把扫帚靠在柱子上，端起还冒着热气的茶。
+              </p>
+              <p>「今天的香客，大概又只有风吧。」她小声嘟囔，却并不真的在意。</p>
+              <blockquote>段落之间留出呼吸的余地，读起来才不累。</blockquote>
+              <ul>
+                <li>字号随滑杆变化</li>
+                <li>行距与段距各自独立</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </Panel>
+
+      <Panel className="grid gap-4">
+        <SectionHeading title="编辑器" description="控制编辑器与文章详情页之间的快捷入口。" />
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="mt-1 shrink-0 accent-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-50"
+            checked={settings.showArticleEditorLink}
+            disabled={!ready}
+            onChange={(event) => void persist({ showArticleEditorLink: event.target.checked })}
+          />
+          <span>
+            在文章详情页显示「编辑」入口
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              默认关闭；开启后可直接从文章页跳到编辑器中的对应文章。
+            </span>
+          </span>
+        </label>
+      </Panel>
+
+      <Panel className="grid gap-4">
+        <SectionHeading
+          title="屏蔽标签"
+          description="被屏蔽标签的文章、系列与标签本身会从搜索结果中排除；可在搜索页临时关闭。"
+        />
+        {blocklist.tags.length === 0 ? (
+          <p className="text-sm text-muted-foreground">还没有屏蔽任何标签。</p>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {blocklist.tags.map((tag) => (
+              <span
+                key={tag.id}
+                className="inline-flex items-center gap-2 rounded-full border border-border bg-surface/60 px-3 py-1 text-sm"
+              >
+                <span className={tag.stale ? 'text-muted-foreground line-through' : ''}>#{tag.name}</span>
+                {tag.stale ? <span className="text-[0.65rem] text-muted-foreground">已失效</span> : null}
+                <button
+                  type="button"
+                  aria-label={`取消屏蔽 ${tag.name}`}
+                  className="text-muted-foreground transition-colors hover:text-red-500"
+                  onClick={() => void blocklist.remove(tag.id)}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-muted-foreground"
+              onClick={() => {
+                if (window.confirm('确定清空屏蔽列表？')) void blocklist.clear();
+              }}
+            >
+              全部取消
+            </Button>
+          </div>
+        )}
+
+        <div className="grid gap-2 border-t border-border pt-3">
+          <span className="text-sm font-medium">添加屏蔽标签</span>
+          <input
+            aria-label="搜索要屏蔽的标签"
+            className={inputClass}
+            value={tagQuery}
+            onChange={(event) => setTagQuery(event.target.value)}
+            placeholder="输入标签名称或别名…"
+            disabled={!snapshot}
+          />
+          <div className="flex max-h-44 flex-wrap gap-2 overflow-y-auto">
+            {availableTags.map((tag) => (
+              <button
+                key={tag.id}
+                type="button"
+                onClick={() => void blocklist.toggle({ id: tag.id, name: tag.name })}
+                className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground transition-colors hover:border-red-400 hover:text-red-500"
+              >
+                + {tag.name}
+              </button>
+            ))}
+            {snapshot && availableTags.length === 0 ? (
+              <span className="text-xs text-muted-foreground">没有匹配的可添加标签。</span>
+            ) : null}
+            {!snapshot ? (
+              <span className="text-xs text-muted-foreground">先导入数据库，才能选择标签。</span>
+            ) : null}
           </div>
         </div>
       </Panel>
@@ -506,6 +795,56 @@ export function SettingsPage() {
           遇到问题或想要新功能，欢迎到仓库提 Issue；如果它帮到了你，点一下 Star 就是最大的支持。
         </p>
         {repoError !== null && <p className="text-xs text-red-500">{repoError}</p>}
+      </Panel>
+
+      <Panel className="grid gap-3">
+        <SectionHeading
+          title="程序更新"
+          description="从 GitHub Release 的程序资产名中解析最新版本，并与当前 exe 版本比较。"
+        />
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <span>
+            当前程序版本：<span className="font-mono">{appVersion}</span>
+          </span>
+          <Button disabled={appChecking} onClick={() => void checkAppUpdate()}>
+            {appChecking ? '检查中…' : '检查程序更新'}
+          </Button>
+        </div>
+        {appError !== null ? (
+          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-300">
+            {appError}
+          </p>
+        ) : null}
+        {appUpdate !== null ? (
+          <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm">
+            <p className="font-medium">
+              {appUpdate.upToDate
+                ? `已是最新版本（${appUpdate.latest}）`
+                : `发现新版本 ${appUpdate.latest}`}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              当前版本 {appUpdate.current ?? '未知'}
+              {appUpdate.publishedAt ? ` · 发布于 ${appUpdate.publishedAt.slice(0, 10)}` : ''}
+            </p>
+            {appUpdate.upToDate ? null : (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button size="sm" variant="primary" onClick={() => void openAppLink(appUpdate.releaseUrl)}>
+                  打开发布页
+                </Button>
+                {appUpdate.setup ? (
+                  <Button size="sm" onClick={() => void openAppLink(appUpdate.setup?.url ?? appUpdate.releaseUrl)}>
+                    下载安装版
+                  </Button>
+                ) : null}
+                {appUpdate.portable ? (
+                  <Button size="sm" onClick={() => void openAppLink(appUpdate.portable?.url ?? appUpdate.releaseUrl)}>
+                    下载免安装版
+                  </Button>
+                ) : null}
+              </div>
+            )}
+          </div>
+        ) : null}
       </Panel>
 
       <Panel className="grid gap-3">

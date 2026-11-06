@@ -52,6 +52,7 @@ export interface SeriesDraft {
   characterTagIds: string[];
   plotTagIds: string[];
   coverImageId?: string | null;
+  illustrationImageIds?: string[];
   sourceUrl?: string | null;
 }
 
@@ -205,7 +206,12 @@ export function createEditor(platform: Platform, library: Library): Editor {
     async deleteArticle(id) {
       await library.applyEdit((db) => {
         db.articles = db.articles.filter((article) => article.id !== id);
-        for (const series of db.series) series.articleIds = series.articleIds.filter((articleId) => articleId !== id);
+        for (const series of db.series) {
+          const articleIds = series.articleIds.filter((articleId) => articleId !== id);
+          if (articleIds.length === series.articleIds.length) continue;
+          series.articleIds = articleIds;
+          series.updatedAt = now();
+        }
         db.featured = db.featured.filter((entry) => !(entry.targetType === 'article' && entry.targetId === id));
       });
     },
@@ -227,6 +233,11 @@ export function createEditor(platform: Platform, library: Library): Editor {
           characterTagIds: clean(draft.characterTagIds),
           plotTagIds: clean(draft.plotTagIds),
           ...(draft.coverImageId ? { coverImageId: draft.coverImageId } : {}),
+          ...(draft.illustrationImageIds !== undefined
+            ? { illustrationImageIds: clean(draft.illustrationImageIds) }
+            : existing?.illustrationImageIds !== undefined
+              ? { illustrationImageIds: existing.illustrationImageIds }
+              : {}),
           ...(draft.sourceUrl?.trim() ? { sourceUrl: draft.sourceUrl.trim() } : {}),
           createdAt: existing?.createdAt ?? now(),
           updatedAt: now(),
@@ -291,6 +302,7 @@ export function createEditor(platform: Platform, library: Library): Editor {
           aliases,
           ...(draft.notes?.trim() ? { notes: draft.notes.trim() } : {}),
           ...(draft.sourceUrl?.trim() ? { sourceUrl: draft.sourceUrl.trim() } : {}),
+          updatedAt: now(),
         };
         if (existing) Object.assign(existing, next);
         else db.authors.push(next);
@@ -333,6 +345,7 @@ export function createEditor(platform: Platform, library: Library): Editor {
           category: draft.category,
           name,
           ...(clean(draft.aliases).length > 0 ? { aliases: clean(draft.aliases) } : {}),
+          updatedAt: now(),
         };
         if (existing) Object.assign(existing, next);
         else db.tags.push(next);
@@ -401,6 +414,7 @@ export function createEditor(platform: Platform, library: Library): Editor {
         }
         if (aliases.length > 0) target.aliases = aliases;
         else delete target.aliases;
+        target.updatedAt = now();
 
         for (const article of db.articles) rewriteMergedTagRefs(article, sourceSet, target);
         for (const series of db.series) rewriteMergedTagRefs(series, sourceSet, target);
@@ -420,6 +434,7 @@ export function createEditor(platform: Platform, library: Library): Editor {
         file,
         kind: draft.kind,
         ...(draft.caption?.trim() ? { caption: draft.caption.trim() } : {}),
+        updatedAt: now(),
       };
       // 先写 BLOB 再写元数据：若随后校验失败，会留下一条未引用的图片记录，可在编辑器中删除。
       await writeImageBlob(platform, loaded.dir, image, draft.bytes);
@@ -449,6 +464,7 @@ export function createEditor(platform: Platform, library: Library): Editor {
           if (patch.caption.trim()) image.caption = patch.caption.trim();
           else delete image.caption;
         }
+        image.updatedAt = now();
       });
     },
 
@@ -461,6 +477,9 @@ export function createEditor(platform: Platform, library: Library): Editor {
         }
         for (const series of db.series) {
           if (series.coverImageId === id) delete series.coverImageId;
+          if (series.illustrationImageIds !== undefined) {
+            series.illustrationImageIds = series.illustrationImageIds.filter((imageId) => imageId !== id);
+          }
         }
       });
     },
@@ -468,8 +487,12 @@ export function createEditor(platform: Platform, library: Library): Editor {
     async saveFeatured(targetType, targetId, recommendations) {
       await library.applyEdit((db) => {
         const entry = db.featured.find((item) => item.targetType === targetType && item.targetId === targetId);
-        if (entry) entry.recommendations = recommendations;
-        else db.featured.push({ targetType, targetId, recommendations });
+        if (entry) {
+          entry.recommendations = recommendations;
+          entry.updatedAt = now();
+        } else {
+          db.featured.push({ targetType, targetId, recommendations, updatedAt: now() });
+        }
       });
     },
 

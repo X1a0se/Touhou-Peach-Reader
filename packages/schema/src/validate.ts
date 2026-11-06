@@ -287,6 +287,7 @@ export function validateDatabase(db: RawDatabase): ValidateResult {
       }
     }
     if (s.coverImageId) referencedImages.add(s.coverImageId);
+    for (const id of s.illustrationImageIds ?? []) referencedImages.add(id);
   }
 
   // ---- 一篇文章只能属于一个系列 ----

@@ -10,6 +10,7 @@
  *   node scripts/release.mjs release    一条命令：check + build + 覆盖安装版 + 刷新 dist/portable（并同步便携镜像）+ 核对
  *   node scripts/release.mjs status     只核对版本与目录，不改任何文件
  *   node scripts/release.mjs build      跑 check + tauri build（产物在 target/release）
+ *   node scripts/release.mjs quick      只构建免安装 exe 并覆盖本机便携目录（默认不改版本；--version x.y.z 可顺手改 5 处版本号与 Cargo.lock）
  *   node scripts/release.mjs install    把 NSIS 安装包静默装到注册表里的 InstallLocation
  *   node scripts/release.mjs portable   只刷新 dist/portable（免安装交付目录）
  *   node scripts/release.mjs            等价于 status
@@ -44,6 +45,18 @@ const PORTABLE_NAME = '东方桃图吧大书库.exe';
 const MIRROR_DIR = process.env.TPR_PORTABLE_MIRROR ?? 'D:\\Touhou Peach Reader Portable';
 const TAURI_CONF = join(ROOT, 'apps/desktop/src-tauri/tauri.conf.json');
 const CARGO_TOML = join(ROOT, 'apps/desktop/src-tauri/Cargo.toml');
+const CARGO_LOCK = join(ROOT, 'apps/desktop/src-tauri/Cargo.lock');
+/** 快速构建标记：保存在便携镜像里，供 status 识别“exe 已替换，但 dist/portable 未刷新”。 */
+const QUICK_MARKER = 'quick-build.json';
+/** 版本号所在的 6 个文件；--version 与 --set 共用。 */
+const VERSION_FILES = [
+  join(ROOT, 'package.json'),
+  join(ROOT, 'packages/core/package.json'),
+  join(ROOT, 'apps/desktop/package.json'),
+  TAURI_CONF,
+  CARGO_TOML,
+  CARGO_LOCK,
+];
 
 const args = process.argv.slice(2);
 const command = args[0] ?? 'status';
@@ -53,13 +66,26 @@ const fail = (message) => {
   process.exit(1);
 };
 
-function run(bin, argv, options = {}) {
+function tryRun(bin, argv, options = {}) {
   const result = spawnSync(bin, argv, {
     stdio: 'inherit',
     shell: process.platform === 'win32' && bin === 'corepack',
     ...options,
   });
-  if (result.status !== 0) fail(`${bin} ${argv.join(' ')} 退出码 ${result.status ?? result.signal}`);
+  return result.status ?? 1;
+}
+
+function run(bin, argv, options = {}) {
+  const code = tryRun(bin, argv, options);
+  if (code !== 0) fail(`${bin} ${argv.join(' ')} 退出码 ${code}`);
+}
+
+/** 构建/测试共用的 Rust PATH；避免依赖用户当前 shell 是否已加载 cargo。 */
+function cargoEnv() {
+  return {
+    ...process.env,
+    PATH: `${join(homedir(), '.cargo', 'bin')};${process.env.PATH ?? ''}`,
+  };
 }
 
 function read(file) {
@@ -99,7 +125,37 @@ function writeVersions(version) {
   const nextCargo = cargoText.replace(/^(\s*version\s*=\s*")[^"]+(")/m, `$1${version}$2`);
   if (nextCargo === cargoText) fail(`${CARGO_TOML} 里没找到 version`);
   writeFileSync(CARGO_TOML, nextCargo, 'utf8');
-  console.log(`已把 5 处版本号写为 ${version}（记得 pnpm install 更新 lockfile 里的 workspace 版本）。`);
+
+  const lockText = read(CARGO_LOCK);
+  const nextLock = lockText.replace(
+    /(name = "touhou-peach-reader"\r?\nversion = ")[^"]+(")/,
+    `$1${version}$2`,
+  );
+  if (nextLock === lockText) fail(`${CARGO_LOCK} 里没找到 touhou-peach-reader 的 version`);
+  writeFileSync(CARGO_LOCK, nextLock, 'utf8');
+  console.log(`已把 6 处版本号写为 ${version}。`);
+}
+
+/** 快速更新默认不改版本，因此要求 5 处公开版本号已经一致，避免构建出配置与产物版本不一致的 exe。 */
+function assertVersionsAgree(versions) {
+  const mismatched = Object.entries(versions).filter(([, value]) => value !== versions.root);
+  if (mismatched.length === 0) return;
+  const detail = Object.entries(versions)
+    .map(([key, value]) => `${key}=${value}`)
+    .join('、');
+  fail(
+    `5 处版本号不一致：${detail}。\n   ` +
+      '先运行 node scripts/release.mjs --set <x.y.z> 统一，或在 quick 命令里加 --version <x.y.z>。',
+  );
+}
+
+/** --version 构建失败时要恢复的 6 个版本文件原文（含 Cargo.lock）。 */
+function snapshotVersions() {
+  return VERSION_FILES.map((file) => ({ file, text: read(file) }));
+}
+
+function restoreVersions(snapshot) {
+  for (const { file, text } of snapshot) writeFileSync(file, text, 'utf8');
 }
 
 /** Windows 可执行文件里的 FileVersion（与 tauri.conf 的 version 同源）。 */
@@ -178,6 +234,36 @@ function manifestOf(dir) {
   }
 }
 
+/** 读取便携镜像里的快速构建标记；不存在或损坏时返回 null。 */
+function quickMarkerOf(dir) {
+  const file = join(dir, QUICK_MARKER);
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(read(file));
+  } catch {
+    return null;
+  }
+}
+
+function isQuickMarkerValid(marker, target, mirrorExe) {
+  return Boolean(
+    marker &&
+      marker.source === 'release:quick' &&
+      marker.version === target &&
+      marker.exe === PORTABLE_NAME &&
+      existsSync(mirrorExe) &&
+      marker.sha256 === sha256(mirrorExe),
+  );
+}
+
+/** marker 里是 ISO 时间；核对表按本机时区显示到分钟。 */
+function formatLocalTime(iso) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return String(iso ?? '—');
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 function status() {
   const versions = readVersions();
   const target = versions.root;
@@ -189,6 +275,9 @@ function status() {
   const folderExe = join(PORTABLE_DIR, PORTABLE_NAME);
   const mirror = manifestOf(MIRROR_DIR);
   const mirrorExe = join(MIRROR_DIR, PORTABLE_NAME);
+  const quickMarkerPath = join(MIRROR_DIR, QUICK_MARKER);
+  const quickMarker = quickMarkerOf(MIRROR_DIR);
+  const quickBuild = isQuickMarkerValid(quickMarker, target, mirrorExe);
 
   console.log('\n东方桃图吧大书库 · 发布一致性\n');
   line('根 package', versions.root);
@@ -204,7 +293,10 @@ function status() {
   } else {
     line('免安装目录', '未打包', '运行 pnpm release:portable 或 pnpm release');
   }
-  if (mirror && existsSync(mirrorExe)) {
+  if (quickBuild) {
+    line('便携镜像', `${quickMarker.version}（快速构建）`, MIRROR_DIR);
+    line('  构建时间', formatLocalTime(quickMarker.builtAt));
+  } else if (mirror && existsSync(mirrorExe)) {
     line('便携镜像', `${mirror.version}（文件 ${exeVersion(mirrorExe)}）`, MIRROR_DIR);
   } else {
     line('便携镜像', existsSync(MIRROR_DIR) ? '未同步' : '目录不存在', MIRROR_DIR);
@@ -224,11 +316,19 @@ function status() {
   if (!folder) problems.push(`免安装目录未打包（期望 dist/portable 里是 ${target}）`);
   else if (folder.version !== target) problems.push(`免安装目录版本 ${folder.version} ≠ ${target}`);
   if (existsSync(MIRROR_DIR)) {
-    if (!mirror) problems.push(`便携镜像未同步（${MIRROR_DIR} 里没有 manifest.json）`);
-    else if (mirror.version !== target) problems.push(`便携镜像版本 ${mirror.version} ≠ ${target}`);
-    else if (!existsSync(mirrorExe)) problems.push(`便携镜像缺少 ${PORTABLE_NAME}`);
-    else if (existsSync(folderExe) && sha256(mirrorExe) !== sha256(folderExe)) {
-      problems.push(`便携镜像的 ${PORTABLE_NAME} 与 dist/portable 不一致`);
+    if (quickBuild) {
+      // 快速构建的 exe 本来就是开发版，不能拿它和 dist/portable 的正式 exe 比哈希；
+      // 版本与哈希已由 isQuickMarkerValid 校验，这里只跳过镜像一致性检查。
+    } else {
+      if (existsSync(quickMarkerPath)) {
+        problems.push(`便携镜像的快速构建标记已失效（${QUICK_MARKER}），请重跑 release:quick 或完整发布`);
+      }
+      if (!mirror) problems.push(`便携镜像未同步（${MIRROR_DIR} 里没有 manifest.json）`);
+      else if (mirror.version !== target) problems.push(`便携镜像版本 ${mirror.version} ≠ ${target}`);
+      else if (!existsSync(mirrorExe)) problems.push(`便携镜像缺少 ${PORTABLE_NAME}`);
+      else if (existsSync(folderExe) && sha256(mirrorExe) !== sha256(folderExe)) {
+        problems.push(`便携镜像的 ${PORTABLE_NAME} 与 dist/portable 不一致`);
+      }
     }
   }
   if (!installed) problems.push('尚未安装（安装版不存在）');
@@ -246,10 +346,19 @@ function status() {
 
   console.log('');
   if (problems.length === 0) {
-    console.log(`✔ 一致：安装版与免安装目录都是 ${target}`);
+    console.log(
+      quickBuild
+        ? `✔ 版本一致（便携镜像为快速构建）：安装版与免安装目录都是 ${target}`
+        : `✔ 一致：安装版与免安装目录都是 ${target}`,
+    );
     console.log(`  免安装版：${folderExe}`);
     if (existsSync(MIRROR_DIR)) console.log(`  便携镜像：${MIRROR_DIR}`);
     console.log(`  安装版：  ${join(installed.location, 'touhou-peach-reader.exe')}`);
+    if (quickBuild) {
+      console.log(
+        `  便携镜像是快速构建（${formatLocalTime(quickMarker.builtAt)}）；正式发布前请运行 pnpm release。`,
+      );
+    }
     if (hashNote) console.log(`  ${hashNote}`);
     return 0;
   }
@@ -266,10 +375,7 @@ function build() {
       `应用正在运行（PID ${pids.join(', ')}），Windows 会锁住 target\\release\\touhou-peach-reader.exe，无法覆盖。\n   请先退出 东方桃图吧大书库，再重跑 pnpm release:build。`,
     );
   }
-  const env = {
-    ...process.env,
-    PATH: `${join(homedir(), '.cargo', 'bin')};${process.env.PATH ?? ''}`,
-  };
+  const env = cargoEnv();
   console.log('▶ corepack pnpm check');
   run('corepack', ['pnpm', 'check'], { env });
   console.log('▶ tauri build（apps/desktop）');
@@ -277,9 +383,13 @@ function build() {
 }
 
 function runningProcesses() {
+  // 安装版进程名是 touhou-peach-reader；免安装版 exe 被重命名为中文后，
+  // Windows 的 ProcessName 也随文件名变化，所以两个名字都要查。
+  const names = ['touhou-peach-reader', PORTABLE_NAME.replace(/\.exe$/i, '')];
+  const list = names.map((name) => `'${name}'`).join(',');
   const result = spawnSync(
     'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', "Get-Process touhou-peach-reader -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id"],
+    ['-NoProfile', '-NonInteractive', '-Command', `Get-Process -ErrorAction SilentlyContinue -Name ${list} | Select-Object -ExpandProperty Id`],
     { encoding: 'utf8' },
   );
   return (result.stdout ?? '').trim().split(/\s+/).filter(Boolean);
@@ -387,7 +497,141 @@ function mirrorPortable() {
       );
     }
   }
+  const markerPath = join(MIRROR_DIR, QUICK_MARKER);
+  if (existsSync(markerPath)) {
+    try {
+      rmSync(markerPath, { force: true });
+      console.log('  已清理快速构建标记。');
+    } catch (error) {
+      console.warn(`  ⚠ 无法删除快速构建标记 ${markerPath}：${error.code ?? error.message}`);
+      console.warn('    下次 release:status 会提示标记失效；重跑完整发布即可。');
+    }
+  }
   console.log(`✔ 便携镜像已同步（${files.length} 个文件）：${MIRROR_DIR}\n`);
+}
+
+/** 解析 quick 的参数；只接受 --check 与 --version x.y.z（或 --version=x.y.z）。 */
+function parseQuickOptions(argv) {
+  let check = false;
+  let version = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === '--check') {
+      check = true;
+      continue;
+    }
+    if (arg === '--version') {
+      version = argv[index + 1] ?? null;
+      if (!version) fail('用法：node scripts/release.mjs quick [--check] [--version x.y.z]');
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--version=')) {
+      version = arg.slice('--version='.length);
+      continue;
+    }
+    fail(`quick 不认识参数：${arg}\n用法：node scripts/release.mjs quick [--check] [--version x.y.z]`);
+  }
+  if (version !== null && !/^\d+\.\d+\.\d+$/.test(version)) {
+    fail(`版本号格式不对：${version}\n用法：node scripts/release.mjs quick [--check] [--version x.y.z]`);
+  }
+  return { check, version };
+}
+
+/** 只构建免安装 exe 并覆盖本机便携目录；不生成 NSIS、不动 dist/portable。 */
+function quickPortable({ check = false, version = null } = {}) {
+  if (process.platform !== 'win32') fail('release:quick 目前只支持 Windows。');
+  if (!existsSync(MIRROR_DIR)) {
+    fail(
+      `便携目录不存在：${MIRROR_DIR}\n` +
+        '   请确认目录存在，或用环境变量 TPR_PORTABLE_MIRROR 指定目标。',
+    );
+  }
+  const pids = runningProcesses();
+  if (pids.length > 0) {
+    fail(
+      `应用正在运行（PID ${pids.join(', ')}）。\n` +
+        '   请先退出 东方桃图吧大书库，再重跑 release:quick。',
+    );
+  }
+
+  const before = readVersions();
+  if (version === null) assertVersionsAgree(before);
+  const env = cargoEnv();
+
+  if (check) {
+    console.log('▶ corepack pnpm check');
+    if (tryRun('corepack', ['pnpm', 'check'], { env }) !== 0) {
+      fail('check 失败，未构建、未改版本号、未覆盖便携版。');
+    }
+  }
+
+  const versionChanged = version !== null && Object.values(before).some((value) => value !== version);
+  let snapshot = null;
+  if (versionChanged) {
+    snapshot = snapshotVersions();
+    console.log(`▶ 写入版本号 ${version}`);
+    writeVersions(version);
+  }
+
+  console.log('▶ tauri build --no-bundle（apps/desktop）');
+  const buildCode = tryRun('corepack', ['pnpm', 'tauri', 'build', '--no-bundle'], {
+    cwd: join(ROOT, 'apps/desktop'),
+    env,
+  });
+  if (buildCode !== 0) {
+    if (snapshot) {
+      restoreVersions(snapshot);
+      console.error(`\n↩ 构建失败，版本号已回滚到 ${before.root}。`);
+    }
+    fail(`快速构建失败（退出码 ${buildCode}），便携版未改动。`);
+  }
+
+  if (!existsSync(PORTABLE_EXE)) fail(`构建结束但找不到 exe：${PORTABLE_EXE}`);
+  const pidsAfterBuild = runningProcesses();
+  if (pidsAfterBuild.length > 0) {
+    fail(
+      `构建期间应用被启动（PID ${pidsAfterBuild.join(', ')}）。\n` +
+        '   请关闭应用后重跑；便携版尚未覆盖。',
+    );
+  }
+
+  const target = join(MIRROR_DIR, PORTABLE_NAME);
+  try {
+    copyFileSync(PORTABLE_EXE, target);
+  } catch (error) {
+    if (versionChanged) {
+      console.error(`\n   注意：版本号已改为 ${version}，新 exe 已构建，但尚未覆盖便携版。`);
+    }
+    fail(
+      `无法覆盖便携版 ${target}：${error.code ?? error.message}\n` +
+        '   如果应用正在运行，请先退出 东方桃图吧大书库 再重跑。',
+    );
+  }
+
+  const versions = readVersions();
+  const marker = {
+    version: versions.root,
+    builtAt: new Date().toISOString(),
+    exe: PORTABLE_NAME,
+    sha256: sha256(target),
+    source: 'release:quick',
+  };
+  const markerPath = join(MIRROR_DIR, QUICK_MARKER);
+  try {
+    writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`, 'utf8');
+  } catch (error) {
+    fail(`exe 已更新，但写入快速构建标记失败：${markerPath}\n   ${error.message}`);
+  }
+
+  console.log(`\n✔ 已更新本机免安装版：${target}`);
+  console.log(`  版本：${versions.root}`);
+  console.log(`  构建时间：${formatLocalTime(marker.builtAt)}`);
+  if (versionChanged) {
+    console.log(`  版本号已从 ${before.root} 改为 ${versions.root}；dist/portable 与安装版仍是旧版本。`);
+  }
+  console.log('  未生成 NSIS、未更新安装版、未改动 dist/portable、未同步公开发布资产。');
+  console.log('  正式发布前请运行 corepack pnpm release（或双击 发布更新.cmd）。');
 }
 
 /** 一条命令：构建 → 刷新免安装目录（含便携镜像）→ 覆盖安装版 → 核对。 */
@@ -409,6 +653,11 @@ if (command === '--set') {
   const version = args[1];
   if (!version || !/^\d+\.\d+\.\d+$/.test(version)) fail('用法：node scripts/release.mjs --set 0.1.1');
   writeVersions(version);
+  process.exit(0);
+}
+
+if (command === 'quick') {
+  quickPortable(parseQuickOptions(args.slice(1)));
   process.exit(0);
 }
 
@@ -435,5 +684,5 @@ if (command === 'status') {
 }
 
 console.log(`未知命令：${command}`);
-console.log('可用：status | build | install | portable | release | --set <x.y.z>');
+console.log('可用：status | build | quick | install | portable | release | --set <x.y.z>');
 process.exit(2);

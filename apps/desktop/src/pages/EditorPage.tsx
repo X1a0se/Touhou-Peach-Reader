@@ -4,6 +4,7 @@ import {
   DOCUMENT_ACCEPT,
   hasR18PlotTag,
   importDocument,
+  sortByUpdatedAtDesc,
   validateDocumentFile,
 } from '@tpr/core';
 import type {
@@ -18,7 +19,7 @@ import type {
 } from '@tpr/schema';
 import { isR18Tag, normalizeName } from '@tpr/schema';
 import { R18Badge } from '@tpr/ui';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type Dispatch, type SetStateAction, useEffect, useMemo, useRef, useState } from 'react';
 import { ArticleOrderPicker } from '../components/ArticleOrderPicker.js';
 import { AuthorPicker } from '../components/AuthorPicker.js';
 import { CompressImagesSwitch } from '../components/CompressImagesSwitch.js';
@@ -45,6 +46,7 @@ import {
 import { useDraftAutosave, useDraftBox, useDraftStore } from '../editor/useDraft.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { useSettingsContext } from '../settings/SettingsProvider.js';
+import { useSearchParams } from 'react-router';
 
 type Tab = 'articles' | 'series' | 'authors' | 'tags' | 'images' | 'featured' | 'credits';
 
@@ -207,6 +209,88 @@ function CoverField({
   );
 }
 
+/**
+ * 插图上传：与封面共用压缩、校验与 saveImage 流程，只是 `kind='illustration'`。
+ * 上传成功后追加到当前插图 id 列表，立即出现在文章/系列里。
+ */
+function IllustrationUpload({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: Dispatch<SetStateAction<string[]>>;
+}) {
+  const services = useServices();
+  const { refresh } = useLibraryContext();
+  const { settings, ready: settingsReady } = useSettingsContext();
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const upload = async (file: File): Promise<void> => {
+    const invalid = validateImageFile(file);
+    if (invalid !== null) {
+      setMessage(invalid);
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    try {
+      const prepared = await prepareImageUpload(file, settings.compressImages);
+      const id = await services.editor.saveImage({
+        bytes: prepared.bytes,
+        ext: prepared.ext,
+        kind: 'illustration',
+        caption: file.name.replace(/\.[^.]+$/, ''),
+      });
+      await refresh();
+      onChange((current) => [...current, id]);
+      setMessage(uploadNotice(prepared, file.name, '已上传插图'));
+    } catch (error) {
+      setMessage(`上传失败：${errorText(error)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className={labelClass}>上传插图</span>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          disabled={busy || !settingsReady}
+          onClick={() => inputRef.current?.click()}
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border bg-surface/60 px-3 text-sm font-medium transition-colors hover:bg-surface-strong disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <span aria-hidden>🖼️</span>
+          {busy ? '上传中…' : '从本机上传插图'}
+        </button>
+        <span className="text-xs text-muted-foreground">当前 {value.length} 张</span>
+        <input
+          ref={inputRef}
+          type="file"
+          accept={IMAGE_ACCEPT}
+          multiple
+          className="hidden"
+          disabled={busy || !settingsReady}
+          onChange={(event) => {
+            const files = [...(event.target.files ?? [])];
+            event.target.value = '';
+            void (async () => {
+              for (const file of files) await upload(file);
+            })();
+          }}
+        />
+      </div>
+      <CompressImagesSwitch compact />
+      <span className="text-xs text-muted-foreground">
+        {message ?? '上传的插图会追加到下方「插图」选择中，也可在「图片」标签页统一管理。'}
+      </span>
+    </div>
+  );
+}
+
 export function EditorPage() {
   const services = useServices();
   const { snapshot, refresh } = useLibraryContext();
@@ -217,10 +301,30 @@ export function EditorPage() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [activeHit, setActiveHit] = useState(0);
   const [focus, setFocus] = useState<{ kind: EditorKind; id: string; token: number } | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
   const search = useMemo(
     () => (snapshot ? searchEditor(snapshot, query) : null),
     [snapshot, query],
   );
+
+  useEffect(() => {
+    const editId = searchParams.get('edit');
+    if (!editId || !snapshot) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('edit');
+    setSearchParams(next, { replace: true });
+    if (!snapshot.maps.articles.has(editId)) {
+      setError(`文章不存在：${editId}`);
+      return;
+    }
+    setTab('articles');
+    setQuery('');
+    setSearchOpen(false);
+    setActiveHit(0);
+    setFocus({ kind: 'articles', id: editId, token: Date.now() });
+    setError(null);
+    setNotice(null);
+  }, [searchParams, snapshot, setSearchParams]);
 
   if (!snapshot) {
     return (
@@ -696,9 +800,9 @@ function ArticlesPanel({
     });
   };
 
-  const visible = visibleIds
-    ? snapshot.articles.filter((article) => visibleIds.has(article.id))
-    : snapshot.articles;
+  const visible = sortByUpdatedAtDesc(
+    visibleIds ? snapshot.articles.filter((article) => visibleIds.has(article.id)) : snapshot.articles,
+  );
 
   const exportMatchedIds = new Set(
     filterByQuery(snapshot.articles, exportQuery, (article) =>
@@ -1240,6 +1344,7 @@ function ArticleForm({
           onChange={setIllustrationImageIds}
         />
       </div>
+      <IllustrationUpload value={illustrationImageIds} onChange={setIllustrationImageIds} />
 
       <div className="flex items-center gap-2">
         <button type="submit" className={primaryClass} disabled={busy}>
@@ -1277,6 +1382,7 @@ export interface SeriesDraftPayload {
   characterTagIds: string[];
   plotTagIds: string[];
   coverImageId: string;
+  illustrationImageIds: string[];
   sourceUrl: string;
 }
 
@@ -1290,6 +1396,7 @@ const EMPTY_SERIES_PAYLOAD: SeriesDraftPayload = {
   characterTagIds: [],
   plotTagIds: [],
   coverImageId: '',
+  illustrationImageIds: [],
   sourceUrl: '',
 };
 
@@ -1357,9 +1464,9 @@ function SeriesPanel({
     setDraftNotice(null);
   };
 
-  const visible = visibleIds
-    ? snapshot.series.filter((series) => visibleIds.has(series.id))
-    : snapshot.series;
+  const visible = sortByUpdatedAtDesc(
+    visibleIds ? snapshot.series.filter((series) => visibleIds.has(series.id)) : snapshot.series,
+  );
 
   useFocusJump(focus, (id) => {
     const target = snapshot.series.find((series) => series.id === id);
@@ -1506,6 +1613,9 @@ function SeriesForm({
   const [coverImageId, setCoverImageId] = useState(
     draft?.coverImageId ?? initial?.coverImageId ?? '',
   );
+  const [illustrationImageIds, setIllustrationImageIds] = useState<string[]>(
+    draft?.illustrationImageIds ?? initial?.illustrationImageIds ?? [],
+  );
   const [sourceUrl, setSourceUrl] = useState(draft?.sourceUrl ?? initial?.sourceUrl ?? '');
   const [busy, setBusy] = useState(false);
 
@@ -1520,6 +1630,7 @@ function SeriesForm({
       characterTagIds,
       plotTagIds,
       coverImageId,
+      illustrationImageIds,
       sourceUrl,
     }),
     [
@@ -1532,6 +1643,7 @@ function SeriesForm({
       characterTagIds,
       plotTagIds,
       coverImageId,
+      illustrationImageIds,
       sourceUrl,
     ],
   );
@@ -1547,6 +1659,7 @@ function SeriesForm({
       characterTagIds: initial.characterTagIds,
       plotTagIds: initial.plotTagIds,
       coverImageId: initial.coverImageId ?? '',
+      illustrationImageIds: initial.illustrationImageIds ?? [],
       sourceUrl: initial.sourceUrl ?? '',
     };
   }, [initial]);
@@ -1596,6 +1709,7 @@ function SeriesForm({
           characterTagIds,
           plotTagIds,
           ...(coverImageId ? { coverImageId } : {}),
+          illustrationImageIds,
           ...(sourceUrl.trim() ? { sourceUrl: sourceUrl.trim() } : {}),
         }).finally(() => setBusy(false));
       }}
@@ -1695,6 +1809,17 @@ function SeriesForm({
         </Field>
       </div>
 
+      <PickerRow
+        title="系列插图（可多选）"
+        options={snapshot.images.map((image) => ({
+          id: image.id,
+          label: image.caption ?? image.id,
+        }))}
+        value={illustrationImageIds}
+        onChange={setIllustrationImageIds}
+      />
+      <IllustrationUpload value={illustrationImageIds} onChange={setIllustrationImageIds} />
+
       <div className="flex items-center gap-2">
         <button type="submit" className={primaryClass} disabled={busy}>
           {busy ? '保存中…' : '保存'}
@@ -1785,9 +1910,9 @@ function AuthorsPanel({
     setEditing({ ...payload });
     setDraftNotice(null);
   };
-  const visibleAuthors = visibleIds
-    ? snapshot.authors.filter((author) => visibleIds.has(author.id))
-    : snapshot.authors;
+  const visibleAuthors = sortByUpdatedAtDesc(
+    visibleIds ? snapshot.authors.filter((author) => visibleIds.has(author.id)) : snapshot.authors,
+  );
 
   const openExisting = (id: string) => {
     const author = snapshot.authors.find((item) => item.id === id);
@@ -2007,9 +2132,11 @@ function TagsPanel({
   const [merging, setMerging] = useState(false);
   const [draftNotice, setDraftNotice] = useState<string | null>(null);
   // 搜索期间忽略类别筛选：否则命中项可能被 filter 挡掉，列表显示为空但右侧已打开
-  const list = visibleIds
-    ? snapshot.tags.filter((tag) => visibleIds.has(tag.id))
-    : snapshot.tags.filter((tag) => filter === 'all' || tag.category === filter);
+  const list = sortByUpdatedAtDesc(
+    visibleIds
+      ? snapshot.tags.filter((tag) => visibleIds.has(tag.id))
+      : snapshot.tags.filter((tag) => filter === 'all' || tag.category === filter),
+  );
 
   const tagToPayload = (tag: Tag): TagDraftPayload => ({
     category: tag.category,
@@ -2436,9 +2563,9 @@ function ImagesPanel({
   const loaded = services.library.current();
   const toUrl = (image: { id: string; file: string }) =>
     loaded ? imageSource(services.platform, loaded.dir, image) : '';
-  const visibleImages = visibleIds
-    ? snapshot.images.filter((image) => visibleIds.has(image.id))
-    : snapshot.images;
+  const visibleImages = sortByUpdatedAtDesc(
+    visibleIds ? snapshot.images.filter((image) => visibleIds.has(image.id)) : snapshot.images,
+  );
 
   useFocusJump(focus, (id) => {
     document
@@ -2659,9 +2786,11 @@ function FeaturedPanel({
     () => ({ targetType, targetId, rows }),
     [targetType, targetId, rows],
   );
-  const visibleFeatured = visibleIds
-    ? snapshot.featured.filter((entry) => visibleIds.has(`${entry.targetType}:${entry.targetId}`))
-    : snapshot.featured;
+  const visibleFeatured = sortByUpdatedAtDesc(
+    visibleIds
+      ? snapshot.featured.filter((entry) => visibleIds.has(`${entry.targetType}:${entry.targetId}`))
+      : snapshot.featured,
+  );
 
   useFocusJump(focus, (id) => {
     const [targetType, ...rest] = id.split(':');

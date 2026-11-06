@@ -26,12 +26,12 @@ import {
 import { SQL_SCHEMA_STATEMENTS, SQL_SCHEMA_VERSION } from './schema.js';
 
 const INSERT_IMAGE_WITH_DATA =
-  'INSERT OR REPLACE INTO images(position,id,file,kind,caption,mime,byte_size,data) VALUES (?,?,?,?,?,?,?,?)';
+  'INSERT OR REPLACE INTO images(position,id,file,kind,caption,mime,byte_size,updated_at,data) VALUES (?,?,?,?,?,?,?,?,?)';
 const INSERT_IMAGE_WITHOUT_DATA =
-  'INSERT OR REPLACE INTO images(position,id,file,kind,caption,mime,byte_size,data) VALUES (?,?,?,?,?,?,NULL,NULL)';
+  'INSERT OR REPLACE INTO images(position,id,file,kind,caption,mime,byte_size,updated_at,data) VALUES (?,?,?,?,?,?,NULL,?,NULL)';
 const UPSERT_IMAGE =
-  'INSERT INTO images(position,id,file,kind,caption,mime,byte_size,data) VALUES (?,?,?,?,?,?,NULL,NULL) ' +
-  'ON CONFLICT(id) DO UPDATE SET position=excluded.position, file=excluded.file, kind=excluded.kind, caption=excluded.caption, mime=excluded.mime';
+  'INSERT INTO images(position,id,file,kind,caption,mime,byte_size,updated_at,data) VALUES (?,?,?,?,?,?,NULL,?,NULL) ' +
+  'ON CONFLICT(id) DO UPDATE SET position=excluded.position, file=excluded.file, kind=excluded.kind, caption=excluded.caption, mime=excluded.mime, updated_at=excluded.updated_at';
 
 const dbPathOf = (platform: Platform, dir: string): string =>
   platform.paths.join(dir, LAYOUT.database);
@@ -95,7 +95,7 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
 
   const authorRows = await platform.sql.query(
     dbPath,
-    'SELECT position, id, canonical_name, notes, source_url FROM authors ORDER BY position',
+    'SELECT position, id, canonical_name, notes, source_url, updated_at FROM authors ORDER BY position',
   );
   const authorAliasRows = await platform.sql.query(
     dbPath,
@@ -106,18 +106,20 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
     const id = rowText(row, 'id');
     const notes = rowNullableText(row, 'notes');
     const url = rowNullableText(row, 'source_url');
+    const updatedAt = rowNullableText(row, 'updated_at');
     return {
       id,
       canonicalName: rowText(row, 'canonical_name'),
       aliases: authorAliases.get(id) ?? [],
       ...(notes !== undefined ? { notes } : {}),
       ...(url !== undefined ? { sourceUrl: url } : {}),
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
     };
   });
 
   const tagRows = await platform.sql.query(
     dbPath,
-    'SELECT position, id, category, name, aliases_present FROM tags ORDER BY position',
+    'SELECT position, id, category, name, aliases_present, updated_at FROM tags ORDER BY position',
   );
   const tagAliasRows = await platform.sql.query(
     dbPath,
@@ -128,25 +130,29 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
     const id = rowText(row, 'id');
     const aliases = tagAliases.get(id);
     const present = rowBool(row, 'aliases_present') || aliases !== undefined;
+    const updatedAt = rowNullableText(row, 'updated_at');
     return {
       id,
       category: rowText(row, 'category') as TagCategory,
       name: rowText(row, 'name'),
       ...(present ? { aliases: aliases ?? [] } : {}),
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
     };
   });
 
   const imageRows = await platform.sql.query(
     dbPath,
-    'SELECT position, id, file, kind, caption FROM images ORDER BY position',
+    'SELECT position, id, file, kind, caption, updated_at FROM images ORDER BY position',
   );
   const images: ImageAsset[] = imageRows.map((row) => {
     const caption = rowNullableText(row, 'caption');
+    const updatedAt = rowNullableText(row, 'updated_at');
     return {
       id: rowText(row, 'id'),
       file: rowText(row, 'file'),
       kind: rowText(row, 'kind') as ImageAsset['kind'],
       ...(caption !== undefined ? { caption } : {}),
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
     };
   });
 
@@ -219,7 +225,7 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
 
   const seriesRows = await platform.sql.query(
     dbPath,
-    'SELECT position, id, title, summary, status, cover_image_id, source_url, created_at, updated_at FROM series ORDER BY position',
+    'SELECT position, id, title, summary, status, cover_image_id, source_url, created_at, updated_at, illustration_ids_present FROM series ORDER BY position',
   );
   const seriesArticleRows = await platform.sql.query(
     dbPath,
@@ -232,6 +238,10 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
   const seriesTagRows = await platform.sql.query(
     dbPath,
     'SELECT series_id AS parent, tag_id AS id, category AS category FROM series_tags ORDER BY series_id, category, position',
+  );
+  const seriesIllustrationRows = await platform.sql.query(
+    dbPath,
+    'SELECT series_id AS parent, image_id AS id FROM series_illustrations ORDER BY series_id, position',
   );
   const seriesArticles = groupText(
     seriesArticleRows.map((row) => ({
@@ -257,6 +267,12 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
     else if (category === 'plot') entry.plot.push(rowText(row, 'id'));
     seriesTags.set(parent, entry);
   }
+  const seriesIllustrations = groupText(
+    seriesIllustrationRows.map((row) => ({
+      parent: rowText(row, 'parent'),
+      value: rowText(row, 'id'),
+    })),
+  );
 
   const series: Series[] = seriesRows.map((row) => {
     const id = rowText(row, 'id');
@@ -264,6 +280,8 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
     const url = rowNullableText(row, 'source_url');
     const authorsForSeries = seriesAuthors.get(id) ?? { author: [], translator: [] };
     const tagsForSeries = seriesTags.get(id) ?? { character: [], plot: [] };
+    const illustrations = seriesIllustrations.get(id);
+    const present = rowBool(row, 'illustration_ids_present') || illustrations !== undefined;
     return {
       id,
       title: rowText(row, 'title'),
@@ -275,6 +293,7 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
       characterTagIds: tagsForSeries.character,
       plotTagIds: tagsForSeries.plot,
       ...(coverImageId !== undefined ? { coverImageId } : {}),
+      ...(present ? { illustrationImageIds: illustrations ?? [] } : {}),
       ...(url !== undefined ? { sourceUrl: url } : {}),
       createdAt: rowText(row, 'created_at'),
       updatedAt: rowText(row, 'updated_at'),
@@ -283,7 +302,7 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
 
   const featuredRows = await platform.sql.query(
     dbPath,
-    'SELECT position, target_type, target_id FROM featured ORDER BY position',
+    'SELECT position, target_type, target_id, updated_at FROM featured ORDER BY position',
   );
   const recommendationRows = await platform.sql.query(
     dbPath,
@@ -300,10 +319,12 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
   const featured: FeaturedEntry[] = featuredRows.map((row) => {
     const targetType = rowText(row, 'target_type') as FeaturedEntry['targetType'];
     const targetId = rowText(row, 'target_id');
+    const updatedAt = rowNullableText(row, 'updated_at');
     return {
       targetType,
       targetId,
       recommendations: recommendations.get(targetType + '\u0000' + targetId) ?? [],
+      ...(updatedAt !== undefined ? { updatedAt } : {}),
     };
   });
 
@@ -465,12 +486,13 @@ export async function writeSqliteDatabase(
     );
 
     for (const [position, author] of db.authors.entries()) {
-      await addAsync('INSERT INTO authors(position,id,canonical_name,notes,source_url) VALUES (?,?,?,?,?)', [
+      await addAsync('INSERT INTO authors(position,id,canonical_name,notes,source_url,updated_at) VALUES (?,?,?,?,?,?)', [
         position,
         author.id,
         author.canonicalName,
         author.notes ?? null,
         author.sourceUrl ?? null,
+        author.updatedAt ?? null,
       ]);
       for (const [index, alias] of author.aliases.entries()) {
         await addAsync('INSERT INTO author_aliases(author_id,position,alias) VALUES (?,?,?)', [author.id, index, alias]);
@@ -478,12 +500,13 @@ export async function writeSqliteDatabase(
     }
 
     for (const [position, tag] of db.tags.entries()) {
-      await addAsync('INSERT INTO tags(position,id,category,name,aliases_present) VALUES (?,?,?,?,?)', [
+      await addAsync('INSERT INTO tags(position,id,category,name,aliases_present,updated_at) VALUES (?,?,?,?,?,?)', [
         position,
         tag.id,
         tag.category,
         tag.name,
         tag.aliases !== undefined ? 1 : 0,
+        tag.updatedAt ?? null,
       ]);
       for (const [index, alias] of (tag.aliases ?? []).entries()) {
         await addAsync('INSERT INTO tag_aliases(tag_id,position,alias) VALUES (?,?,?)', [tag.id, index, alias]);
@@ -554,7 +577,7 @@ export async function writeSqliteDatabase(
 
     for (const [position, series] of db.series.entries()) {
       await addAsync(
-        'INSERT INTO series(position,id,title,summary,status,cover_image_id,source_url,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO series(position,id,title,summary,status,cover_image_id,source_url,created_at,updated_at,illustration_ids_present) VALUES (?,?,?,?,?,?,?,?,?,?)',
         [
           position,
           series.id,
@@ -565,10 +588,17 @@ export async function writeSqliteDatabase(
           series.sourceUrl ?? null,
           series.createdAt,
           series.updatedAt,
+          series.illustrationImageIds !== undefined ? 1 : 0,
         ],
       );
       for (const [index, id] of series.articleIds.entries()) {
         await addAsync('INSERT INTO series_articles(series_id,article_id,position) VALUES (?,?,?)', [series.id, id, index]);
+      }
+      for (const [index, id] of (series.illustrationImageIds ?? []).entries()) {
+        await addAsync(
+          'INSERT INTO series_illustrations(series_id,image_id,position) VALUES (?,?,?)',
+          [series.id, id, index],
+        );
       }
       for (const [index, id] of series.authorIds.entries()) {
         await addAsync('INSERT INTO series_authors(series_id,author_id,role,position) VALUES (?,?,?,?)', [
@@ -605,10 +635,11 @@ export async function writeSqliteDatabase(
     }
 
     for (const [position, entry] of db.featured.entries()) {
-      await addAsync('INSERT INTO featured(position,target_type,target_id) VALUES (?,?,?)', [
+      await addAsync('INSERT INTO featured(position,target_type,target_id,updated_at) VALUES (?,?,?,?)', [
         position,
         entry.targetType,
         entry.targetId,
+        entry.updatedAt ?? null,
       ]);
       for (const [index, recommendation] of entry.recommendations.entries()) {
         await addAsync(
@@ -643,6 +674,7 @@ export async function writeSqliteDatabase(
           image.kind,
           image.caption ?? null,
           mimeOf(image.file),
+          image.updatedAt ?? null,
         ]);
         continue;
       }
@@ -658,6 +690,7 @@ export async function writeSqliteDatabase(
           image.caption ?? null,
           mimeOf(image.file),
           info.size,
+          image.updatedAt ?? null,
         ],
         info.source,
       );
@@ -715,8 +748,8 @@ export async function saveDatabase(
     const before = prevAuthors.get(author.id);
     if (before && stableStringify(before) === stableStringify(author)) continue;
     statements.push({
-      sql: 'INSERT INTO authors(position,id,canonical_name,notes,source_url) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position, canonical_name=excluded.canonical_name, notes=excluded.notes, source_url=excluded.source_url',
-      params: [position, author.id, author.canonicalName, author.notes ?? null, author.sourceUrl ?? null],
+      sql: 'INSERT INTO authors(position,id,canonical_name,notes,source_url,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position, canonical_name=excluded.canonical_name, notes=excluded.notes, source_url=excluded.source_url, updated_at=excluded.updated_at',
+      params: [position, author.id, author.canonicalName, author.notes ?? null, author.sourceUrl ?? null, author.updatedAt ?? null],
     });
     addDeleteChildren(statements, 'author_aliases', 'author_id', author.id);
     for (const [index, alias] of author.aliases.entries()) {
@@ -743,8 +776,8 @@ export async function saveDatabase(
     const before = prevTags.get(tag.id);
     if (before && stableStringify(before) === stableStringify(tag)) continue;
     statements.push({
-      sql: 'INSERT INTO tags(position,id,category,name,aliases_present) VALUES (?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position, category=excluded.category, name=excluded.name, aliases_present=excluded.aliases_present',
-      params: [position, tag.id, tag.category, tag.name, tag.aliases !== undefined ? 1 : 0],
+      sql: 'INSERT INTO tags(position,id,category,name,aliases_present,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position, category=excluded.category, name=excluded.name, aliases_present=excluded.aliases_present, updated_at=excluded.updated_at',
+      params: [position, tag.id, tag.category, tag.name, tag.aliases !== undefined ? 1 : 0, tag.updatedAt ?? null],
     });
     addDeleteChildren(statements, 'tag_aliases', 'tag_id', tag.id);
     for (const [index, alias] of (tag.aliases ?? []).entries()) {
@@ -770,7 +803,7 @@ export async function saveDatabase(
     if (before && stableStringify(before) === stableStringify(image)) continue;
     statements.push({
       sql: UPSERT_IMAGE,
-      params: [position, image.id, image.file, image.kind, image.caption ?? null, mimeOf(image.file)],
+      params: [position, image.id, image.file, image.kind, image.caption ?? null, mimeOf(image.file), image.updatedAt ?? null],
     });
   }
   if (idsChangedOrder(previous.images, next.images)) {
@@ -855,13 +888,14 @@ export async function saveDatabase(
     addDeleteChildren(statements, 'series_articles', 'series_id', old.id);
     addDeleteChildren(statements, 'series_authors', 'series_id', old.id);
     addDeleteChildren(statements, 'series_tags', 'series_id', old.id);
+    addDeleteChildren(statements, 'series_illustrations', 'series_id', old.id);
     statements.push({ sql: 'DELETE FROM series WHERE id = ?', params: [old.id] });
   }
   for (const [position, series] of next.series.entries()) {
     const before = prevSeries.get(series.id);
     if (before && stableStringify(before) === stableStringify(series)) continue;
     statements.push({
-      sql: 'INSERT INTO series(position,id,title,summary,status,cover_image_id,source_url,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position, title=excluded.title, summary=excluded.summary, status=excluded.status, cover_image_id=excluded.cover_image_id, source_url=excluded.source_url, created_at=excluded.created_at, updated_at=excluded.updated_at',
+      sql: 'INSERT INTO series(position,id,title,summary,status,cover_image_id,source_url,created_at,updated_at,illustration_ids_present) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position, title=excluded.title, summary=excluded.summary, status=excluded.status, cover_image_id=excluded.cover_image_id, source_url=excluded.source_url, created_at=excluded.created_at, updated_at=excluded.updated_at, illustration_ids_present=excluded.illustration_ids_present',
       params: [
         position,
         series.id,
@@ -872,14 +906,22 @@ export async function saveDatabase(
         series.sourceUrl ?? null,
         series.createdAt,
         series.updatedAt,
+        series.illustrationImageIds !== undefined ? 1 : 0,
       ],
     });
     addDeleteChildren(statements, 'series_articles', 'series_id', series.id);
     addDeleteChildren(statements, 'series_authors', 'series_id', series.id);
     addDeleteChildren(statements, 'series_tags', 'series_id', series.id);
+    addDeleteChildren(statements, 'series_illustrations', 'series_id', series.id);
     for (const [index, id] of series.articleIds.entries()) {
       statements.push({
         sql: 'INSERT INTO series_articles(series_id,article_id,position) VALUES (?,?,?)',
+        params: [series.id, id, index],
+      });
+    }
+    for (const [index, id] of (series.illustrationImageIds ?? []).entries()) {
+      statements.push({
+        sql: 'INSERT INTO series_illustrations(series_id,image_id,position) VALUES (?,?,?)',
         params: [series.id, id, index],
       });
     }
@@ -919,8 +961,8 @@ export async function saveDatabase(
     statements.push({ sql: 'DELETE FROM featured' });
     for (const [position, entry] of next.featured.entries()) {
       statements.push({
-        sql: 'INSERT INTO featured(position,target_type,target_id) VALUES (?,?,?)',
-        params: [position, entry.targetType, entry.targetId],
+        sql: 'INSERT INTO featured(position,target_type,target_id,updated_at) VALUES (?,?,?,?)',
+        params: [position, entry.targetType, entry.targetId, entry.updatedAt ?? null],
       });
       for (const [index, recommendation] of entry.recommendations.entries()) {
         statements.push({
@@ -959,10 +1001,10 @@ export async function saveDatabase(
 }
 
 const INSERT_IMAGE_BLOB =
-  'INSERT INTO images(position,id,file,kind,caption,mime,byte_size,data) ' +
-  'VALUES ((SELECT COALESCE(MAX(position), -1) + 1 FROM images),?,?,?,?,?,?,?) ' +
+  'INSERT INTO images(position,id,file,kind,caption,mime,byte_size,updated_at,data) ' +
+  'VALUES ((SELECT COALESCE(MAX(position), -1) + 1 FROM images),?,?,?,?,?,?,?,?) ' +
   'ON CONFLICT(id) DO UPDATE SET file=excluded.file, kind=excluded.kind, caption=excluded.caption, ' +
-  'mime=excluded.mime, byte_size=excluded.byte_size, data=excluded.data';
+  'mime=excluded.mime, byte_size=excluded.byte_size, updated_at=excluded.updated_at, data=excluded.data';
 
 /** 编辑器写入图片 BLOB；元数据随后由 saveDatabase 的差异事务补齐。 */
 export async function writeImageBlob(
@@ -974,7 +1016,7 @@ export async function writeImageBlob(
   await platform.sql.writeBlob(
     dbPathOf(platform, dir),
     INSERT_IMAGE_BLOB,
-    [image.id, image.file, image.kind, image.caption ?? null, mimeOf(image.file), bytes.byteLength],
+    [image.id, image.file, image.kind, image.caption ?? null, mimeOf(image.file), bytes.byteLength, image.updatedAt ?? null],
     bytes,
   );
 }

@@ -2,7 +2,9 @@ import { Button, EmptyState, Panel, R18Badge, SectionHeading, cn } from '@tpr/ui
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
+import { WordCount } from '../components/WordCount.js';
 import { useFavorites } from '../favorites/FavoritesProvider.js';
+import { useLibraryContext } from '../library/LibraryProvider.js';
 
 type Tab = 'articles' | 'series';
 
@@ -13,6 +15,7 @@ const TABS: { key: Tab; label: string }[] = [
 
 export function FavoritesPage() {
   const { entries, remove } = useFavorites();
+  const { snapshot } = useLibraryContext();
   const [tab, setTab] = useState<Tab>('articles');
   const list = tab === 'articles' ? entries.articles : entries.series;
 
@@ -71,6 +74,16 @@ export function FavoritesPage() {
                     </Link>
                   ) : (
                     <span className="truncate text-sm font-medium text-muted-foreground">{entry.title}</span>
+                  )}
+                  {entry.stale ? null : (
+                    <WordCount
+                      ids={
+                        entry.kind === 'article'
+                          ? [entry.id]
+                          : (snapshot?.maps.series.get(entry.id)?.articleIds ?? [])
+                      }
+                      className="shrink-0 text-xs text-muted-foreground"
+                    />
                   )}
                 </div>
                 {entry.stale ? (

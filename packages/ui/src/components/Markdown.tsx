@@ -171,12 +171,12 @@ function parseBlocks(source: string): Block[] {
 }
 
 const headingClass: Record<number, string> = {
-  1: 'mt-6 text-2xl font-semibold text-foreground',
-  2: 'mt-6 text-xl font-semibold text-foreground',
-  3: 'mt-5 text-lg font-semibold text-foreground',
-  4: 'mt-4 text-base font-semibold text-foreground',
-  5: 'mt-4 text-sm font-semibold text-foreground',
-  6: 'mt-4 text-sm font-semibold text-muted-foreground',
+  1: 'font-semibold text-foreground',
+  2: 'font-semibold text-foreground',
+  3: 'font-semibold text-foreground',
+  4: 'font-semibold text-foreground',
+  5: 'font-semibold text-foreground',
+  6: 'font-semibold text-muted-foreground',
 };
 
 /** 受控的 Markdown 渲染：不注入 HTML，只认标题/段落/列表/引用/代码/规则线 + 四种行内标记。 */
@@ -184,7 +184,7 @@ export function Markdown({ source, onLink, className }: MarkdownProps) {
   const blocks = parseBlocks(source);
 
   return (
-    <div className={cn('space-y-3 text-[15px] leading-7 text-foreground/90', className)}>
+    <div className={cn('markdown-body text-foreground/90', className)}>
       {blocks.map((block, index) => {
         const key = `b${index}`;
         switch (block.kind) {

@@ -127,4 +127,82 @@ describe('migrate: 旧 JSON 文件库 -> database.sqlite', () => {
     expect(await platform.fs.exists(platform.paths.join(dir, LAYOUT.manifest))).toBe(true);
     expect(await platform.fs.exists(platform.paths.join(dir, LAYOUT.legacyDir))).toBe(false);
   });
+
+  it('migrate-sql-v1-v3: 给旧 SQLite 补齐 updated_at 列且保留原有数据', async () => {
+    const db = makeDatabase();
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const dir = await seedLegacy(platform, db);
+    await createLibrary(platform).restore();
+    const dbPath = databasePathOf(platform, dir);
+    const migrated = await readSqliteFromFile(platform, dbPath);
+    const canonicalBefore = canonicalDatabase(migrated);
+
+    // 把当前 v2 库回退成 v1 的样子：去掉四列并降低 user_version。
+    await platform.sql.batch(dbPath, [
+      { sql: 'ALTER TABLE authors DROP COLUMN updated_at' },
+      { sql: 'ALTER TABLE tags DROP COLUMN updated_at' },
+      { sql: 'ALTER TABLE images DROP COLUMN updated_at' },
+      { sql: 'ALTER TABLE featured DROP COLUMN updated_at' },
+      { sql: 'PRAGMA user_version = 1' },
+    ]);
+    const versionRows = await platform.sql.query(dbPath, 'PRAGMA user_version');
+    expect(Number(versionRows[0]?.user_version)).toBe(1);
+
+    await ensureLocalDatabase(platform, dir);
+
+    for (const table of ['authors', 'tags', 'images', 'featured']) {
+      const columns = await platform.sql.query(dbPath, "SELECT name FROM pragma_table_info('" + table + "')");
+      const names = columns.map((row) => String(row.name));
+      expect(names).toContain('updated_at');
+      expect(names.filter((name) => name === 'updated_at')).toHaveLength(1);
+    }
+    const upgradedRows = await platform.sql.query(dbPath, 'PRAGMA user_version');
+    expect(Number(upgradedRows[0]?.user_version)).toBe(3);
+    expect(canonicalDatabase(await readSqliteFromFile(platform, dbPath))).toBe(canonicalBefore);
+
+    // 幂等：再次打开不会重复加列。
+    await expect(ensureLocalDatabase(platform, dir)).resolves.toBeUndefined();
+  });
+
+  it('migrate-sql-v2-v3: 给旧 SQLite 补系列插图列与子表', async () => {
+    const db = makeDatabase();
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const dir = await seedLegacy(platform, db);
+    await createLibrary(platform).restore();
+    const dbPath = databasePathOf(platform, dir);
+
+    // 把当前 v3 库回退成 v2 的样子。
+    await platform.sql.batch(dbPath, [
+      { sql: 'DROP INDEX IF EXISTS idx_series_illustrations_series' },
+      { sql: 'DROP TABLE IF EXISTS series_illustrations' },
+      { sql: 'ALTER TABLE series DROP COLUMN illustration_ids_present' },
+      { sql: 'PRAGMA user_version = 2' },
+    ]);
+
+    await ensureLocalDatabase(platform, dir);
+
+    const columns = await platform.sql.query(dbPath, "SELECT name FROM pragma_table_info('series')");
+    expect(columns.map((row) => String(row.name))).toContain('illustration_ids_present');
+    const tables = await platform.sql.query(
+      dbPath,
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'series_illustrations'",
+    );
+    expect(tables).toHaveLength(1);
+    const upgradedRows = await platform.sql.query(dbPath, 'PRAGMA user_version');
+    expect(Number(upgradedRows[0]?.user_version)).toBe(3);
+
+    // 幂等：再次打开不会重复加列。
+    await expect(ensureLocalDatabase(platform, dir)).resolves.toBeUndefined();
+  });
+
+  it('migrate-sql-unsupported: 版本高于当前 schema 时拒绝打开', async () => {
+    const db = makeDatabase();
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const dir = await seedLegacy(platform, db);
+    await createLibrary(platform).restore();
+    const dbPath = databasePathOf(platform, dir);
+    await platform.sql.batch(dbPath, [{ sql: 'PRAGMA user_version = 4' }]);
+
+    await expect(ensureLocalDatabase(platform, dir)).rejects.toThrow(/不支持的本地数据库版本：4/);
+  });
 });

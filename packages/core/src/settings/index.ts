@@ -7,6 +7,11 @@
 
 import type { Platform, ZipLimits } from '@tpr/platform';
 import { DEFAULT_DATABASE_SOURCE } from '../repo.js';
+import {
+  DEFAULT_READING_TYPOGRAPHY,
+  normalizeReadingTypography,
+  type ReadingTypographySettings,
+} from '../typography.js';
 
 export type ThemeMode = 'light' | 'dark' | 'system';
 
@@ -48,6 +53,10 @@ export interface AppSettings {
   autoCheckDatabaseUpdate: boolean;
   /** 发现数据库更新后自动下载并导入（默认关闭；会覆盖当前库的内容） */
   autoImportDatabaseUpdate: boolean;
+  /** 文章详情页显示“编辑”入口，直达编辑器（默认关闭） */
+  showArticleEditorLink: boolean;
+  /** 阅读排版（字体、字号、行距、段间距） */
+  reading: ReadingTypographySettings;
   /** 解压限额覆盖（默认取 design §7.4 的 512MB / 8GB / 20 万条 / 200 倍） */
   extractLimits?: Partial<ZipLimits>;
 }
@@ -61,6 +70,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   compressImages: true,
   autoCheckDatabaseUpdate: true,
   autoImportDatabaseUpdate: false,
+  showArticleEditorLink: false,
+  reading: { ...DEFAULT_READING_TYPOGRAPHY },
 };
 
 const WALLPAPER_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -152,6 +163,11 @@ export function parseSettings(value: unknown): AppSettings | null {
       typeof raw.autoImportDatabaseUpdate === 'boolean'
         ? raw.autoImportDatabaseUpdate
         : DEFAULT_SETTINGS.autoImportDatabaseUpdate,
+    showArticleEditorLink:
+      typeof raw.showArticleEditorLink === 'boolean'
+        ? raw.showArticleEditorLink
+        : DEFAULT_SETTINGS.showArticleEditorLink,
+    reading: normalizeReadingTypography(raw.reading),
   };
   if (
     raw.extractLimits !== null &&
@@ -185,9 +201,10 @@ export interface WallpaperPatch {
   blur?: number;
 }
 
-/** 部分更新：wallpapers 只合并到对应槽位，不动另一个槽位 */
-export type SettingsPatch = Partial<Omit<AppSettings, 'wallpapers' | 'extractLimits'>> & {
+/** 部分更新：wallpapers 与 reading 只合并到对应槽位/字段，不动其他设置 */
+export type SettingsPatch = Partial<Omit<AppSettings, 'wallpapers' | 'extractLimits' | 'reading'>> & {
   wallpapers?: { home?: WallpaperPatch; article?: WallpaperPatch };
+  reading?: Partial<ReadingTypographySettings>;
   extractLimits?: Partial<ZipLimits>;
 };
 
@@ -224,6 +241,11 @@ function sanitize(input: AppSettings): AppSettings {
       typeof input.autoImportDatabaseUpdate === 'boolean'
         ? input.autoImportDatabaseUpdate
         : DEFAULT_SETTINGS.autoImportDatabaseUpdate,
+    showArticleEditorLink:
+      typeof input.showArticleEditorLink === 'boolean'
+        ? input.showArticleEditorLink
+        : DEFAULT_SETTINGS.showArticleEditorLink,
+    reading: normalizeReadingTypography(input.reading),
   };
   if (input.extractLimits !== undefined && Object.keys(input.extractLimits).length > 0) {
     next.extractLimits = { ...input.extractLimits };
@@ -299,6 +321,7 @@ export function createSettings(platform: Platform): SettingsService {
           home: { ...base.wallpapers.home, ...patch.wallpapers?.home },
           article: { ...base.wallpapers.article, ...patch.wallpapers?.article },
         },
+        reading: { ...base.reading, ...patch.reading },
       });
       await write(merged);
       current = merged;

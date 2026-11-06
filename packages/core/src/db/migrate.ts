@@ -3,6 +3,7 @@ import { migrateDatabase, validateDatabase, type RawDatabase } from '@tpr/schema
 import { articleMd, LAYOUT } from './layout.js';
 import { computeCounts, normalizeDatabase } from './normalize.js';
 import { readDatabaseDir } from './read.js';
+import { migrateSqlSchema } from './sql/migrate.js';
 import { databasePathOf, writeSqliteDatabase } from './sql/store.js';
 import { ioFor } from './workspace.js';
 
@@ -112,6 +113,7 @@ export async function migrateLegacyWorkspace(platform: Platform, dir: string): P
  */
 export async function ensureLocalDatabase(platform: Platform, dir: string): Promise<void> {
   await migrateLegacyWorkspace(platform, dir);
+  await migrateSqlSchema(platform, databasePathOf(platform, dir));
 }
 
 async function cleanupLegacyFiles(platform: Platform, dir: string): Promise<void> {

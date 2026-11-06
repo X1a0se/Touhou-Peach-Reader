@@ -6,6 +6,7 @@ import { createLibrary } from '../src/db/library.js';
 import { ioFor } from '../src/db/workspace.js';
 import { serializeDatabase, writeDatabaseDir } from '../src/db/write.js';
 import { createEditor } from '../src/editor/index.js';
+import { countWords } from '../src/text/word-count.js';
 
 const markdownFor = (db: RawDatabase): Map<string, string> =>
   new Map(db.articles.map((a) => [a.id, `# ${a.title}\n\n正文内容：${a.id}\n`]));
@@ -265,5 +266,28 @@ describe('library: 导入 / 持久化 / 导出 round-trip', () => {
     // 200 字符是允许的上界
     await library.rename('x'.repeat(200));
     expect(library.snapshot()?.manifest.name).toBe('x'.repeat(200));
+  });
+
+  it('word-count: 批量统计正文、空输入与缓存失效', async () => {
+    const db = makeDatabase();
+    const { bytes, markdown } = await packDatabase(db, '/seed');
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const library = createLibrary(platform);
+    await library.importBytes(bytes);
+    const ids = db.articles.map((article) => article.id);
+
+    const counts = await library.wordCounts(ids);
+    expect([...counts.keys()]).toEqual(ids);
+    for (const id of ids) {
+      expect(counts.get(id)).toBe(countWords(markdown.get(id) ?? ''));
+    }
+    expect(await library.wordCounts([])).toEqual(new Map());
+    expect(await library.wordCount('a_missing_article')).toBe(0);
+
+    const target = ids[0] ?? '';
+    expect(await library.wordCount(target)).toBe(countWords(markdown.get(target) ?? ''));
+    await library.saveContent(target, '改过的正文');
+    expect(await library.wordCount(target)).toBe(countWords('改过的正文'));
+    expect((await library.wordCounts([target])).get(target)).toBe(countWords('改过的正文'));
   });
 });

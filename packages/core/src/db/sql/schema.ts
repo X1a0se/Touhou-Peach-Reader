@@ -1,7 +1,7 @@
 import type { SqlStatement } from '@tpr/platform';
 
 /** SQLite 布局版本；与 .tpr 的 manifest.schemaVersion 相互独立。 */
-export const SQL_SCHEMA_VERSION = 1;
+export const SQL_SCHEMA_VERSION = 3;
 
 /**
  * 本地数据库 DDL。
@@ -29,7 +29,8 @@ export const SQL_SCHEMA_STATEMENTS: readonly SqlStatement[] = [
       id TEXT PRIMARY KEY,
       canonical_name TEXT NOT NULL,
       notes TEXT,
-      source_url TEXT
+      source_url TEXT,
+      updated_at TEXT
     )`,
   },
   {
@@ -46,7 +47,8 @@ export const SQL_SCHEMA_STATEMENTS: readonly SqlStatement[] = [
       id TEXT PRIMARY KEY,
       category TEXT NOT NULL,
       name TEXT NOT NULL,
-      aliases_present INTEGER NOT NULL DEFAULT 0
+      aliases_present INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT
     )`,
   },
   {
@@ -66,7 +68,8 @@ export const SQL_SCHEMA_STATEMENTS: readonly SqlStatement[] = [
       caption TEXT,
       mime TEXT,
       byte_size INTEGER,
-      data BLOB
+      data BLOB,
+      updated_at TEXT
     )`,
   },
   {
@@ -126,7 +129,8 @@ export const SQL_SCHEMA_STATEMENTS: readonly SqlStatement[] = [
       cover_image_id TEXT,
       source_url TEXT,
       created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
+      updated_at TEXT NOT NULL,
+      illustration_ids_present INTEGER NOT NULL DEFAULT 0
     )`,
   },
   {
@@ -156,10 +160,19 @@ export const SQL_SCHEMA_STATEMENTS: readonly SqlStatement[] = [
     )`,
   },
   {
+    sql: `CREATE TABLE series_illustrations (
+      series_id TEXT NOT NULL,
+      image_id TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      PRIMARY KEY (series_id, position)
+    )`,
+  },
+  {
     sql: `CREATE TABLE featured (
       position INTEGER NOT NULL,
       target_type TEXT NOT NULL,
       target_id TEXT NOT NULL,
+      updated_at TEXT,
       PRIMARY KEY (target_type, target_id)
     )`,
   },
@@ -186,6 +199,7 @@ export const SQL_SCHEMA_STATEMENTS: readonly SqlStatement[] = [
   { sql: 'CREATE INDEX idx_article_authors_article ON article_authors(article_id)' },
   { sql: 'CREATE INDEX idx_article_tags_article ON article_tags(article_id)' },
   { sql: 'CREATE INDEX idx_series_articles_article ON series_articles(article_id)' },
+  { sql: 'CREATE INDEX idx_series_illustrations_series ON series_illustrations(series_id)' },
   { sql: 'CREATE INDEX idx_images_file ON images(file)' },
   { sql: `PRAGMA user_version = ${SQL_SCHEMA_VERSION}` },
 ];

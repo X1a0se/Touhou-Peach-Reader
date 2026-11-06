@@ -2,6 +2,7 @@ import { type FeaturedPage as FeaturedPageKind, getFeaturedCards } from '@tpr/co
 import { Button, EmptyState, Panel, R18Badge, SectionHeading } from '@tpr/ui';
 import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
+import { WordCount } from '../components/WordCount.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { imageSource } from '../lib/images.js';
@@ -69,6 +70,14 @@ export function FeaturedPage({ page }: { page: FeaturedPageKind }) {
               <div className="flex items-center gap-2 text-xs text-muted-foreground">
                 {card.kindLabel ? <span>{card.kindLabel}</span> : null}
                 {card.r18 ? <R18Badge /> : null}
+                <WordCount
+                  ids={
+                    card.targetType === 'article'
+                      ? [card.targetId]
+                      : (snapshot?.maps.series.get(card.targetId)?.articleIds ?? [])
+                  }
+                  className="text-[0.65rem]"
+                />
                 <span className="ml-auto font-mono text-[0.65rem]">{card.targetId}</span>
               </div>
               <h3 className="truncate text-lg font-semibold">

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   GitHubUrlError,
   createGitHubService,
+  parseAppAsset,
   parseGitHubInput,
   pickDatabaseAsset,
   type ResolvedRelease,
@@ -25,6 +26,61 @@ const RELEASE_JSON = {
     },
   ],
 };
+
+const RELEASES_JSON = [
+  {
+    tag_name: 'v数据库-2026-10-20',
+    html_url: 'https://github.com/example/tpr-db/releases/tag/old',
+    published_at: '2026-10-20T10:00:00Z',
+    draft: false,
+    prerelease: false,
+    assets: [
+      {
+        name: 'TouhouPeachReader-0.1.10-portable.exe',
+        browser_download_url: 'https://example.invalid/0.1.10-portable.exe',
+        size: 100,
+      },
+      {
+        name: 'TouhouPeachReader-0.1.10-x64-setup.exe',
+        browser_download_url: 'https://example.invalid/0.1.10-setup.exe',
+        size: 200,
+      },
+    ],
+  },
+  {
+    tag_name: 'v数据库-2026-11-01',
+    html_url: 'https://github.com/example/tpr-db/releases/tag/new',
+    published_at: '2026-11-01T10:00:00Z',
+    draft: false,
+    prerelease: false,
+    assets: [
+      {
+        name: 'TouhouPeachReader-0.1.12-portable.exe',
+        browser_download_url: 'https://example.invalid/0.1.12-portable.exe',
+        size: 100,
+      },
+      {
+        name: 'notes.txt',
+        browser_download_url: 'https://example.invalid/notes.txt',
+        size: 10,
+      },
+    ],
+  },
+  {
+    tag_name: 'v数据库-2026-11-02',
+    html_url: 'https://github.com/example/tpr-db/releases/tag/draft',
+    published_at: '2026-11-02T10:00:00Z',
+    draft: true,
+    prerelease: false,
+    assets: [
+      {
+        name: 'TouhouPeachReader-9.9.9-x64-setup.exe',
+        browser_download_url: 'https://example.invalid/draft-setup.exe',
+        size: 200,
+      },
+    ],
+  },
+];
 
 interface Calls {
   json: string[];
@@ -200,5 +256,45 @@ describe('github: release 解析与下载（Goal 11）', () => {
       { name: 'c.tpr', url: 'https://x/c.tpr', size: 3 },
     ] as unknown as ResolvedRelease['assets']);
     expect(picked?.name).toBe('b.tpr');
+  });
+
+  it('github-check-app-update: 从安装包资产名解析最新程序版本，忽略草稿', async () => {
+    const calls: Calls = { json: [], downloads: [] };
+    const platform = fakePlatform(calls, { release: RELEASES_JSON });
+    const service = createGitHubService(platform);
+
+    const result = await service.checkAppUpdate('example/tpr-db', '0.1.10');
+    expect(calls.json).toEqual([
+      'https://api.github.com/repos/example/tpr-db/releases?per_page=30',
+    ]);
+    expect(result).toMatchObject({
+      current: '0.1.10',
+      latest: '0.1.12',
+      upToDate: false,
+      releaseUrl: 'https://github.com/example/tpr-db/releases/tag/new',
+      publishedAt: '2026-11-01T10:00:00Z',
+      portable: {
+        kind: 'portable',
+        name: 'TouhouPeachReader-0.1.12-portable.exe',
+        url: 'https://example.invalid/0.1.12-portable.exe',
+      },
+      setup: null,
+    });
+
+    expect((await service.checkAppUpdate('example/tpr-db', '0.1.12')).upToDate).toBe(true);
+    expect((await service.checkAppUpdate('example/tpr-db', '0.1.9')).upToDate).toBe(false);
+  });
+
+  it('parseAppAsset: 只认程序安装包命名', () => {
+    expect(parseAppAsset('TouhouPeachReader-0.1.12-x64-setup.exe')).toEqual({
+      version: '0.1.12',
+      kind: 'setup',
+    });
+    expect(parseAppAsset('TouhouPeachReader-1.0.0-portable.exe')).toEqual({
+      version: '1.0.0',
+      kind: 'portable',
+    });
+    expect(parseAppAsset('TouhouPeachReader-DB-2026-11-01.tpr')).toBeNull();
+    expect(parseAppAsset('other-1.0.0-portable.exe')).toBeNull();
   });
 });

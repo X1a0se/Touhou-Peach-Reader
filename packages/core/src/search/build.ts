@@ -8,6 +8,7 @@
 import type { DBSnapshot, IdMaps } from '../db/snapshot.js';
 import type { ContentStore } from '../db/content-store.js';
 import { type SearchDoc, type SearchEngine, createSearchEngine } from './engine.js';
+import { normalizeTagName } from './parse-query.js';
 import { tokenizeZh } from './tokenize.js';
 
 export interface BuildSearchOptions {
@@ -78,7 +79,8 @@ export async function buildSearchIndex(
       id: tag.id,
       updatedAt: snapshot.manifest.updatedAt,
       virtual: [],
-      tagNames: [tag.name.normalize('NFKC').toLowerCase()],
+      tagNames: [normalizeTagName(tag.name)],
+      tagIds: [tag.id],
       category: tag.category,
       tokens: {
         title: tokenizeZh(tag.name),
@@ -104,7 +106,8 @@ export async function buildSearchIndex(
       id: series.id,
       updatedAt: series.updatedAt,
       virtual,
-      tagNames: tags.map((name) => name.normalize('NFKC').toLowerCase()),
+      tagNames: tags.map((name) => normalizeTagName(name)),
+      tagIds: [...series.characterTagIds, ...series.plotTagIds],
       tokens: {
         title: tokenizeZh(series.title),
         summary: tokenizeZh(series.summary ?? ''),
@@ -141,7 +144,8 @@ export async function buildSearchIndex(
       id: article.id,
       updatedAt: article.updatedAt,
       virtual,
-      tagNames: tags.map((name) => name.normalize('NFKC').toLowerCase()),
+      tagNames: tags.map((name) => normalizeTagName(name)),
+      tagIds: [...article.characterTagIds, ...article.plotTagIds],
       tokens: {
         title: tokenizeZh(article.title),
         summary: tokenizeZh(article.summary ?? ''),

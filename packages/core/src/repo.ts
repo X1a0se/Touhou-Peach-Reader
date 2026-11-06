@@ -13,6 +13,9 @@ export const REPOSITORY_URL = `https://github.com/${REPOSITORY_OWNER}/${REPOSITO
 /** 发布页：latest 由 GitHub 解析到最新的正式 release */
 export const REPOSITORY_RELEASES_URL = `${REPOSITORY_URL}/releases`;
 
+/** 发布产物的文件名前缀，例如 `TouhouPeachReader-0.1.10-x64-setup.exe` */
+export const REPOSITORY_APP = 'TouhouPeachReader';
+
 /**
  * 内置默认数据库源。
  *

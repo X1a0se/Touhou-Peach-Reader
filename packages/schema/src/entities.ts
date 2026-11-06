@@ -43,6 +43,7 @@ export const authorSchema = z.object({
   aliases: z.array(z.string().min(1).max(200)).default([]),
   notes: z.string().max(4000).optional(),
   sourceUrl: urlText.optional(),
+  updatedAt: iso.optional(),
 });
 
 /** —— 标签（角色 / 情节 / 系列 / 通用）—— */
@@ -52,6 +53,7 @@ export const tagSchema = z.object({
   category: tagCategorySchema,
   name: z.string().min(1).max(200),
   aliases: z.array(z.string().min(1).max(200)).optional(),
+  updatedAt: iso.optional(),
 });
 
 /** —— 图片（封面 / 插图 / 配文图）—— */
@@ -61,6 +63,7 @@ export const imageAssetSchema = z.object({
   file: z.string().min(1).max(400),
   caption: z.string().max(2000).optional(),
   kind: imageKindSchema,
+  updatedAt: iso.optional(),
 });
 
 /** —— 文章（短篇 或 系列中的一篇）—— */
@@ -97,6 +100,8 @@ export const seriesSchema = z.object({
   characterTagIds: z.array(tagId).default([]),
   plotTagIds: z.array(tagId).default([]),
   coverImageId: imageId.optional(),
+  /** 系列页展示的插图，顺序即展示顺序 */
+  illustrationImageIds: z.array(imageId).optional(),
   sourceUrl: urlText.optional(),
   createdAt: iso,
   updatedAt: iso,
@@ -112,6 +117,7 @@ export const featuredEntrySchema = z.object({
   targetType: featuredTargetTypeSchema,
   targetId: z.string().min(1),
   recommendations: z.array(recommendationSchema).default([]),
+  updatedAt: iso.optional(),
 });
 
 /** —— 特别鸣谢 —— */

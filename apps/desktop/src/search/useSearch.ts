@@ -33,12 +33,19 @@ export interface SearchController extends SearchState {
 }
 
 const DEBOUNCE_MS = 200;
+const NO_TAGS: readonly string[] = [];
 
 /**
  * 搜索页状态（design §11.7）：200 ms 防抖 + 序号，过期响应直接丢弃。
  * `enabled=false`（库还没载入）时不做任何事。
+ * `excludeTags`/`excludeTagIds` 来自用户拉黑的标签，默认不参与结果。
  */
-export function useSearch(services: Services, enabled: boolean): SearchController {
+export function useSearch(
+  services: Services,
+  enabled: boolean,
+  excludeTags: readonly string[] = NO_TAGS,
+  excludeTagIds: readonly string[] = NO_TAGS,
+): SearchController {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterKind>('all');
   const [tags, setTags] = useState<readonly string[]>([]);
@@ -82,7 +89,12 @@ export function useSearch(services: Services, enabled: boolean): SearchControlle
     const timer = setTimeout(() => {
       setState((prev) => ({ ...prev, status: 'running' }));
       void services.search
-        .search(trimmed, { filter, tags })
+        .search(trimmed, {
+          filter,
+          tags,
+          ...(excludeTags.length > 0 ? { excludeTags } : {}),
+          ...(excludeTagIds.length > 0 ? { excludeTagIds } : {}),
+        })
         .then((result) => {
           if (seq.current !== current) return;
           setState({
@@ -105,7 +117,7 @@ export function useSearch(services: Services, enabled: boolean): SearchControlle
     }, DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [query, filter, tags, enabled, services]);
+  }, [query, filter, tags, excludeTags, excludeTagIds, enabled, services]);
 
   const changeQuery = useCallback((value: string) => setQuery(value), []);
   const changeFilter = useCallback((value: FilterKind) => setFilter(value), []);

@@ -51,7 +51,13 @@ export interface SearchService {
   ready(): Promise<void>;
   search(
     query: string,
-    opts?: { filter?: FilterKind; limit?: number; tags?: readonly string[] },
+    opts?: {
+      filter?: FilterKind;
+      limit?: number;
+      tags?: readonly string[];
+      excludeTags?: readonly string[];
+      excludeTagIds?: readonly string[];
+    },
   ): Promise<SearchResponse>;
   /** 强制下次搜索重建索引（导入/编辑后调用）。 */
   invalidate(): void;
@@ -197,7 +203,13 @@ export function createSearchService(library: Library): SearchService {
 
   const search = async (
     query: string,
-    opts: { filter?: FilterKind; limit?: number; tags?: readonly string[] } = {},
+    opts: {
+      filter?: FilterKind;
+      limit?: number;
+      tags?: readonly string[];
+      excludeTags?: readonly string[];
+      excludeTagIds?: readonly string[];
+    } = {},
   ): Promise<SearchResponse> => {
     await ready();
     const snap = snapshot;
@@ -210,6 +222,10 @@ export function createSearchService(library: Library): SearchService {
     const searchOptions = {
       ...(opts.filter ? { filter: opts.filter } : {}),
       ...(opts.tags && opts.tags.length > 0 ? { tags: opts.tags } : {}),
+      ...(opts.excludeTags && opts.excludeTags.length > 0 ? { excludeTags: opts.excludeTags } : {}),
+      ...(opts.excludeTagIds && opts.excludeTagIds.length > 0
+        ? { excludeTagIds: opts.excludeTagIds }
+        : {}),
       limit,
     };
     const hits = engine.search(query, searchOptions);

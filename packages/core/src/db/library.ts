@@ -14,6 +14,7 @@ import { ensureLocalDatabase } from './migrate.js';
 import { computeCounts } from './normalize.js';
 import { databasePathOf, readSqliteFromFile, saveDatabase } from './sql/store.js';
 import { toSnapshot, type DBSnapshot } from './snapshot.js';
+import { countWords } from '../text/word-count.js';
 import { readActive, workspacePath } from './workspace.js';
 
 export interface LoadedDatabase {
@@ -35,6 +36,9 @@ export interface Library {
   /** 桌面端：直接写到用户选定的路径，ZIP 字节不回传 JS。 */
   exportToPath(selection: ExportSelection, targetPath: string): Promise<ExportSummary>;
   readContent(articleId: string): Promise<string>;
+  /** 批量字数；正文缺失按 0 处理，结果按数据库内容缓存。 */
+  wordCounts(articleIds: readonly string[]): Promise<Map<string, number>>;
+  wordCount(articleId: string): Promise<number>;
   saveContent(articleId: string, markdown: string): Promise<void>;
   /** 每次从磁盘载入或写完正文都 +1；搜索索引靠它判断是否需要重建。 */
   readonly revision: number;
@@ -59,6 +63,65 @@ export function createLibrary(platform: Platform): Library {
   let revision = 0;
   let writeQueue: Promise<void> = Promise.resolve();
 
+  const wordCountCache = new Map<string, number>();
+  let wordCountGeneration = 0;
+  const pendingWordCounts = new Map<string, { resolve: (count: number) => void; reject: (error: unknown) => void }[]>();
+  let wordFlushScheduled = false;
+
+  /** 同一微任务里的字数请求合并成一次 IN 查询，避免系列页每行各查一次。 */
+  function flushWordCounts(): void {
+    wordFlushScheduled = false;
+    if (pendingWordCounts.size === 0) return;
+    const batch = [...pendingWordCounts.keys()];
+    const waiters = new Map(pendingWordCounts);
+    pendingWordCounts.clear();
+    const current = loaded;
+    const generation = wordCountGeneration;
+    if (!current) {
+      for (const list of waiters.values()) {
+        for (const waiter of list) waiter.reject(new Error('尚未打开数据库'));
+      }
+      return;
+    }
+    void current.contents.readMany(batch).then(
+      (texts) => {
+        const counts = new Map<string, number>();
+        for (const id of batch) counts.set(id, countWords(texts.get(id) ?? ''));
+        if (loaded === current && generation === wordCountGeneration) {
+          for (const [id, count] of counts) wordCountCache.set(id, count);
+        }
+        for (const [id, list] of waiters) {
+          for (const waiter of list) waiter.resolve(counts.get(id) ?? 0);
+        }
+      },
+      (error) => {
+        for (const list of waiters.values()) {
+          for (const waiter of list) waiter.reject(error);
+        }
+      },
+    );
+  }
+
+  function requestWordCount(articleId: string): Promise<number> {
+    const cached = wordCountCache.get(articleId);
+    if (cached !== undefined) return Promise.resolve(cached);
+    return new Promise((resolve, reject) => {
+      const list = pendingWordCounts.get(articleId) ?? [];
+      list.push({ resolve, reject });
+      pendingWordCounts.set(articleId, list);
+      if (!wordFlushScheduled) {
+        wordFlushScheduled = true;
+        queueMicrotask(flushWordCounts);
+      }
+    });
+  }
+
+  function invalidateWordCount(articleId?: string): void {
+    if (articleId === undefined) wordCountCache.clear();
+    else wordCountCache.delete(articleId);
+    wordCountGeneration += 1;
+  }
+
   async function loadFrom(dir: string, databaseId: string): Promise<LoadedDatabase> {
     await ensureLocalDatabase(platform, dir);
     const dbPath = databasePathOf(platform, dir);
@@ -69,6 +132,7 @@ export function createLibrary(platform: Platform): Library {
       db,
       contents: createContentStore(platform, dbPath),
     };
+    invalidateWordCount();
     revision += 1;
     return loaded;
   }
@@ -96,7 +160,10 @@ export function createLibrary(platform: Platform): Library {
 
     const nextIds = new Set(draft.articles.map((article) => article.id));
     for (const article of current.db.articles) {
-      if (!nextIds.has(article.id)) current.contents.invalidate(article.id);
+      if (!nextIds.has(article.id)) {
+        current.contents.invalidate(article.id);
+        invalidateWordCount(article.id);
+      }
     }
     current.db.manifest.counts = draft.manifest.counts;
     // 改名也必须回写，否则 snapshot 与首页仍显示旧名
@@ -176,9 +243,22 @@ export function createLibrary(platform: Platform): Library {
       return loaded.contents.read(articleId);
     },
 
+    async wordCounts(articleIds: readonly string[]): Promise<Map<string, number>> {
+      if (!loaded) throw new Error('尚未打开数据库');
+      const ids = [...new Set(articleIds)];
+      const counts = await Promise.all(ids.map(requestWordCount));
+      return new Map(ids.map((id, index) => [id, counts[index] ?? 0]));
+    },
+
+    async wordCount(articleId: string): Promise<number> {
+      if (!loaded) throw new Error('尚未打开数据库');
+      return requestWordCount(articleId);
+    },
+
     async saveContent(articleId: string, markdown: string): Promise<void> {
       if (!loaded) throw new Error('尚未打开数据库');
       await loaded.contents.write(articleId, markdown);
+      invalidateWordCount(articleId);
       revision += 1;
     },
 

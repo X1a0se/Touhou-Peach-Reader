@@ -18,6 +18,7 @@ const FavoritesPage = lazy(() => import('./pages/FavoritesPage.js').then((m) => 
 const FeaturedPage = lazy(() => import('./pages/FeaturedPage.js').then((m) => ({ default: m.FeaturedPage })));
 const ImportPage = lazy(() => import('./pages/ImportPage.js').then((m) => ({ default: m.ImportPage })));
 const MergePage = lazy(() => import('./pages/MergePage.js').then((m) => ({ default: m.MergePage })));
+const ReadingPage = lazy(() => import('./pages/ReadingPage.js').then((m) => ({ default: m.ReadingPage })));
 const SearchPage = lazy(() => import('./pages/SearchPage.js').then((m) => ({ default: m.SearchPage })));
 const SeriesPage = lazy(() => import('./pages/SeriesPage.js').then((m) => ({ default: m.SeriesPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage.js').then((m) => ({ default: m.SettingsPage })));
@@ -33,6 +34,7 @@ export const router = createHashRouter([
       { path: 'featured/short', element: <FeaturedPage page="short" /> },
       { path: 'featured/series', element: <FeaturedPage page="series" /> },
       { path: 'favorites', element: <FavoritesPage /> },
+      { path: 'reading', element: <ReadingPage /> },
       { path: 'editor', element: <EditorPage /> },
       { path: 'merge', element: <MergePage /> },
       { path: 'import', element: <ImportPage /> },

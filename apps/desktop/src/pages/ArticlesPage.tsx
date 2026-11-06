@@ -10,6 +10,7 @@ import { Button, EmptyState, R18Badge, SectionHeading, cn } from '@tpr/ui';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
+import { WordCount } from '../components/WordCount.js';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { imageSource } from '../lib/images.js';
@@ -89,7 +90,10 @@ function ArticleCard({
               {series.title}
             </Link>
           ) : null}
-          <span className="ml-auto shrink-0">{article.updatedAt.slice(0, 10)}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            <WordCount ids={[article.id]} />
+            <span>{article.updatedAt.slice(0, 10)}</span>
+          </span>
         </div>
 
         <Link
@@ -140,6 +144,10 @@ function ArticleSeriesGroup({
           {row.series.title}
         </Link>
         <span className="text-xs text-muted-foreground">共 {row.items.length} 篇</span>
+        <WordCount
+          ids={row.items.map((item) => item.article.id)}
+          className="text-xs text-muted-foreground"
+        />
         <Button
           size="sm"
           variant="secondary"

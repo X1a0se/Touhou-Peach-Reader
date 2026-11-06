@@ -26,6 +26,7 @@
     "check:no-tauri": "node scripts/check-no-tauri.mjs",
     "check": "corepack pnpm typecheck && corepack pnpm test && node scripts/check-boundaries.mjs && node scripts/check-no-tauri.mjs",
     "release": "node scripts/release.mjs release",
+    "release:quick": "node scripts/release.mjs quick",
     "release:status": "node scripts/release.mjs status",
     "release:build": "node scripts/release.mjs build",
     "release:install": "node scripts/release.mjs install",

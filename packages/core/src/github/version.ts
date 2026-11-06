@@ -106,6 +106,24 @@ function dateValue(value: string | null | undefined): number | null {
 }
 
 /**
+ * 应用版本是否为纯语义化数字（如 0.1.10）且 latest 比 current 新。
+ *
+ * 只用于「程序本体更新」；数据库版本仍走 `isNewerDatabaseVersion`，
+ * 后者还兼容时间戳版本与发布时间兜底。
+ */
+export function isNewerAppVersion(current: string | null, latest: string): boolean {
+  if (current === null) return latest.trim().length > 0;
+  const currentText = current.trim();
+  const latestText = latest.trim();
+  if (latestText.length === 0) return false;
+  if (currentText === latestText) return false;
+  const currentNumeric = parseNumericVersion(currentText);
+  const latestNumeric = parseNumericVersion(latestText);
+  if (currentNumeric === null || latestNumeric === null) return false;
+  return compareNumeric(currentNumeric, latestNumeric) < 0;
+}
+
+/**
  * latest 是否比 current 新。
  *
  * current 为 null（还没导入库）时视为需要更新；版本完全相同返回 false。

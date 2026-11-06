@@ -86,6 +86,7 @@ corepack pnpm typecheck    # 全包类型检查
 corepack pnpm test         # 全包单测
 corepack pnpm check        # typecheck + test + 依赖边界 + Tauri 泄漏检查
 corepack pnpm release      # 一条命令更新安装版与 dist/portable 免安装版（也可双击 发布更新.cmd）
+corepack pnpm release:quick    # 只构建并更新本机免安装版（也可双击 快速更新免安装版.cmd）
 corepack pnpm release:publish  # 把 dist/release 里的安装包与免安装版补发到 GitHub Release
 corepack pnpm release:db <文件.tpr>  # 只发数据库：默认改写成「库名-时间」版本并新建 Release，--tag 指定已存在标签才原地替换（也可双击 发布数据库.cmd）
 ```
@@ -112,6 +113,23 @@ node scripts/release.mjs --set 0.2.0   # 需要升版本号时，先统一改 5 
 5. 打印核对表：5 处版本号、构建产物、免安装目录、便携镜像、安装版版本；全部一致才算成功。
 
 细粒度命令仍然保留：`release:status`（只读核对，含便携镜像）、`release:build`、`release:install`、`release:portable`（刷新 `dist/portable` 并同步便携镜像）。
+
+### 日常快速更新（只更新本机免安装版）
+
+日常改代码、只想把自己电脑上的免安装版换成最新构建时，用这条更短的路径：
+
+```bash
+corepack pnpm release:quick    # 或双击 快速更新免安装版.cmd
+```
+
+它只做：检查应用未运行 → `tauri build --no-bundle` → 把新 exe 覆盖到 `D:\Touhou Peach Reader Portable\东方桃图吧大书库.exe`，并写一个快速构建标记。它**不会**生成 NSIS、覆盖安装版、刷新 `dist/portable`、同步公开发布资产，也**不会**自动改版本号。
+
+- 默认目标仍是 `D:\Touhou Peach Reader Portable`；换目录用 `TPR_PORTABLE_MIRROR`。
+- 需要同时升版本：`node scripts/release.mjs quick --version 0.1.11`（或 `快速更新免安装版.cmd --version 0.1.11`）。构建失败会自动把版本号文件（含 Cargo.lock）回滚。
+- 也可沿用 `node scripts/release.mjs --set 0.1.11` 先统一版本，再 `release:quick`。
+- 构建前想跑完整检查：加 `--check`（默认跳过 check；`tauri build` 仍会跑 tsc + vite build）。
+- 快速构建后 `release:status` 会显示「便携镜像（快速构建）」；`dist/portable` 和安装版若还是旧版本，会如实提示落后。
+- 版本号变化、要公开发布、需要安装版时，仍必须跑 `corepack pnpm release` / `发布更新.cmd`；完整发布会重建 `dist/portable`、同步镜像并清除快速构建标记。
 
 设置页的「关于」会显示**当前跑的是安装版还是免安装版**、当前版本、程序路径、数据目录，以及安装版的版本；两者不一致时会提示去双击「发布更新.cmd」。
 

@@ -4,6 +4,7 @@ import { Button, cn, HighlightedText, R18Badge } from '@tpr/ui';
 import { useMemo, useState } from 'react';
 import { Link } from 'react-router';
 import { TagLinks } from '../components/TagLinks.js';
+import { WordCount } from '../components/WordCount.js';
 
 const KIND_STYLE: Record<string, string> = {
   article: 'bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
@@ -87,6 +88,12 @@ function ResultRow({
           ) : (
             <span className="truncate text-sm font-medium">{item.title}</span>
           )}
+          {item.kind === 'article' || item.kind === 'series' ? (
+            <WordCount
+              ids={article ? [article.id] : (series?.articleIds ?? [])}
+              className="shrink-0 text-[0.65rem] text-muted-foreground"
+            />
+          ) : null}
           <span className="ml-auto shrink-0 font-mono text-[0.65rem] text-muted-foreground">
             {item.id}
           </span>
@@ -155,6 +162,10 @@ function SeriesGroup({
           <span className="shrink-0 text-[0.65rem] text-muted-foreground">
             命中 {items.length} 篇 · 共 {series.total} 篇
           </span>
+          <WordCount
+            ids={entity?.articleIds ?? []}
+            className="text-[0.65rem] text-muted-foreground"
+          />
           <Button
             size="sm"
             variant="secondary"

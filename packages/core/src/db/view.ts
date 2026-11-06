@@ -53,6 +53,7 @@ export interface SeriesView {
   characterTags: TagRef[];
   plotTags: TagRef[];
   cover: ImageRef | null;
+  illustrations: ImageRef[];
   articles: ArticleMeta[];
   sourceUrl: string | null;
 }
@@ -195,6 +196,9 @@ export function getSeriesView(snapshot: DBSnapshot, id: string, opts: ViewOption
     characterTags: resolveTags(snapshot, series.characterTagIds),
     plotTags: resolveTags(snapshot, series.plotTagIds),
     cover: series.coverImageId ? resolveImageRef(snapshot, opts, series.coverImageId) : null,
+    illustrations: compact(
+      (series.illustrationImageIds ?? []).map((imageId) => resolveImageRef(snapshot, opts, imageId)),
+    ),
     articles,
     sourceUrl: series.sourceUrl ?? null,
   };

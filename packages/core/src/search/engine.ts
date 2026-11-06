@@ -42,6 +42,8 @@ export interface SearchDoc {
   virtual: string[];
   /** 关联的角色/情节/主题标签归一化名，供 `#标签名` 精确检索 */
   tagNames: string[];
+  /** 关联标签的实体 id，供「屏蔽标签」按 id 精确排除（重命名/别名不会漏） */
+  tagIds?: readonly string[];
   category?: TagCategory;
   tokens: SearchFieldTokens;
 }
@@ -58,6 +60,10 @@ export interface SearchOptions {
   limit?: number;
   /** 调用方显式选中的标签名（如多选筛选器），与查询串里的 `#标签` 一起按 AND 过滤。 */
   tags?: readonly string[];
+  /** 需要排除的标签归一化名（设置里的屏蔽名单）；命中任一即不返回。 */
+  excludeTags?: readonly string[];
+  /** 需要排除的标签实体 id；与 `excludeTags` 同时生效，优先按 id 精确匹配。 */
+  excludeTagIds?: readonly string[];
 }
 
 export interface SearchEngine {
@@ -174,6 +180,17 @@ export function createSearchEngine(): SearchEngine {
 
     const requireVirtual = parsed.virtualTags;
     const requireTags = [...new Set([...parsed.tagNames.map(normalizeTagName), ...explicitTags])];
+    const excludeNames = new Set(
+      (opts.excludeTags ?? []).map(normalizeTagName).filter((name) => name.length > 0),
+    );
+    const excludeIds = new Set((opts.excludeTagIds ?? []).filter((id) => id.length > 0));
+
+    const isExcluded = (doc: SearchDoc): boolean => {
+      if (excludeIds.size === 0 && excludeNames.size === 0) return false;
+      if (doc.kind === 'tag' && excludeIds.has(doc.id)) return true;
+      if (doc.tagIds?.some((id) => excludeIds.has(id))) return true;
+      return doc.tagNames.some((name) => excludeNames.has(name));
+    };
 
     const candidates: SearchHit[] = [];
     const consider = (doc: SearchDoc, score: number) => {
@@ -181,6 +198,7 @@ export function createSearchEngine(): SearchEngine {
       if (!requireVirtual.every((tag) => doc.virtual.includes(tag))) return;
       if (requireTags.length > 0 && !requireTags.every((name) => doc.tagNames.includes(name)))
         return;
+      if (isExcluded(doc)) return;
       candidates.push({
         kind: doc.kind,
         id: doc.id,

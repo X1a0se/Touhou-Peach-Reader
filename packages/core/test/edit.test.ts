@@ -150,6 +150,42 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
     expect(saved?.translatorIds).toEqual([translatorId]);
   });
 
+  it('edit-series-illustrations: 系列插图写进 SQLite 子表，重启后读回，删图时清理引用', async () => {
+    const { platform, library, editor } = await openDatabase();
+    const imageId = await editor.saveImage({
+      bytes: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 2]),
+      ext: 'png',
+      kind: 'illustration',
+      caption: '系列插图',
+    });
+
+    const seriesId = await editor.saveSeries({
+      title: '带插图的系列',
+      summary: '',
+      status: 'ongoing',
+      articleIds: [],
+      authorIds: [],
+      translatorIds: [],
+      characterTagIds: [],
+      plotTagIds: [],
+      illustrationImageIds: [imageId],
+    });
+
+    const saved = library.snapshot()?.series.find((series) => series.id === seriesId);
+    expect(saved?.illustrationImageIds).toEqual([imageId]);
+
+    const restarted = createLibrary(platform);
+    await restarted.restore();
+    expect(restarted.snapshot()?.series.find((series) => series.id === seriesId)?.illustrationImageIds).toEqual([
+      imageId,
+    ]);
+
+    await editor.deleteImage(imageId);
+    expect(library.snapshot()?.series.find((series) => series.id === seriesId)?.illustrationImageIds).toEqual(
+      [],
+    );
+  });
+
   it('edit-cascade: 删除文章同时从系列目录与精选里移除', async () => {
     const { library, editor } = await openDatabase();
     const series = library.snapshot()?.series[0];
@@ -404,6 +440,80 @@ describe('editor: 全实体 CRUD（Goal 9）', () => {
         plotTagIds: series.plotTagIds,
       }),
     ).rejects.toThrow('E_SERIES_ORDER');
+  });
+
+  it('edit-updated-at: 作者/标签/图片/推荐语再次编辑会刷新 updatedAt，重启后仍在', async () => {
+    const { platform, library, editor } = await openDatabase();
+    const wait = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5));
+
+    const authorId = await editor.saveAuthor({ canonicalName: '时间作者', aliases: [] });
+    const authorFirst = library.snapshot()?.authors.find((item) => item.id === authorId)?.updatedAt;
+    expect(authorFirst).toBeTruthy();
+    await wait();
+    await editor.saveAuthor({ id: authorId, canonicalName: '时间作者改', aliases: [] });
+    const authorSecond = library.snapshot()?.authors.find((item) => item.id === authorId)?.updatedAt;
+    expect(authorSecond && authorFirst && authorSecond > authorFirst).toBe(true);
+
+    const tagId = await editor.saveTag({ category: 'character', name: '时间标签', aliases: [] });
+    const tagFirst = library.snapshot()?.tags.find((item) => item.id === tagId)?.updatedAt;
+    expect(tagFirst).toBeTruthy();
+    await wait();
+    await editor.saveTag({ id: tagId, category: 'character', name: '时间标签改', aliases: [] });
+    const tagSecond = library.snapshot()?.tags.find((item) => item.id === tagId)?.updatedAt;
+    expect(tagSecond && tagFirst && tagSecond > tagFirst).toBe(true);
+
+    const imageId = await editor.saveImage({
+      bytes: new Uint8Array([1, 2, 3]),
+      ext: 'png',
+      kind: 'cover',
+      caption: '第一版',
+    });
+    const imageFirst = library.snapshot()?.images.find((item) => item.id === imageId)?.updatedAt;
+    expect(imageFirst).toBeTruthy();
+    await wait();
+    await editor.updateImage(imageId, { caption: '第二版' });
+    const imageSecond = library.snapshot()?.images.find((item) => item.id === imageId)?.updatedAt;
+    expect(imageSecond && imageFirst && imageSecond > imageFirst).toBe(true);
+
+    const articleId = library.snapshot()?.articles[0]?.id ?? '';
+    await editor.saveFeatured('article', articleId, [{ text: '第一条' }]);
+    const featuredFirst = library
+      .snapshot()
+      ?.featured.find((item) => item.targetType === 'article' && item.targetId === articleId)?.updatedAt;
+    expect(featuredFirst).toBeTruthy();
+    await wait();
+    await editor.saveFeatured('article', articleId, [{ text: '第二条' }]);
+    const featuredSecond = library
+      .snapshot()
+      ?.featured.find((item) => item.targetType === 'article' && item.targetId === articleId)?.updatedAt;
+    expect(featuredSecond && featuredFirst && featuredSecond > featuredFirst).toBe(true);
+
+    // 新字段必须真的写进 SQLite：重启后编辑器排序不能丢时间。
+    const restored = createLibrary(platform);
+    await restored.restore();
+    const reopened = restored.snapshot();
+    expect(reopened?.authors.find((item) => item.id === authorId)?.updatedAt).toBe(authorSecond);
+    expect(reopened?.tags.find((item) => item.id === tagId)?.updatedAt).toBe(tagSecond);
+    expect(reopened?.images.find((item) => item.id === imageId)?.updatedAt).toBe(imageSecond);
+    expect(
+      reopened?.featured.find((item) => item.targetType === 'article' && item.targetId === articleId)?.updatedAt,
+    ).toBe(featuredSecond);
+  });
+
+  it('edit-delete-article-touches-series: 删除系列中的文章会刷新系列修改时间', async () => {
+    const { library, editor } = await openDatabase();
+    const series = library.snapshot()?.series[0];
+    const articleId = series?.articleIds[0];
+    expect(series && articleId).toBeTruthy();
+    if (!series || !articleId) return;
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await editor.deleteArticle(articleId);
+
+    const updated = library.snapshot()?.series.find((item) => item.id === series.id);
+    expect(updated?.articleIds).not.toContain(articleId);
+    expect(updated?.updatedAt).toBeDefined();
+    expect(updated?.updatedAt && updated.updatedAt > series.updatedAt).toBe(true);
   });
 });
 

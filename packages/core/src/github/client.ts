@@ -6,9 +6,10 @@
  */
 
 import type { Platform } from '@tpr/platform';
+import { REPOSITORY_APP } from '../repo.js';
 import type { GitHubRef } from './url.js';
 import { parseGitHubInput } from './url.js';
-import { isNewerDatabaseVersion } from './version.js';
+import { isNewerAppVersion, isNewerDatabaseVersion } from './version.js';
 
 export interface GitHubAsset {
   readonly name: string;
@@ -49,8 +50,31 @@ export interface UpdateCheck {
   readonly assetUrl: string | null;
 }
 
-export type GitHubErrorCode = 'E_NETWORK' | 'E_API' | 'E_NO_ASSET' | 'E_TOO_LARGE';
+export interface AppUpdateAsset {
+  readonly kind: 'portable' | 'setup';
+  readonly name: string;
+  readonly url: string;
+}
 
+/**
+ * 程序本体更新检查结果。
+ *
+ * 注意 release 的 tag 是数据库版本，应用版本只存在于安装包资产名里，
+ * 所以这里不能复用 `UpdateCheck.latest`（数据库版本）。
+ */
+export interface AppUpdateCheck {
+  readonly owner: string;
+  readonly repo: string;
+  readonly current: string | null;
+  readonly latest: string;
+  readonly publishedAt: string | null;
+  readonly upToDate: boolean;
+  readonly releaseUrl: string;
+  readonly portable: AppUpdateAsset | null;
+  readonly setup: AppUpdateAsset | null;
+}
+
+export type GitHubErrorCode = 'E_NETWORK' | 'E_API' | 'E_NO_ASSET' | 'E_TOO_LARGE';
 export class GitHubError extends Error {
   readonly code: GitHubErrorCode;
 
@@ -69,6 +93,8 @@ export interface GitHubService {
     currentVersion: string | null,
     opts?: { localUpdatedAt?: string | null },
   ): Promise<UpdateCheck>;
+  /** 检查程序本体更新（读 releases 列表里的安装包资产名）。 */
+  checkAppUpdate(input: string, currentVersion: string | null): Promise<AppUpdateCheck>;
 }
 
 export interface GitHubServiceOptions {
@@ -91,7 +117,29 @@ interface RawAsset {
 interface RawRelease {
   tag_name?: unknown;
   published_at?: unknown;
+  html_url?: unknown;
+  draft?: unknown;
+  prerelease?: unknown;
   assets?: unknown;
+}
+
+interface RawReleaseListEntry extends RawRelease {
+  name?: unknown;
+}
+
+const APP_ASSET_RE = /^(.+)-(portable|x64-setup)\.exe$/i;
+
+/** 从 `TouhouPeachReader-0.1.10-x64-setup.exe` 里解析版本与渠道。 */
+export function parseAppAsset(
+  name: string,
+): { version: string; kind: 'portable' | 'setup' } | null {
+  const prefix = `${REPOSITORY_APP}-`;
+  if (!name.startsWith(prefix)) return null;
+  const match = APP_ASSET_RE.exec(name.slice(prefix.length));
+  if (match === null) return null;
+  const version = match[1]?.trim() ?? '';
+  if (version.length === 0) return null;
+  return { version, kind: match[2]?.toLowerCase() === 'portable' ? 'portable' : 'setup' };
 }
 
 function normalizeVersion(tag: string): string {
@@ -247,5 +295,81 @@ export function createGitHubService(
     };
   }
 
-  return { resolve, download, checkUpdate };
+  async function checkAppUpdate(
+    input: string,
+    currentVersion: string | null,
+  ): Promise<AppUpdateCheck> {
+    const ref = parseGitHubInput(input);
+    const body = await apiGet<unknown>(
+      `${apiBase}/repos/${ref.owner}/${ref.repo}/releases?per_page=30`,
+    );
+    if (!Array.isArray(body)) {
+      throw new GitHubError('E_API', 'GitHub 返回了无法识别的 release 列表');
+    }
+
+    interface Candidate {
+      version: string;
+      publishedAt: string | null;
+      releaseUrl: string;
+      portable: AppUpdateAsset | null;
+      setup: AppUpdateAsset | null;
+    }
+
+    const byVersion = new Map<string, Candidate>();
+    for (const item of body) {
+      if (item === null || typeof item !== 'object') continue;
+      const raw = item as RawReleaseListEntry;
+      if (raw.draft === true || raw.prerelease === true) continue;
+      const publishedAt = typeof raw.published_at === 'string' ? raw.published_at : null;
+      const releaseUrl =
+        typeof raw.html_url === 'string'
+          ? raw.html_url
+          : `https://github.com/${ref.owner}/${ref.repo}/releases`;
+      for (const asset of readAssets(raw.assets)) {
+        const parsed = parseAppAsset(asset.name);
+        if (parsed === null) continue;
+        const existing = byVersion.get(parsed.version);
+        const candidate: Candidate = existing ?? {
+          version: parsed.version,
+          publishedAt,
+          releaseUrl,
+          portable: null,
+          setup: null,
+        };
+        if (parsed.kind === 'portable') {
+          candidate.portable = { kind: 'portable', name: asset.name, url: asset.url };
+        } else {
+          candidate.setup = { kind: 'setup', name: asset.name, url: asset.url };
+        }
+        byVersion.set(parsed.version, candidate);
+      }
+    }
+
+    let best: Candidate | null = null;
+    for (const candidate of byVersion.values()) {
+      if (best === null || isNewerAppVersion(best.version, candidate.version)) {
+        best = candidate;
+      }
+    }
+    if (best === null) {
+      throw new GitHubError('E_NO_ASSET', '发布页里没有找到程序安装包资产');
+    }
+
+    const current = currentVersion === null || currentVersion.trim().length === 0
+      ? null
+      : currentVersion.trim();
+    return {
+      owner: ref.owner,
+      repo: ref.repo,
+      current,
+      latest: best.version,
+      publishedAt: best.publishedAt,
+      upToDate: current !== null && !isNewerAppVersion(current, best.version),
+      releaseUrl: best.releaseUrl,
+      portable: best.portable,
+      setup: best.setup,
+    };
+  }
+
+  return { resolve, download, checkUpdate, checkAppUpdate };
 }

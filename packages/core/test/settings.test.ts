@@ -219,3 +219,89 @@ describe('settings: 外观（Goal 14）', () => {
     expect(wallpaperPath(platform, '../x.png')).toBe('');
   });
 });
+
+describe('settings: 文章页编辑器快捷入口', () => {
+  it('editor-link-default: 默认关闭，旧设置缺字段也关闭', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    expect((await createSettings(platform).load()).showArticleEditorLink).toBe(false);
+
+    const legacy = createMemoryPlatform({
+      dataDir: '/app',
+      files: { '/app/settings.json': '{"theme":"dark"}' },
+    });
+    expect((await createSettings(legacy).load()).showArticleEditorLink).toBe(false);
+  });
+
+  it('editor-link-roundtrip: 开启后重启仍保持开启', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const first = createSettings(platform);
+    await first.load();
+    await first.save({ showArticleEditorLink: true });
+
+    const loaded = await createSettings(platform).load();
+    expect(loaded.showArticleEditorLink).toBe(true);
+    expect(JSON.parse(await platform.fs.readText('/app/settings.json')).showArticleEditorLink).toBe(true);
+  });
+
+  it('editor-link-parse: 非布尔值回退关闭，true 保留', () => {
+    expect(parseSettings({ showArticleEditorLink: 'yes' })?.showArticleEditorLink).toBe(false);
+    expect(parseSettings({ showArticleEditorLink: true })?.showArticleEditorLink).toBe(true);
+  });
+});
+
+describe('settings: 阅读排版', () => {
+  it('reading-default: 默认字体/字号/行距/段距，旧设置缺字段也回退', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    expect((await createSettings(platform).load()).reading).toEqual({
+      fontFamily: 'system',
+      fontSize: 16,
+      lineHeight: 1.85,
+      paragraphSpacing: 0.9,
+    });
+
+    const legacy = createMemoryPlatform({
+      dataDir: '/app',
+      files: { '/app/settings.json': '{"theme":"dark"}' },
+    });
+    expect((await createSettings(legacy).load()).reading.fontFamily).toBe('system');
+  });
+
+  it('reading-roundtrip: 部分字段深合并后重启仍在，其余保持默认', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const first = createSettings(platform);
+    await first.load();
+    await first.save({ reading: { fontFamily: 'serif', fontSize: 20 } });
+
+    const loaded = await createSettings(platform).load();
+    expect(loaded.reading).toEqual({
+      fontFamily: 'serif',
+      fontSize: 20,
+      lineHeight: 1.85,
+      paragraphSpacing: 0.9,
+    });
+    expect(JSON.parse(await platform.fs.readText('/app/settings.json')).reading.fontSize).toBe(20);
+  });
+
+  it('reading-clamp: 越界字号/行距/段距夹紧，未知字体回退 system', () => {
+    expect(
+      parseSettings({
+        reading: { fontFamily: 'comic', fontSize: 99, lineHeight: 0.5, paragraphSpacing: -3 },
+      })?.reading,
+    ).toEqual({
+      fontFamily: 'system',
+      fontSize: 24,
+      lineHeight: 1.4,
+      paragraphSpacing: 0,
+    });
+    expect(
+      parseSettings({
+        reading: { fontFamily: 'kai', fontSize: 2, lineHeight: 9, paragraphSpacing: 9 },
+      })?.reading,
+    ).toEqual({
+      fontFamily: 'kai',
+      fontSize: 14,
+      lineHeight: 2.2,
+      paragraphSpacing: 2,
+    });
+  });
+});
