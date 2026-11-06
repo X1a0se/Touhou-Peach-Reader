@@ -1,8 +1,5 @@
 import type {
   ArticleReading,
-  ReadingBookmark,
-  ReadingBookmarkInput,
-  ReadingBookmarkItem,
   ReadingHistoryItem,
   ReadingVisit,
   SeriesReading,
@@ -13,14 +10,11 @@ import { useLibraryContext } from '../library/LibraryProvider.js';
 
 interface ReadingContextValue {
   ready: boolean;
-  bookmarks: ReadingBookmarkItem[];
   history: ReadingHistoryItem[];
   article(id: string): ArticleReading | null;
   series(id: string): SeriesReading | null;
   visit(input: ReadingVisit): void;
   recordProgress(id: string, progress: number, scrollY: number): void;
-  addBookmark(id: string, input: ReadingBookmarkInput): Promise<ReadingBookmark | null>;
-  removeBookmark(id: string, bookmarkId: string): Promise<void>;
   removeHistory(id: string): Promise<void>;
   clearHistory(): Promise<void>;
   flush(): Promise<void>;
@@ -84,23 +78,6 @@ export function ReadingProvider({ children }: { children: ReactNode }) {
     [services],
   );
 
-  const addBookmark = useCallback(
-    async (id: string, input: ReadingBookmarkInput): Promise<ReadingBookmark | null> => {
-      const bookmark = await services.reading.addBookmark(id, input);
-      refresh();
-      return bookmark;
-    },
-    [services, refresh],
-  );
-
-  const removeBookmark = useCallback(
-    async (id: string, bookmarkId: string): Promise<void> => {
-      await services.reading.removeBookmark(id, bookmarkId);
-      refresh();
-    },
-    [services, refresh],
-  );
-
   const removeHistory = useCallback(
     async (id: string): Promise<void> => {
       await services.reading.removeHistory(id);
@@ -118,11 +95,6 @@ export function ReadingProvider({ children }: { children: ReactNode }) {
     await services.reading.flush();
   }, [services]);
 
-  const bookmarks = useMemo(
-    () => services.reading.bookmarks(snapshot),
-    // version 用于在书签/历史变化后重算
-    [services, snapshot, version],
-  );
   const history = useMemo(
     () => services.reading.history(snapshot),
     [services, snapshot, version],
@@ -130,14 +102,11 @@ export function ReadingProvider({ children }: { children: ReactNode }) {
 
   const value: ReadingContextValue = {
     ready,
-    bookmarks,
     history,
     article: (id) => services.reading.article(id),
     series: (id) => services.reading.series(id),
     visit,
     recordProgress,
-    addBookmark,
-    removeBookmark,
     removeHistory,
     clearHistory,
     flush,

@@ -22,38 +22,28 @@ function setup() {
   return { platform, snapshot, series, article, reading, file };
 }
 
-describe('reading: 书签、上次位置、系列进度与足迹', () => {
-  it('reading-persist: 访问/进度/多书签落到 user/*.reading.json，重启后能读回', async () => {
+describe('reading: 上次位置、系列进度与足迹', () => {
+  it('reading-persist: 访问/进度落到 user/*.reading.json，重启后能读回', async () => {
     const { platform, snapshot, series, article, reading, file } = setup();
     await reading.load();
     reading.visit({ articleId: article.id, seriesId: series.id, seriesIndex: 1 });
     reading.recordProgress(article.id, 0.42, 640);
-    const bookmark = await reading.addBookmark(article.id, {
-      progress: 0.42,
-      scrollY: 640,
-      label: '这一段',
-    });
-    expect(bookmark).toMatchObject({ scrollY: 640, label: '这一段' });
     await reading.flush();
 
     expect(await platform.fs.exists(file)).toBe(true);
     const onDisk = JSON.parse(await platform.fs.readText(file)) as {
       version: number;
-      articles: Record<
-        string,
-        { progress: number; bookmarks: { id: string; scrollY: number; label: string }[] }
-      >;
+      articles: Record<string, { progress: number; bookmarks?: unknown }>;
       series: Record<string, { index: number | null }>;
     };
     expect(onDisk.version).toBe(2);
     expect(onDisk.articles[article.id]?.progress).toBe(0.42);
-    expect(onDisk.articles[article.id]?.bookmarks[0]).toMatchObject({ scrollY: 640, label: '这一段' });
+    expect(onDisk.articles[article.id]?.bookmarks).toBeUndefined();
     expect(onDisk.series[series.id]?.index).toBe(1);
 
     const restarted = createReading(platform, () => DATABASE_ID);
     await restarted.load();
     expect(restarted.article(article.id)).toMatchObject({ progress: 0.42, scrollY: 640 });
-    expect(restarted.article(article.id)?.bookmarks).toHaveLength(1);
     expect(restarted.series(series.id)).toMatchObject({ articleId: article.id, index: 1 });
 
     const history = restarted.history(snapshot);
@@ -61,20 +51,10 @@ describe('reading: 书签、上次位置、系列进度与足迹', () => {
       articleId: article.id,
       title: article.title,
       progress: 0.42,
-      bookmarked: true,
       to: `/article/${article.id}`,
     });
+    expect(history[0]).not.toHaveProperty('bookmarked');
     expect(history[0]?.series).toMatchObject({ id: series.id, index: 1 });
-
-    const bookmarks = restarted.bookmarks(snapshot);
-    expect(bookmarks[0]).toMatchObject({
-      articleId: article.id,
-      title: article.title,
-      label: '这一段',
-      scrollY: 640,
-    });
-    expect(bookmarks[0]?.bookmarkAt).toBeTruthy();
-    expect(bookmarks[0]?.to).toBe(`/article/${article.id}?bookmark=${encodeURIComponent(bookmark?.id ?? '')}`);
   });
 
   it('reading-history: 足迹按最近访问去重排序，记录进度不重排', async () => {
@@ -105,40 +85,13 @@ describe('reading: 书签、上次位置、系列进度与足迹', () => {
     expect(reading.series(series.id)).toMatchObject({ articleId: article.id, index: 1 });
   });
 
-  it('reading-bookmarks: 同一位置更新、不同位置新增、删除立即落盘', async () => {
-    const { reading, article, snapshot, platform, file } = setup();
-    await reading.load();
-    const first = await reading.addBookmark(article.id, { progress: 0.5, scrollY: 300, label: '位置一' });
-    expect(first).not.toBeNull();
-    expect(reading.bookmarks(snapshot)).toHaveLength(1);
-
-    const updated = await reading.addBookmark(article.id, { progress: 0.52, scrollY: 312, label: '位置一（更新）' });
-    expect(updated?.id).toBe(first?.id);
-    expect(reading.article(article.id)?.bookmarks).toHaveLength(1);
-    expect(reading.article(article.id)?.bookmarks[0]).toMatchObject({ scrollY: 312, label: '位置一（更新）' });
-
-    const second = await reading.addBookmark(article.id, { progress: 0.8, scrollY: 900, label: '位置二' });
-    expect(second?.id).not.toBe(first?.id);
-    expect(reading.bookmarks(snapshot)).toHaveLength(2);
-
-    await reading.removeBookmark(article.id, first?.id ?? '');
-    expect(reading.article(article.id)?.bookmarks).toHaveLength(1);
-    expect(reading.bookmarks(snapshot)[0]).toMatchObject({ bookmarkId: second?.id, label: '位置二' });
-
-    const onDisk = JSON.parse(await platform.fs.readText(file)) as {
-      articles: Record<string, { bookmarks: { id: string }[] }>;
-    };
-    expect(onDisk.articles[article.id]?.bookmarks).toHaveLength(1);
-    expect(onDisk.articles[article.id]?.bookmarks[0]?.id).toBe(second?.id);
-  });
-
-  it('reading-bookmark-migrate: v1 单书签迁移到 v2 书签数组', async () => {
+  it('reading-ignores-legacy-bookmarks: 旧书签字段读取后丢弃', async () => {
     const { platform, article, reading, file } = setup();
     await platform.fs.mkdir(platform.paths.dirname(file));
     await platform.fs.writeText(
       file,
       JSON.stringify({
-        version: 1,
+        version: 2,
         articles: {
           [article.id]: {
             articleId: article.id,
@@ -147,16 +100,34 @@ describe('reading: 书签、上次位置、系列进度与足迹', () => {
             scrollY: 420,
             lastReadAt: '2026-01-02T03:04:05.000Z',
             bookmark: { progress: 0.3, scrollY: 420, at: '2026-01-02T03:04:05.000Z' },
+            bookmarks: [
+              { id: 'bm_legacy', progress: 0.3, scrollY: 420, label: '旧书签', at: '2026-01-02T03:04:05.000Z' },
+            ],
           },
         },
         series: {},
-        history: [],
+        history: [
+          {
+            articleId: article.id,
+            seriesId: null,
+            progress: 0.3,
+            scrollY: 420,
+            lastReadAt: '2026-01-02T03:04:05.000Z',
+          },
+        ],
       }),
     );
     await reading.load();
-    const bookmarks = reading.article(article.id)?.bookmarks ?? [];
-    expect(bookmarks).toHaveLength(1);
-    expect(bookmarks[0]).toMatchObject({ scrollY: 420, label: '', id: 'bm_legacy_2026-01-02T03:04:05.000Z' });
+    expect(reading.article(article.id)).toMatchObject({ progress: 0.3, scrollY: 420 });
+    expect(reading.article(article.id)).not.toHaveProperty('bookmarks');
+    expect(reading.history()[0]).not.toHaveProperty('bookmarked');
+
+    await reading.flush();
+    const onDisk = JSON.parse(await platform.fs.readText(file)) as {
+      articles: Record<string, Record<string, unknown>>;
+    };
+    expect(onDisk.articles[article.id]).not.toHaveProperty('bookmark');
+    expect(onDisk.articles[article.id]).not.toHaveProperty('bookmarks');
   });
 
   it('reading-switch-database: 切库时把旧进度写回旧文件，不串到新库', async () => {

@@ -535,7 +535,7 @@ export function SettingsPage() {
       <Panel className="grid gap-5">
         <SectionHeading
           title="阅读排版"
-          description="只作用于文章正文；书签、足迹与系列进度不受影响。滑动后松手即保存。"
+          description="只作用于文章正文；足迹与系列进度不受影响。滑动后松手即保存。"
         />
         <div className="grid gap-2">
           <span className="text-sm font-medium">字体</span>

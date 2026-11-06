@@ -1,27 +1,13 @@
 /**
- * 阅读状态（书签 / 上次阅读位置 / 系列进度 / 足迹）。
+ * 阅读状态（上次阅读位置 / 系列进度 / 足迹）。
  *
  * 与收藏一样属于用户态数据：落在 `user/{databaseId}.reading.json`，不进数据库包、
- * 不参与导出。进度更新频繁，写盘使用约 800ms 防抖；书签操作立即落盘。
+ * 不参与导出。进度更新频繁，写盘使用约 800ms 防抖。
  */
 import type { Platform } from '@tpr/platform';
 import type { DBSnapshot } from './db/snapshot.js';
 import { articleSeriesPosition, hasR18PlotTag, resolveTags, type TagRef } from './db/view.js';
 import { userPath } from './db/workspace.js';
-
-export interface ReadingMark {
-  progress: number;
-  scrollY: number;
-  at: string;
-}
-
-export interface ReadingBookmark {
-  id: string;
-  progress: number;
-  scrollY: number;
-  label: string;
-  at: string;
-}
 
 export interface ArticleReading {
   articleId: string;
@@ -29,7 +15,6 @@ export interface ArticleReading {
   progress: number;
   scrollY: number;
   lastReadAt: string;
-  bookmarks: ReadingBookmark[];
 }
 
 export interface SeriesReading {
@@ -70,21 +55,7 @@ export interface ReadingHistoryItem {
   progress: number;
   tags: TagRef[];
   r18: boolean;
-  bookmarked: boolean;
   to: string | null;
-}
-
-export interface ReadingBookmarkItem extends ReadingHistoryItem {
-  bookmarkId: string;
-  bookmarkAt: string;
-  label: string;
-  scrollY: number;
-}
-
-export interface ReadingBookmarkInput {
-  progress: number;
-  scrollY: number;
-  label?: string;
 }
 
 export interface ReadingService {
@@ -94,19 +65,14 @@ export interface ReadingService {
   article(id: string): ArticleReading | null;
   series(id: string): SeriesReading | null;
   history(snapshot?: DBSnapshot | null): ReadingHistoryItem[];
-  bookmarks(snapshot?: DBSnapshot | null): ReadingBookmarkItem[];
   visit(input: ReadingVisit): void;
   recordProgress(id: string, progress: number, scrollY: number): void;
-  addBookmark(id: string, input: ReadingBookmarkInput): Promise<ReadingBookmark | null>;
-  removeBookmark(id: string, bookmarkId: string): Promise<void>;
   removeHistory(id: string): Promise<void>;
   clearHistory(): Promise<void>;
   flush(): Promise<void>;
 }
 
 export const HISTORY_LIMIT = 500;
-export const MAX_BOOKMARKS = 50;
-const BOOKMARK_DEDUPE_PX = 24;
 const SAVE_DELAY_MS = 800;
 
 const nowIso = (): string => new Date().toISOString();
@@ -126,68 +92,16 @@ const asString = (value: unknown, fallback = ''): string =>
 
 const emptyState = (): ReadingState => ({ version: 2, articles: {}, series: {}, history: [] });
 
-function normalizeMark(value: unknown): ReadingMark | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
-  const at = asString(raw.at);
-  if (at === '') return null;
-  return {
-    progress: clampProgress(raw.progress),
-    scrollY: clampScrollY(raw.scrollY),
-    at,
-  };
-}
-
-function normalizeBookmark(value: unknown): ReadingBookmark | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-  const raw = value as Record<string, unknown>;
-  const id = asString(raw.id).trim();
-  const at = asString(raw.at);
-  if (id === '' || at === '') return null;
-  return {
-    id,
-    progress: clampProgress(raw.progress),
-    scrollY: clampScrollY(raw.scrollY),
-    label: asString(raw.label).replace(/\s+/g, ' ').trim().slice(0, 120),
-    at,
-  };
-}
-
 function normalizeArticle(value: unknown, articleId: string): ArticleReading | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
   const raw = value as Record<string, unknown>;
   const seriesId = typeof raw.seriesId === 'string' && raw.seriesId !== '' ? raw.seriesId : null;
-  const bookmarks: ReadingBookmark[] = [];
-  const seen = new Set<string>();
-  if (Array.isArray(raw.bookmarks)) {
-    for (const item of raw.bookmarks) {
-      const normalized = normalizeBookmark(item);
-      if (!normalized || seen.has(normalized.id)) continue;
-      seen.add(normalized.id);
-      bookmarks.push(normalized);
-      if (bookmarks.length >= MAX_BOOKMARKS) break;
-    }
-  }
-  // v1 只有一个 bookmark 字段；迁移成一条书签，保留原来的滚动位置。
-  if (bookmarks.length === 0) {
-    const legacy = normalizeMark(raw.bookmark);
-    if (legacy) {
-      bookmarks.push({
-        id: `bm_legacy_${legacy.at}`,
-        progress: legacy.progress,
-        scrollY: legacy.scrollY,
-        label: '',
-        at: legacy.at,
-      });
-    }
-  }
   return {
     articleId,
     seriesId,
     progress: clampProgress(raw.progress),
     scrollY: clampScrollY(raw.scrollY),
     lastReadAt: asString(raw.lastReadAt),
-    bookmarks,
   };
 }
 
@@ -336,7 +250,6 @@ export function createReading(platform: Platform, databaseId: () => string | nul
       progress: 0,
       scrollY: 0,
       lastReadAt: nowIso(),
-      bookmarks: [],
     };
     state.articles[articleId] = created;
     return created;
@@ -344,7 +257,6 @@ export function createReading(platform: Platform, databaseId: () => string | nul
 
   function historyItem(
     entry: { articleId: string; progress: number; lastReadAt: string },
-    bookmarks: readonly ReadingBookmark[],
     snapshot: DBSnapshot | null | undefined,
   ): ReadingHistoryItem {
     const article = snapshot?.maps.articles.get(entry.articleId);
@@ -363,13 +275,8 @@ export function createReading(platform: Platform, databaseId: () => string | nul
           ? resolveTags(snapshot, [...article.characterTagIds, ...article.plotTagIds])
           : [],
       r18: article && snapshot ? hasR18PlotTag(snapshot, article.plotTagIds) : false,
-      bookmarked: bookmarks.length > 0,
       to: article ? `/article/${entry.articleId}` : null,
     };
-  }
-
-  function newBookmarkId(): string {
-    return `bm_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
   return {
@@ -394,28 +301,7 @@ export function createReading(platform: Platform, databaseId: () => string | nul
     },
 
     history(snapshot) {
-      return state.history.map((entry) =>
-        historyItem(entry, state.articles[entry.articleId]?.bookmarks ?? [], snapshot),
-      );
-    },
-
-    bookmarks(snapshot) {
-      const items: ReadingBookmarkItem[] = [];
-      for (const entry of Object.values(state.articles)) {
-        for (const bookmark of entry.bookmarks) {
-          const item = historyItem(entry, entry.bookmarks, snapshot);
-          items.push({
-            ...item,
-            progress: bookmark.progress,
-            bookmarkId: bookmark.id,
-            bookmarkAt: bookmark.at,
-            label: bookmark.label,
-            scrollY: bookmark.scrollY,
-            to: item.to ? `${item.to}?bookmark=${encodeURIComponent(bookmark.id)}` : null,
-          });
-        }
-      }
-      return items.sort((a, b) => Date.parse(b.bookmarkAt) - Date.parse(a.bookmarkAt));
+      return state.history.map((entry) => historyItem(entry, snapshot));
     },
 
     visit(input) {
@@ -459,60 +345,6 @@ export function createReading(platform: Platform, databaseId: () => string | nul
         entry.lastReadAt = article.lastReadAt;
       }
       schedulePersist();
-    },
-
-    async addBookmark(id, input) {
-      await ensureLoaded();
-      const article = ensureArticle(id);
-      const stamp = nowIso();
-      const progress = clampProgress(input.progress);
-      const scrollY = clampScrollY(input.scrollY);
-      const label = typeof input.label === 'string' ? input.label.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
-
-      article.progress = progress;
-      article.scrollY = scrollY;
-      article.lastReadAt = stamp;
-      const entry = state.history.find((item) => item.articleId === id);
-      if (entry) {
-        entry.progress = progress;
-        entry.scrollY = scrollY;
-        entry.lastReadAt = stamp;
-      }
-
-      const existing = article.bookmarks.find(
-        (bookmark) => Math.abs(bookmark.scrollY - scrollY) < BOOKMARK_DEDUPE_PX,
-      );
-      if (existing) {
-        existing.progress = progress;
-        existing.scrollY = scrollY;
-        existing.label = label || existing.label;
-        existing.at = stamp;
-        await persist();
-        return existing;
-      }
-
-      const bookmark: ReadingBookmark = {
-        id: newBookmarkId(),
-        progress,
-        scrollY,
-        label,
-        at: stamp,
-      };
-      if (article.bookmarks.length >= MAX_BOOKMARKS) {
-        article.bookmarks.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-        article.bookmarks.shift();
-      }
-      article.bookmarks.unshift(bookmark);
-      await persist();
-      return bookmark;
-    },
-
-    async removeBookmark(id, bookmarkId) {
-      await ensureLoaded();
-      const article = state.articles[id];
-      if (!article) return;
-      article.bookmarks = article.bookmarks.filter((bookmark) => bookmark.id !== bookmarkId);
-      await persist();
     },
 
     async removeHistory(id) {

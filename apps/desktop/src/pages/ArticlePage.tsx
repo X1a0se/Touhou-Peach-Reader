@@ -10,7 +10,7 @@ import {
 import { Markdown, Panel, R18Badge, TagChip } from '@tpr/ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { FavoriteButton } from '../components/FavoriteButton.js';
-import { Link, useParams, useSearchParams } from 'react-router';
+import { Link, useParams } from 'react-router';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { imageSource } from '../lib/images.js';
@@ -32,20 +32,6 @@ function currentPosition(): { progress: number; scrollY: number } {
     progress: readingProgress(scrollY, range.top, range.height, window.innerHeight),
     scrollY,
   };
-}
-
-function fallbackBookmarkLabel(progress: number): string {
-  const element = document.querySelector<HTMLElement>('.reading');
-  const center = window.innerHeight / 2;
-  if (element) {
-    for (const block of element.querySelectorAll<HTMLElement>('p, li, h1, h2, h3, h4, h5, h6, blockquote')) {
-      const rect = block.getBoundingClientRect();
-      if (rect.top > center || rect.bottom < center) continue;
-      const text = block.textContent?.replace(/\s+/g, ' ').trim();
-      if (text) return text.slice(0, 60);
-    }
-  }
-  return `读到 ${Math.round(progress * 100)}%`;
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -126,8 +112,6 @@ function SeriesPager({
 
 export function ArticlePage() {
   const { id = '' } = useParams();
-  const [searchParams] = useSearchParams();
-  const requestedBookmark = searchParams.get('bookmark');
   const services = useServices();
   const { snapshot, status } = useLibraryContext();
   const { settings } = useSettingsContext();
@@ -135,8 +119,6 @@ export function ArticlePage() {
     ready: readingReady,
     visit: visitReading,
     recordProgress,
-    addBookmark: addReadingBookmark,
-    removeBookmark: removeReadingBookmark,
     flush: flushReading,
     article: readingArticle,
   } = useReading();
@@ -147,7 +129,6 @@ export function ArticlePage() {
   const [actionError, setActionError] = useState<string | null>(null);
   const restoredFor = useRef<string | null>(null);
   const bodyRef = useRef<HTMLDivElement | null>(null);
-  const selectedLabelRef = useRef('');
   const lastProgressRef = useRef(0);
   const lastScrollRef = useRef(0);
   const wordCount = useMemo(() => (body === null ? null : countWords(body)), [body]);
@@ -158,7 +139,6 @@ export function ArticlePage() {
   const seriesId = view?.series?.id ?? null;
   const seriesIndex = view?.series?.index ?? null;
   const saved = readingArticle(id);
-  const articleBookmarks = saved?.bookmarks ?? [];
 
   useEffect(() => {
     if (!hasView) return;
@@ -189,27 +169,11 @@ export function ArticlePage() {
     visitReading({ articleId: id, seriesId, seriesIndex });
   }, [hasView, readingReady, id, seriesId, seriesIndex, visitReading]);
 
-  // 记录正文内最后一次非空选区，作为「在某一处文字插入书签」的标签
-  useEffect(() => {
-    const onSelectionChange = () => {
-      const selection = window.getSelection();
-      const body = bodyRef.current;
-      if (!selection || selection.isCollapsed || selection.rangeCount === 0 || !body) return;
-      const anchor = selection.anchorNode;
-      if (!anchor || !body.contains(anchor)) return;
-      const text = selection.toString().replace(/\s+/g, ' ').trim().slice(0, 120);
-      if (text) selectedLabelRef.current = text;
-    };
-    document.addEventListener('selectionchange', onSelectionChange);
-    return () => document.removeEventListener('selectionchange', onSelectionChange);
-  }, []);
-
-  // 正文渲染完成后恢复：URL 指定的书签优先，其次上次阅读位置
+  // 正文渲染完成后恢复上次阅读位置
   useEffect(() => {
     if (!hasView || !readingReady || bodyFor !== id) return;
-    const key = `${id}:${requestedBookmark ?? ''}`;
-    if (restoredFor.current === key) return;
-    restoredFor.current = key;
+    if (restoredFor.current === id) return;
+    restoredFor.current = id;
     let cancelled = false;
     const restore = () => {
       if (cancelled) return;
@@ -217,13 +181,8 @@ export function ArticlePage() {
       if (!element) return;
       const mark = readingArticle(id);
       const range = contentRange(element);
-      const requested = requestedBookmark
-        ? mark?.bookmarks.find((bookmark) => bookmark.id === requestedBookmark)
-        : null;
       let scrollY = 0;
-      if (requested) {
-        scrollY = requested.scrollY;
-      } else if (mark && mark.progress > 0) {
+      if (mark && mark.progress > 0) {
         scrollY = scrollTargetForProgress(mark.progress, range.top, range.height, window.innerHeight);
       } else if (mark) {
         scrollY = mark.scrollY;
@@ -239,7 +198,7 @@ export function ArticlePage() {
     return () => {
       cancelled = true;
     };
-  }, [hasView, readingReady, bodyFor, id, readingArticle, requestedBookmark]);
+  }, [hasView, readingReady, bodyFor, id, readingArticle]);
 
   // 滚动时按正文范围记录；离开页面、切标签或关闭窗口时立即落盘
   useEffect(() => {
@@ -275,31 +234,6 @@ export function ArticlePage() {
       saveNow();
     };
   }, [hasView, readingReady, bodyFor, id, recordProgress, flushReading]);
-
-  const addReadingBookmarkAtCurrentPosition = async (): Promise<void> => {
-    setActionError(null);
-    const position = currentPosition();
-    const label = selectedLabelRef.current || fallbackBookmarkLabel(position.progress);
-    try {
-      await addReadingBookmark(id, {
-        progress: position.progress,
-        scrollY: position.scrollY,
-        label,
-      });
-      selectedLabelRef.current = '';
-    } catch (cause: unknown) {
-      setActionError(cause instanceof Error ? cause.message : String(cause));
-    }
-  };
-
-  const removeReadingBookmarkAt = async (bookmarkId: string): Promise<void> => {
-    setActionError(null);
-    try {
-      await removeReadingBookmark(id, bookmarkId);
-    } catch (cause: unknown) {
-      setActionError(cause instanceof Error ? cause.message : String(cause));
-    }
-  };
 
   const openExternal = (url: string) => {
     setActionError(null);
@@ -378,20 +312,6 @@ export function ArticlePage() {
                       编辑
                     </Link>
                   ) : null}
-                  <button
-                    type="button"
-                    aria-label="在当前位置添加书签"
-                    title="在当前位置添加书签；先选中文字可让书签更易辨认"
-                    disabled={bodyFor !== id}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => {
-                      void addReadingBookmarkAtCurrentPosition();
-                    }}
-                    className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-sky-50 hover:text-sky-800 disabled:opacity-50 dark:hover:bg-sky-950 dark:hover:text-sky-200"
-                  >
-                    <span aria-hidden="true">🔖</span>
-                    加书签
-                  </button>
                   <FavoriteButton kind="article" id={article.id} />
                   <span className="font-mono text-[0.65rem] text-muted-foreground">{article.id}</span>
                 </span>
@@ -405,7 +325,6 @@ export function ArticlePage() {
               {saved && saved.progress > 0.01 ? (
                 <p className="mt-2 text-xs text-muted-foreground">
                   上次读到 {Math.round(saved.progress * 100)}%
-                  {articleBookmarks.length > 0 ? ` · 已加 ${articleBookmarks.length} 个书签` : ''}
                 </p>
               ) : null}
               <dl className="mt-4 grid grid-cols-[4rem_1fr] gap-x-3 gap-y-1.5 text-sm">
@@ -472,45 +391,6 @@ export function ArticlePage() {
             {actionError}
           </p>
         )}
-
-        {articleBookmarks.length > 0 ? (
-          <section className="flex flex-col gap-2">
-            <div className="flex items-baseline gap-2">
-              <h2 className="text-sm font-medium text-muted-foreground">书签</h2>
-              <span className="text-xs text-muted-foreground">{articleBookmarks.length} 处</span>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              {articleBookmarks.map((bookmark) => (
-                <div
-                  key={bookmark.id}
-                  className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-2"
-                >
-                  <button
-                    type="button"
-                    onClick={() => window.scrollTo({ top: bookmark.scrollY, behavior: 'smooth' })}
-                    className="flex min-w-0 flex-1 items-center gap-2 text-left text-sm transition-colors hover:text-accent"
-                  >
-                    <span aria-hidden="true">🔖</span>
-                    <span className="truncate">{bookmark.label || `读到 ${Math.round(bookmark.progress * 100)}%`}</span>
-                    <span className="ml-auto shrink-0 font-mono text-[0.65rem] text-muted-foreground">
-                      {Math.round(bookmark.progress * 100)}% · {bookmark.at.slice(0, 10)}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    aria-label="删除书签"
-                    onClick={() => {
-                      void removeReadingBookmarkAt(bookmark.id);
-                    }}
-                    className="shrink-0 rounded-md border border-border px-2 py-0.5 text-[0.7rem] text-muted-foreground transition-colors hover:border-red-300 hover:text-red-600 dark:hover:text-red-300"
-                  >
-                    删除
-                  </button>
-                </div>
-              ))}
-            </div>
-          </section>
-        ) : null}
 
         {view.characterTags.length > 0 || view.plotTags.length > 0 ? (
           <section className="flex flex-col gap-2">
