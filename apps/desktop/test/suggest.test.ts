@@ -22,8 +22,10 @@ describe('search/suggest: # 标签联想纯函数', () => {
     expect(state).not.toBeNull();
     expect(state?.items.some((item) => item.category === 'virtual')).toBe(true);
     expect(state?.items.map((item) => item.name)).toEqual(
-      expect.arrayContaining(['已完结', '连载中', '短篇文', '系列文', '博丽灵梦', '日常', '红魔乡']),
+      expect.arrayContaining(['已完结', '连载中', '博丽灵梦', '日常', '红魔乡']),
     );
+    expect(state?.items.map((item) => item.name)).not.toContain('短篇文');
+    expect(state?.items.map((item) => item.name)).not.toContain('系列文');
   });
 
   it('suggest-filter: 按标签名与别名过滤（大小写无关）', () => {

@@ -9,7 +9,9 @@ import type { Platform, ZipLimits } from '@tpr/platform';
 import { DEFAULT_DATABASE_SOURCE } from '../repo.js';
 import {
   DEFAULT_READING_TYPOGRAPHY,
+  normalizeReadingFonts,
   normalizeReadingTypography,
+  type ReadingFontAsset,
   type ReadingTypographySettings,
 } from '../typography.js';
 
@@ -57,6 +59,8 @@ export interface AppSettings {
   showArticleEditorLink: boolean;
   /** 阅读排版（字体、字号、行距、段间距） */
   reading: ReadingTypographySettings;
+  /** 导入到本机的字体元数据；字体文件由桌面端存在 `$APPDATA/fonts/` */
+  fonts: ReadingFontAsset[];
   /** 解压限额覆盖（默认取 design §7.4 的 512MB / 8GB / 20 万条 / 200 倍） */
   extractLimits?: Partial<ZipLimits>;
 }
@@ -72,6 +76,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   autoImportDatabaseUpdate: false,
   showArticleEditorLink: false,
   reading: { ...DEFAULT_READING_TYPOGRAPHY },
+  fonts: [],
 };
 
 const WALLPAPER_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -142,6 +147,11 @@ export function parseSettings(value: unknown): AppSettings | null {
     raw.wallpapers !== null && typeof raw.wallpapers === 'object' && !Array.isArray(raw.wallpapers)
       ? (raw.wallpapers as Record<string, unknown>)
       : {};
+  const fonts = normalizeReadingFonts(raw.fonts);
+  const reading = normalizeReadingTypography(raw.reading);
+  if (reading.customFontId !== null && !fonts.some((font) => font.id === reading.customFontId)) {
+    reading.customFontId = null;
+  }
   const next: AppSettings = {
     theme: asTheme(raw.theme),
     palette: asPalette(raw.palette),
@@ -167,7 +177,8 @@ export function parseSettings(value: unknown): AppSettings | null {
       typeof raw.showArticleEditorLink === 'boolean'
         ? raw.showArticleEditorLink
         : DEFAULT_SETTINGS.showArticleEditorLink,
-    reading: normalizeReadingTypography(raw.reading),
+    reading,
+    fonts,
   };
   if (
     raw.extractLimits !== null &&
@@ -202,9 +213,12 @@ export interface WallpaperPatch {
 }
 
 /** 部分更新：wallpapers 与 reading 只合并到对应槽位/字段，不动其他设置 */
-export type SettingsPatch = Partial<Omit<AppSettings, 'wallpapers' | 'extractLimits' | 'reading'>> & {
+export type SettingsPatch = Partial<
+  Omit<AppSettings, 'wallpapers' | 'extractLimits' | 'reading' | 'fonts'>
+> & {
   wallpapers?: { home?: WallpaperPatch; article?: WallpaperPatch };
   reading?: Partial<ReadingTypographySettings>;
+  fonts?: ReadingFontAsset[];
   extractLimits?: Partial<ZipLimits>;
 };
 
@@ -220,6 +234,11 @@ export interface SettingsService {
 }
 
 function sanitize(input: AppSettings): AppSettings {
+  const fonts = normalizeReadingFonts(input.fonts);
+  const reading = normalizeReadingTypography(input.reading);
+  if (reading.customFontId !== null && !fonts.some((font) => font.id === reading.customFontId)) {
+    reading.customFontId = null;
+  }
   const next: AppSettings = {
     theme: input.theme,
     palette: asPalette(input.palette),
@@ -245,7 +264,8 @@ function sanitize(input: AppSettings): AppSettings {
       typeof input.showArticleEditorLink === 'boolean'
         ? input.showArticleEditorLink
         : DEFAULT_SETTINGS.showArticleEditorLink,
-    reading: normalizeReadingTypography(input.reading),
+    reading,
+    fonts,
   };
   if (input.extractLimits !== undefined && Object.keys(input.extractLimits).length > 0) {
     next.extractLimits = { ...input.extractLimits };

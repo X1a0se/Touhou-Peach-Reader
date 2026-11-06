@@ -96,6 +96,14 @@ describe('parseQuery', () => {
     expect(parsed.tagNames).toContain('红魔馆');
     expect(parsed.phrases).toEqual(['茶会 午后']);
   });
+
+  it('不再把短篇文/系列文当作虚拟标签', () => {
+    for (const name of ['#短篇文', '#系列文', '#短篇', '#系列']) {
+      const parsed = parseQuery(name);
+      expect(parsed.virtualTags).toEqual([]);
+      expect(parsed.tagNames).toHaveLength(1);
+    }
+  });
 });
 
 describe('search index', () => {
@@ -130,11 +138,11 @@ describe('search index', () => {
     expect(hits.some((hit) => hit.kind === 'series')).toBe(true);
   });
 
-  it('#已完结 命中系列与系列条目', async () => {
+  it('#已完结 只命中系列，不返回系列内的文章', async () => {
     const { engine } = await buildFixture();
     const hits = engine.search('#已完结');
-    expect(hits.some((hit) => hit.kind === 'series')).toBe(true);
-    expect(hits.some((hit) => hit.kind === 'article')).toBe(true);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((hit) => hit.kind === 'series')).toBe(true);
   });
 
   it('筛选：短篇 / 系列 / 作者 / 角色', async () => {
@@ -313,6 +321,7 @@ describe('search service（导入后的真实数据流）', () => {
 
     const completed = await services.search.search('#已完结');
     expect(completed.items.some((item) => item.kind === 'series')).toBe(true);
+    expect(completed.items.every((item) => item.kind === 'series')).toBe(true);
 
     // 多标签筛选：空查询 + 两个标签，只留同时带两个标签的系列第一篇
     const tagged = await services.search.search('', {

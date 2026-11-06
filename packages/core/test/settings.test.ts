@@ -254,6 +254,7 @@ describe('settings: 阅读排版', () => {
     const platform = createMemoryPlatform({ dataDir: '/app' });
     expect((await createSettings(platform).load()).reading).toEqual({
       fontFamily: 'system',
+      customFontId: null,
       fontSize: 16,
       lineHeight: 1.85,
       paragraphSpacing: 0.9,
@@ -275,6 +276,7 @@ describe('settings: 阅读排版', () => {
     const loaded = await createSettings(platform).load();
     expect(loaded.reading).toEqual({
       fontFamily: 'serif',
+      customFontId: null,
       fontSize: 20,
       lineHeight: 1.85,
       paragraphSpacing: 0.9,
@@ -289,6 +291,7 @@ describe('settings: 阅读排版', () => {
       })?.reading,
     ).toEqual({
       fontFamily: 'system',
+      customFontId: null,
       fontSize: 24,
       lineHeight: 1.4,
       paragraphSpacing: 0,
@@ -299,9 +302,71 @@ describe('settings: 阅读排版', () => {
       })?.reading,
     ).toEqual({
       fontFamily: 'kai',
+      customFontId: null,
       fontSize: 14,
       lineHeight: 2.2,
       paragraphSpacing: 2,
     });
+  });
+
+  it('reading-fonts: 本地字体元数据持久化并能选中', async () => {
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const settings = createSettings(platform);
+    await settings.load();
+    const font = {
+      id: 'font_alpha',
+      name: '霞鹜文楷',
+      fileName: 'font_alpha.ttf',
+      format: 'ttf' as const,
+      importedAt: '2026-01-01T00:00:00.000Z',
+    };
+    await settings.save({ fonts: [font], reading: { customFontId: font.id } });
+
+    const loaded = await createSettings(platform).load();
+    expect(loaded.fonts).toEqual([font]);
+    expect(loaded.reading.customFontId).toBe('font_alpha');
+  });
+
+  it('reading-fonts-parse: 非法字体与重复字体被过滤，缺失的自定义字体回退系统字体', () => {
+    const parsed = parseSettings({
+      fonts: [
+        {
+          id: 'font_ok',
+          name: '合格字体',
+          fileName: 'font_ok.woff2',
+          format: 'woff2',
+          importedAt: '2026-01-01T00:00:00.000Z',
+        },
+        { id: 'bad id', name: '坏 id', fileName: 'bad.ttf', format: 'ttf', importedAt: '2026-01-01T00:00:00.000Z' },
+        {
+          id: 'font_ext',
+          name: '扩展名不符',
+          fileName: 'font_ext.woff',
+          format: 'ttf',
+          importedAt: '2026-01-01T00:00:00.000Z',
+        },
+        {
+          id: 'font_ok',
+          name: '重复字体',
+          fileName: 'font_ok.woff2',
+          format: 'woff2',
+          importedAt: '2026-01-02T00:00:00.000Z',
+        },
+      ],
+      reading: { customFontId: 'font_missing' },
+    });
+    expect(parsed?.fonts.map((font) => font.id)).toEqual(['font_ok']);
+    expect(parsed?.reading.customFontId).toBeNull();
+  });
+
+  it('reading-fonts-limit: 最多保留 20 个本地字体', () => {
+    const fonts = Array.from({ length: 25 }, (_, index) => ({
+      id: `font_${index}`,
+      name: `字体 ${index}`,
+      fileName: `font_${index}.ttf`,
+      format: 'ttf' as const,
+      importedAt: '2026-01-01T00:00:00.000Z',
+    }));
+    expect(parseSettings({ fonts })?.fonts).toHaveLength(20);
   });
 });

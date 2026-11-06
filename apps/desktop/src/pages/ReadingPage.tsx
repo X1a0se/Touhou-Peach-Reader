@@ -36,7 +36,7 @@ function ProgressBar({ progress }: { progress: number }) {
 }
 
 export function ReadingPage() {
-  const { history, bookmarks, removeHistory, clearHistory, toggleBookmark } = useReading();
+  const { history, bookmarks, removeHistory, clearHistory, removeBookmark } = useReading();
   const [tab, setTab] = useState<Tab>('history');
 
   const list = tab === 'history' ? history : bookmarks;
@@ -90,7 +90,7 @@ export function ReadingPage() {
           description={
             tab === 'history'
               ? '打开任意文章后，这里会自动记录阅读时间与读到哪儿。'
-              : '在文章页点「书签」，即可标记想回头再读的位置。'
+              : '在文章页选中想记住的文字（或直接滚动到某处）后点「加书签」，即可标记并快速跳回。'
           }
           action={
             <Link to="/articles">
@@ -147,7 +147,7 @@ export function ReadingPage() {
                 </div>
               ))
             : bookmarks.map((entry) => (
-                <div key={entry.articleId} className="flex items-start gap-3 p-4">
+                <div key={entry.bookmarkId} className="flex items-start gap-3 p-4">
                   <div className="flex min-w-0 flex-1 flex-col gap-1.5">
                     <div className="flex flex-wrap items-center gap-2">
                       {entry.r18 ? <R18Badge /> : null}
@@ -168,6 +168,9 @@ export function ReadingPage() {
                         </Link>
                       ) : null}
                     </div>
+                    <p className="text-xs text-muted-foreground">
+                      🔖 {entry.label || `读到 ${Math.round(entry.progress * 100)}%`}
+                    </p>
                     <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                       <span>书签位置：{formatTime(entry.bookmarkAt)}</span>
                       <ProgressBar progress={entry.progress} />
@@ -179,10 +182,10 @@ export function ReadingPage() {
                     variant="ghost"
                     className="shrink-0"
                     onClick={() => {
-                      void toggleBookmark(entry.articleId, entry.progress, 0);
+                      void removeBookmark(entry.articleId, entry.bookmarkId);
                     }}
                   >
-                    取消书签
+                    删除书签
                   </Button>
                 </div>
               ))}

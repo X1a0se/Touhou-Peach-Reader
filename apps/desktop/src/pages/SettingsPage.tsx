@@ -1,7 +1,13 @@
-import { DEFAULT_DATABASE_SOURCE, READING_FONT_FAMILIES, REPOSITORY_URL } from '@tpr/core';
+import {
+  DEFAULT_DATABASE_SOURCE,
+  MAX_READING_FONTS,
+  READING_FONT_FAMILIES,
+  REPOSITORY_URL,
+} from '@tpr/core';
 import type {
   AppUpdateCheck,
   PaletteId,
+  ReadingFontAsset,
   ReadingTypographySettings,
   SettingsPatch,
   ThemeMode,
@@ -9,13 +15,20 @@ import type {
   WallpaperSettings,
 } from '@tpr/core';
 import { Button, Panel, SectionHeading } from '@tpr/ui';
-import { type CSSProperties, useEffect, useMemo, useState } from 'react';
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
 import { useBlocklist } from '../blocklist/BlocklistProvider.js';
 import { useServices } from '../context.js';
+import {
+  FONT_ACCEPT,
+  fontStack,
+  importFontAsset,
+  removeFontAsset,
+  validateFontFile,
+} from '../fonts/fonts.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
 import { getAppRuntimeInfo, hasTauriInvoke, type AppRuntimeInfo } from '../platform/app-info.js';
 import { pickWallpaperFile } from '../platform/files.js';
-import { READING_FONT_STACKS, useSettingsContext } from '../settings/SettingsProvider.js';
+import { useSettingsContext } from '../settings/SettingsProvider.js';
 
 const describe = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
@@ -220,6 +233,9 @@ export function SettingsPage() {
   const [appUpdate, setAppUpdate] = useState<AppUpdateCheck | null>(null);
   const [appError, setAppError] = useState<string | null>(null);
   const [readingDraft, setReadingDraft] = useState<ReadingTypographySettings>(settings.reading);
+  const [fontError, setFontError] = useState<string | null>(null);
+  const [fontBusy, setFontBusy] = useState(false);
+  const fontInputRef = useRef<HTMLInputElement | null>(null);
   const [tagQuery, setTagQuery] = useState('');
   const [runtime, setRuntime] = useState<AppRuntimeInfo | null>(null);
   const [runtimeLoading, setRuntimeLoading] = useState(true);
@@ -270,6 +286,7 @@ export function SettingsPage() {
   }, [
     ready,
     settings.reading.fontFamily,
+    settings.reading.customFontId,
     settings.reading.fontSize,
     settings.reading.lineHeight,
     settings.reading.paragraphSpacing,
@@ -352,9 +369,59 @@ export function SettingsPage() {
   };
 
   const chooseReadingFont = (fontFamily: ReadingTypographySettings['fontFamily']): void => {
-    const next = { ...readingDraft, fontFamily };
+    const next = { ...readingDraft, fontFamily, customFontId: null };
     setReadingDraft(next);
     void persist({ reading: next });
+  };
+
+  const importLocalFont = async (file: File): Promise<void> => {
+    setFontError(null);
+    const invalid = validateFontFile(file);
+    if (invalid !== null) {
+      setFontError(invalid);
+      return;
+    }
+    if (settings.fonts.length >= MAX_READING_FONTS) {
+      setFontError(`最多只能导入 ${MAX_READING_FONTS} 个本地字体`);
+      return;
+    }
+    setFontBusy(true);
+    try {
+      const asset = await importFontAsset(services.platform, file);
+      const nextReading = { ...readingDraft, customFontId: asset.id };
+      await persist({ fonts: [...settings.fonts, asset], reading: nextReading });
+      setReadingDraft(nextReading);
+    } catch (cause) {
+      setFontError(describe(cause));
+    } finally {
+      setFontBusy(false);
+    }
+  };
+
+  const useLocalFont = (asset: ReadingFontAsset): void => {
+    const next = { ...readingDraft, customFontId: asset.id };
+    setReadingDraft(next);
+    void persist({ reading: next });
+  };
+
+  const deleteLocalFont = async (asset: ReadingFontAsset): Promise<void> => {
+    if (!window.confirm(`删除本地字体「${asset.name}」？`)) return;
+    setFontError(null);
+    setFontBusy(true);
+    try {
+      await removeFontAsset(services.platform, asset);
+      const nextReading =
+        readingDraft.customFontId === asset.id ? { ...readingDraft, customFontId: null } : readingDraft;
+      await persist({
+        fonts: settings.fonts.filter((font) => font.id !== asset.id),
+        reading: nextReading,
+      });
+      setReadingDraft(nextReading);
+    } catch (cause) {
+      setFontError(describe(cause));
+    } finally {
+      setFontBusy(false);
+    }
   };
 
   const redownload = async (): Promise<void> => {
@@ -477,8 +544,8 @@ export function SettingsPage() {
               <Button
                 key={item.value}
                 size="sm"
-                variant={readingDraft.fontFamily === item.value ? 'primary' : 'secondary'}
-                aria-pressed={readingDraft.fontFamily === item.value}
+                variant={readingDraft.customFontId === null && readingDraft.fontFamily === item.value ? 'primary' : 'secondary'}
+                aria-pressed={readingDraft.customFontId === null && readingDraft.fontFamily === item.value}
                 disabled={!ready}
                 onClick={() => chooseReadingFont(item.value)}
               >
@@ -486,6 +553,69 @@ export function SettingsPage() {
               </Button>
             ))}
           </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={!ready || fontBusy || settings.fonts.length >= MAX_READING_FONTS}
+              onClick={() => fontInputRef.current?.click()}
+            >
+              {fontBusy ? '处理中…' : '导入本地字体'}
+            </Button>
+            <span className="text-xs text-muted-foreground">
+              支持 TTF / OTF / WOFF / WOFF2，单个不超过 20 MB；已导入 {settings.fonts.length}/{MAX_READING_FONTS}
+            </span>
+            <input
+              ref={fontInputRef}
+              type="file"
+              accept={FONT_ACCEPT}
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = '';
+                if (file) void importLocalFont(file);
+              }}
+            />
+          </div>
+          {fontError !== null ? <p className="text-xs text-red-500">{fontError}</p> : null}
+          {settings.fonts.length > 0 ? (
+            <ul className="flex flex-col gap-1.5">
+              {settings.fonts.map((asset) => {
+                const active = readingDraft.customFontId === asset.id;
+                return (
+                  <li
+                    key={asset.id}
+                    className={`flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 ${
+                      active ? 'border-accent bg-accent-soft' : 'border-border'
+                    }`}
+                  >
+                    <span className="min-w-0 truncate text-sm">{asset.name}</span>
+                    <span className="text-[0.65rem] text-muted-foreground">
+                      {asset.format.toUpperCase()} · {asset.importedAt.slice(0, 10)}
+                    </span>
+                    <span className="ml-auto flex items-center gap-1.5">
+                      <Button
+                        size="sm"
+                        variant={active ? 'primary' : 'secondary'}
+                        disabled={!ready || fontBusy}
+                        onClick={() => useLocalFont(asset)}
+                      >
+                        {active ? '使用中' : '使用'}
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        disabled={!ready || fontBusy}
+                        onClick={() => void deleteLocalFont(asset)}
+                      >
+                        删除
+                      </Button>
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          ) : null}
         </div>
 
         <div className="grid gap-4 lg:grid-cols-[18rem_1fr]">
@@ -567,7 +697,7 @@ export function SettingsPage() {
               className="reading max-h-64 overflow-y-auto"
               style={
                 {
-                  '--reading-font-family': READING_FONT_STACKS[readingDraft.fontFamily],
+                  '--reading-font-family': fontStack(readingDraft),
                   '--reading-font-size': `${readingDraft.fontSize}px`,
                   '--reading-line-height': String(readingDraft.lineHeight),
                   '--reading-paragraph-gap': `${readingDraft.paragraphSpacing}em`,

@@ -248,7 +248,7 @@ export function SearchPage() {
         <EmptyState
           icon="🔎"
           title="输入关键词或选择标签开始搜索"
-          description="试试 #已完结、#短篇文，或同时选择多个标签。"
+          description="试试 #已完结、#连载中，或同时选择多个标签。"
         />
       ) : null}
 

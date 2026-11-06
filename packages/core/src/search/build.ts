@@ -89,7 +89,6 @@ export async function buildSearchIndex(
     });
   }
 
-  const seriesById = maps.series;
   const tagNameById = (id: string): string => maps.tags.get(id)?.name ?? '';
   const personNames = (ids: readonly string[]): string[] =>
     ids.flatMap((id) => {
@@ -135,8 +134,6 @@ export async function buildSearchIndex(
 
     const tags = [...article.characterTagIds, ...article.plotTagIds].map(tagNameById).filter(Boolean);
     const virtual: string[] = [article.type === 'short' ? 'v:short' : 'v:series-entry'];
-    const series = article.seriesId ? seriesById.get(article.seriesId) : undefined;
-    if (series) virtual.push(series.status === 'completed' ? 'v:completed' : 'v:ongoing');
 
     docs.push({
       rid: `a:${article.id}`,

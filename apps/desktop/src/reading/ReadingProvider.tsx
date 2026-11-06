@@ -1,5 +1,7 @@
 import type {
   ArticleReading,
+  ReadingBookmark,
+  ReadingBookmarkInput,
   ReadingBookmarkItem,
   ReadingHistoryItem,
   ReadingVisit,
@@ -17,7 +19,8 @@ interface ReadingContextValue {
   series(id: string): SeriesReading | null;
   visit(input: ReadingVisit): void;
   recordProgress(id: string, progress: number, scrollY: number): void;
-  toggleBookmark(id: string, progress: number, scrollY: number): Promise<boolean>;
+  addBookmark(id: string, input: ReadingBookmarkInput): Promise<ReadingBookmark | null>;
+  removeBookmark(id: string, bookmarkId: string): Promise<void>;
   removeHistory(id: string): Promise<void>;
   clearHistory(): Promise<void>;
   flush(): Promise<void>;
@@ -81,11 +84,19 @@ export function ReadingProvider({ children }: { children: ReactNode }) {
     [services],
   );
 
-  const toggleBookmark = useCallback(
-    async (id: string, progress: number, scrollY: number): Promise<boolean> => {
-      const next = await services.reading.toggleBookmark(id, progress, scrollY);
+  const addBookmark = useCallback(
+    async (id: string, input: ReadingBookmarkInput): Promise<ReadingBookmark | null> => {
+      const bookmark = await services.reading.addBookmark(id, input);
       refresh();
-      return next;
+      return bookmark;
+    },
+    [services, refresh],
+  );
+
+  const removeBookmark = useCallback(
+    async (id: string, bookmarkId: string): Promise<void> => {
+      await services.reading.removeBookmark(id, bookmarkId);
+      refresh();
     },
     [services, refresh],
   );
@@ -125,7 +136,8 @@ export function ReadingProvider({ children }: { children: ReactNode }) {
     series: (id) => services.reading.series(id),
     visit,
     recordProgress,
-    toggleBookmark,
+    addBookmark,
+    removeBookmark,
     removeHistory,
     clearHistory,
     flush,

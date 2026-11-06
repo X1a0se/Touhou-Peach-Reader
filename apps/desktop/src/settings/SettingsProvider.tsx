@@ -1,6 +1,5 @@
 import type {
   AppSettings,
-  ReadingFontFamily,
   ReadingTypographySettings,
   Services,
   SettingsPatch,
@@ -9,10 +8,14 @@ import type {
 import { DEFAULT_SETTINGS } from '@tpr/core';
 import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
 import { useServices } from '../context.js';
+import { READING_FONT_STACKS, fontStack, syncFontFaces } from '../fonts/fonts.js';
+
+export { READING_FONT_STACKS };
 
 export interface SettingsState {
   settings: AppSettings;
   ready: boolean;
+  fontRevision: number;
   save(patch: SettingsPatch): Promise<void>;
 }
 
@@ -40,20 +43,13 @@ function applyAppearance(theme: ThemeMode, palette: string): void {
   root.style.colorScheme = resolveDark(theme) ? 'dark' : 'light';
 }
 
-export const READING_FONT_STACKS: Record<ReadingFontFamily, string> = {
-  system: 'system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif',
-  serif: '"Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, serif',
-  sans: '"Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif',
-  kai: 'KaiTi, STKaiti, "Noto Serif SC", serif',
-};
-
 /**
  * 阅读排版落到 <html> 的 CSS 变量，由 `.reading` 消费。
  * 存 px 而不是 rem：设置页的滑杆与预览在同一坐标系里。
  */
 function applyReadingTypography(reading: ReadingTypographySettings): void {
   const root = document.documentElement;
-  root.style.setProperty('--reading-font-family', READING_FONT_STACKS[reading.fontFamily]);
+  root.style.setProperty('--reading-font-family', fontStack(reading));
   root.style.setProperty('--reading-font-size', `${reading.fontSize}px`);
   root.style.setProperty('--reading-line-height', String(reading.lineHeight));
   root.style.setProperty('--reading-paragraph-gap', `${reading.paragraphSpacing}em`);
@@ -63,6 +59,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   const services: Services = useServices();
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [ready, setReady] = useState(false);
+  const [fontRevision, setFontRevision] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -86,12 +83,24 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   }, [settings.theme, settings.palette]);
 
   useEffect(() => {
+    let cancelled = false;
+    void syncFontFaces(services.platform, settings.fonts).then(() => {
+      if (!cancelled) setFontRevision((value) => value + 1);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [services, settings.fonts]);
+
+  useEffect(() => {
     applyReadingTypography(settings.reading);
   }, [
     settings.reading.fontFamily,
+    settings.reading.customFontId,
     settings.reading.fontSize,
     settings.reading.lineHeight,
     settings.reading.paragraphSpacing,
+    fontRevision,
   ]);
 
   const save = async (patch: SettingsPatch): Promise<void> => {
@@ -100,7 +109,7 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <SettingsContext.Provider value={{ settings, ready, save }}>{children}</SettingsContext.Provider>
+    <SettingsContext.Provider value={{ settings, ready, fontRevision, save }}>{children}</SettingsContext.Provider>
   );
 }
 
