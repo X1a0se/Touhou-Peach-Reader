@@ -2287,6 +2287,17 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 
 ---
 
+## 追加记录：编辑器「最近使用」排序
+
+- **记录位置**：新增 `apps/desktop/src/editor/recent.ts`，按库隔离写在 WebView 的 `localStorage`，键 `tpr:recent:v1:{databaseId}`（`databaseId` 为空时 `_none`），与草稿箱同一套约定：不随数据库导出、换机不迁移。读、解析、写全在 try/catch 内静默降级——排序只是提示，不是数据，存储被禁用或配额满时退化为「没有最近记录」，绝不阻断保存实体。
+- **六个桶**：`author`、`translator`、`series`、`tag:character`、`tag:plot`、`image`；每桶上限 30 条，单 id 超过 64 字符或不是非空字符串时丢弃，`normalizeRecent` 对坏 JSON / 错误形状一律当空记录。`orderByRecent(items, order)` 稳定、不改入参：`order` 中出现的 id 按出现顺序排前，其余保持传入顺序（编辑器列表原本已按 `updatedAt` 倒序），`order` 里不存在的 id 忽略。删除实体后 `forget(ids)` 从所有桶清掉，避免悬空 id 占着前排；合并标签后对源标签同样 `forget`。
+- **只记保存成功**：`articleUsage(draft)` 产出作者 / 译者 / 系列 / 角色 / 情节 / 图片（封面 + 插图，按表单顺序）六组 `{bucket, ids}`，`seriesUsage(draft)` 相同但没有 `series` 桶；两者都跳过空 id 与重复 id。`ArticlesPanel` / `SeriesPanel` 在 `editor.saveArticle` / `saveSeries` 成功之后才 `touchUsage(...)`，表单里勾选后取消不影响顺序。图片页上传成功、单张图片元数据保存成功时 `touch('image', [id])`；封面/插图内联上传成功后同样立刻记为该图片「刚用过」，否则刚传的图仍会排在候选列表后面。
+- **展示位置**：`apps/desktop/src/editor/RecentProvider.tsx` 包在 `EditorPage` 外层（按当前 `databaseId` 换桶，写入后从存储重读快照放进 state 触发渲染，避免内存与 localStorage 两份真相）。文章 `ArticleForm` 的系列下拉、作者、译者、角色标签、情节标签、封面下拉、插图多选，系列 `SeriesForm` 的同名控件，以及图片页列表都改走 `recent.order(...)`；`R18Field` 与情节 `TagPicker` 共用同一份排序结果，勾选联动不受影响。
+- **文档**：`README.md` 编辑器条目补一句说明排序只记本机、按库隔离、不影响导出。
+- **取舍**：不做全局「最近使用」页面，也不把记录写进数据库包（属于本机操作习惯，跨机无意义）；不做 LRU 时间戳，只存顺序数组——30 条的插入/去重成本可忽略，且顺序本身就是唯一需要的信息。
+
+---
+
 ## 附：文档自检
 
 | 检查项 | 结论 |

@@ -31,6 +31,8 @@ import { SeriesPicker } from '../components/SeriesPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
 import { useServices } from '../context.js';
 import { imageSource } from '../lib/images.js';
+import { RecentProvider, useRecent } from '../editor/RecentProvider.js';
+import { articleUsage, seriesUsage } from '../editor/recent.js';
 import { editDraftId, findDraftForTarget, type DraftStore } from '../editor/drafts.js';
 import { formatBytes, prepareImageUpload, uploadNotice } from '../editor/image-upload.js';
 import { filterByQuery, joinSearchParts, matchesQuery } from '../editor/filter.js';
@@ -120,6 +122,7 @@ function CoverField({
   const services = useServices();
   const { refresh } = useLibraryContext();
   const { settings, ready: settingsReady } = useSettingsContext();
+  const recent = useRecent();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -146,6 +149,7 @@ function CoverField({
         caption,
       });
       await refresh();
+      recent.touch('image', [id]);
       onChange(id);
       setMessage(uploadNotice(prepared, file.name, '已上传并选中'));
     } catch (error) {
@@ -223,6 +227,7 @@ function IllustrationUpload({
   const services = useServices();
   const { refresh } = useLibraryContext();
   const { settings, ready: settingsReady } = useSettingsContext();
+  const recent = useRecent();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -244,6 +249,7 @@ function IllustrationUpload({
         caption: file.name.replace(/\.[^.]+$/, ''),
       });
       await refresh();
+      recent.touch('image', [id]);
       onChange((current) => [...current, id]);
       setMessage(uploadNotice(prepared, file.name, '已上传插图'));
     } catch (error) {
@@ -291,7 +297,20 @@ function IllustrationUpload({
   );
 }
 
+/**
+ * 编辑器页：整页套一层「最近使用」排序，按库隔离。
+ * 文章/系列表单里的作者、译者、系列、标签、封面与插图候选列表读的是同一份记录。
+ */
 export function EditorPage() {
+  const { snapshot } = useLibraryContext();
+  return (
+    <RecentProvider databaseId={snapshot?.manifest.databaseId ?? ''}>
+      <EditorPageBody />
+    </RecentProvider>
+  );
+}
+
+function EditorPageBody() {
   const services = useServices();
   const { snapshot, refresh } = useLibraryContext();
   const [tab, setTab] = useState<Tab>('articles');
@@ -733,6 +752,7 @@ function ArticlesPanel({
 }) {
   const library = useLibraryContext();
   const services = useServices();
+  const recent = useRecent();
   const databaseId = services.library.current()?.databaseId ?? '';
   const store = useDraftStore(databaseId);
   const box = useDraftBox<ArticleDraftPayload>(store, 'article');
@@ -918,6 +938,8 @@ function ArticlesPanel({
           onSubmit={async (draft) => {
             const ok = await run(async () => {
               await editor.saveArticle(draft);
+              // 保存成功才算「用过」：作者/译者/系列/标签/图片提到各列表最前
+              recent.touchUsage(articleUsage(draft));
             }, '文章已保存');
             if (!ok) return;
             if (box.draftId) box.discard(box.draftId);
@@ -1158,7 +1180,23 @@ function ArticleForm({
     };
   }, [hasDraft, initialId, services]);
 
-  const authors = snapshot.authors;
+  /**
+   * 最近使用排序：本机上次保存时用过的作者 / 译者 / 系列 / 角色与情节标签 / 图片排到列表前面，
+   * 其余保持快照顺序。只改「候选列表的展示顺序」，不改保存值。
+   */
+  const recent = useRecent();
+  const authors = recent.order('author', snapshot.authors);
+  const translators = recent.order('translator', snapshot.authors);
+  const seriesOptions = recent.order('series', snapshot.series);
+  const characterTags = recent.order(
+    'tag:character',
+    snapshot.tags.filter((tag) => tag.category === 'character'),
+  );
+  const plotTags = recent.order(
+    'tag:plot',
+    snapshot.tags.filter((tag) => tag.category === 'plot'),
+  );
+  const imageOptions = recent.order('image', snapshot.images);
 
   /** 当前文章在所属系列里的编号（新选系列时为 null） */
   const position = initial ? articleSeriesPosition(snapshot, initial.id) : null;
@@ -1283,7 +1321,7 @@ function ArticleForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
           <span className={labelClass}>系列</span>
-          <SeriesPicker series={snapshot.series} value={seriesId} onChange={setSeriesId} />
+          <SeriesPicker series={seriesOptions} value={seriesId} onChange={setSeriesId} />
           <span className="text-xs text-muted-foreground">
             {selectedSeries
               ? position && position.series.id === selectedSeries.id
@@ -1305,38 +1343,38 @@ function ArticleForm({
       <AuthorPicker title="作者" authors={authors} value={authorIds} onChange={setAuthorIds} />
       <AuthorPicker
         title="译者"
-        authors={authors}
+        authors={translators}
         value={translatorIds}
         onChange={setTranslatorIds}
       />
       <TagPicker
         title="角色标签"
         category="character"
-        options={snapshot.tags.filter((tag) => tag.category === 'character')}
+        options={characterTags}
         value={characterTagIds}
         onChange={setCharacterTagIds}
         onCreate={(name) => createTag('character', name)}
       />
       <R18Field
         plotTagIds={plotTagIds}
-        plotTags={snapshot.tags.filter((tag) => tag.category === 'plot')}
+        plotTags={plotTags}
         onChange={setPlotTagIds}
         onCreate={(name) => createTag('plot', name)}
       />
       <TagPicker
         title="情节标签"
         category="plot"
-        options={snapshot.tags.filter((tag) => tag.category === 'plot')}
+        options={plotTags}
         value={plotTagIds}
         onChange={setPlotTagIds}
         onCreate={(name) => createTag('plot', name)}
       />
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <CoverField images={snapshot.images} value={coverImageId} onChange={setCoverImageId} />
+        <CoverField images={imageOptions} value={coverImageId} onChange={setCoverImageId} />
         <PickerRow
           title="插图（可多选）"
-          options={snapshot.images.map((image) => ({
+          options={imageOptions.map((image) => ({
             id: image.id,
             label: image.caption ?? image.id,
           }))}
@@ -1416,6 +1454,7 @@ function SeriesPanel({
   onOpenArticle?: ((id: string) => void) | undefined;
 }) {
   const services = useServices();
+  const recent = useRecent();
   const databaseId = services.library.current()?.databaseId ?? '';
   const store = useDraftStore(databaseId);
   const box = useDraftBox<SeriesDraftPayload>(store, 'series');
@@ -1534,6 +1573,8 @@ function SeriesPanel({
           onSubmit={async (draft) => {
             const ok = await run(async () => {
               await editor.saveSeries(draft);
+              // 保存成功才算「用过」：作者/译者/标签/图片提到各列表最前
+              recent.touchUsage(seriesUsage(draft));
             }, '系列已保存');
             if (!ok) return;
             if (box.draftId) box.discard(box.draftId);
@@ -1546,6 +1587,7 @@ function SeriesPanel({
                   const deletedId = editing.id;
                   const ok = await run(async () => {
                     await editor.deleteSeries(deletedId);
+                    recent.forget([deletedId]);
                   }, '系列已删除');
                   if (!ok) return;
                   box.discard(editDraftId('series', deletedId));
@@ -1590,6 +1632,19 @@ function SeriesForm({
 }) {
   const services = useServices();
   const { refresh } = useLibraryContext();
+  // 与文章表单同一套「最近使用」桶：作者 / 译者分别排，标签按类别排，封面与插图共用图片桶
+  const recent = useRecent();
+  const authors = recent.order('author', snapshot.authors);
+  const translators = recent.order('translator', snapshot.authors);
+  const characterTags = recent.order(
+    'tag:character',
+    snapshot.tags.filter((tag) => tag.category === 'character'),
+  );
+  const plotTags = recent.order(
+    'tag:plot',
+    snapshot.tags.filter((tag) => tag.category === 'plot'),
+  );
+  const imageOptions = recent.order('image', snapshot.images);
   const [title, setTitle] = useState(draft?.title ?? initial?.title ?? '');
   const [summary, setSummary] = useState(draft?.summary ?? initial?.summary ?? '');
   const [status, setStatus] = useState<'ongoing' | 'completed'>(
@@ -1765,41 +1820,41 @@ function SeriesForm({
 
       <AuthorPicker
         title="作者"
-        authors={snapshot.authors}
+        authors={authors}
         value={authorIds}
         onChange={setAuthorIds}
       />
       <AuthorPicker
         title="译者"
-        authors={snapshot.authors}
+        authors={translators}
         value={translatorIds}
         onChange={setTranslatorIds}
       />
       <TagPicker
         title="角色标签"
         category="character"
-        options={snapshot.tags.filter((tag) => tag.category === 'character')}
+        options={characterTags}
         value={characterTagIds}
         onChange={setCharacterTagIds}
         onCreate={(name) => createTag('character', name)}
       />
       <R18Field
         plotTagIds={plotTagIds}
-        plotTags={snapshot.tags.filter((tag) => tag.category === 'plot')}
+        plotTags={plotTags}
         onChange={setPlotTagIds}
         onCreate={(name) => createTag('plot', name)}
       />
       <TagPicker
         title="情节标签"
         category="plot"
-        options={snapshot.tags.filter((tag) => tag.category === 'plot')}
+        options={plotTags}
         value={plotTagIds}
         onChange={setPlotTagIds}
         onCreate={(name) => createTag('plot', name)}
       />
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <CoverField images={snapshot.images} value={coverImageId} onChange={setCoverImageId} />
+        <CoverField images={imageOptions} value={coverImageId} onChange={setCoverImageId} />
         <Field label="原出处">
           <input
             className={inputClass}
@@ -1811,7 +1866,7 @@ function SeriesForm({
 
       <PickerRow
         title="系列插图（可多选）"
-        options={snapshot.images.map((image) => ({
+        options={imageOptions.map((image) => ({
           id: image.id,
           label: image.caption ?? image.id,
         }))}
@@ -1862,6 +1917,7 @@ function AuthorsPanel({
   focus?: { id: string; token: number } | null;
 }) {
   const services = useServices();
+  const recent = useRecent();
   const databaseId = services.library.current()?.databaseId ?? '';
   const store = useDraftStore(databaseId);
   const box = useDraftBox<AuthorDraftPayload>(store, 'author');
@@ -2078,6 +2134,7 @@ function AuthorsPanel({
                   void (async () => {
                     const ok = await run(async () => {
                       await editor.deleteAuthor(deletedId);
+                      recent.forget([deletedId]);
                     }, '作者已删除');
                     if (!ok) return;
                     box.discard(editDraftId('author', deletedId));
@@ -2119,6 +2176,7 @@ function TagsPanel({
   focus?: { id: string; token: number } | null;
 }) {
   const services = useServices();
+  const recent = useRecent();
   const databaseId = services.library.current()?.databaseId ?? '';
   const store = useDraftStore(databaseId);
   const box = useDraftBox<TagDraftPayload>(store, 'tag');
@@ -2363,6 +2421,7 @@ function TagsPanel({
                   void (async () => {
                     const ok = await run(async () => {
                       await editor.deleteTag(deletedId);
+                      recent.forget([deletedId]);
                     }, '标签已删除');
                     if (!ok) return;
                     box.discard(editDraftId('tag', deletedId));
@@ -2405,6 +2464,7 @@ function MergeTagsForm({
   const [sourceIds, setSourceIds] = useState<string[]>([]);
   const [query, setQuery] = useState('');
   const [busy, setBusy] = useState(false);
+  const recent = useRecent();
   const target = snapshot.tags.find((tag) => tag.id === targetId) ?? null;
   const candidates = target
     ? snapshot.tags.filter((tag) => tag.id !== target.id && tag.category === target.category)
@@ -2436,6 +2496,8 @@ function MergeTagsForm({
           selected.map((tag) => tag.id),
           target.id,
         );
+        // 源标签已被删除：从所有「最近使用」桶里清掉，避免悬空 id 占着前排
+        recent.forget(selected.map((tag) => tag.id));
       }, `已合并 ${selected.length} 个标签到「${target.name}」`);
       if (ok) onDone();
     } finally {
@@ -2555,6 +2617,7 @@ function ImagesPanel({
 }) {
   const services = useServices();
   const { settings, ready: settingsReady } = useSettingsContext();
+  const recent = useRecent();
   const [kind, setKind] = useState<ImageKind>('cover');
   const [caption, setCaption] = useState('');
   const [file, setFile] = useState<File | null>(null);
@@ -2563,8 +2626,12 @@ function ImagesPanel({
   const loaded = services.library.current();
   const toUrl = (image: { id: string; file: string }) =>
     loaded ? imageSource(services.platform, loaded.dir, image) : '';
-  const visibleImages = sortByUpdatedAtDesc(
-    visibleIds ? snapshot.images.filter((image) => visibleIds.has(image.id)) : snapshot.images,
+  // 最近用过（上传 / 改过元数据）的图片排最前，其余仍按修改时间倒序
+  const visibleImages = recent.order(
+    'image',
+    sortByUpdatedAtDesc(
+      visibleIds ? snapshot.images.filter((image) => visibleIds.has(image.id)) : snapshot.images,
+    ),
   );
 
   useFocusJump(focus, (id) => {
@@ -2586,12 +2653,13 @@ function ImagesPanel({
           void run(
             async () => {
               const prepared = await prepareImageUpload(uploading, settings.compressImages);
-              await editor.saveImage({
+              const id = await editor.saveImage({
                 bytes: prepared.bytes,
                 ext: prepared.ext,
                 kind,
                 caption,
               });
+              recent.touch('image', [id]);
               done = uploadNotice(prepared, uploading.name);
               setFile(null);
               setCaption('');
@@ -2695,6 +2763,7 @@ function ImagesPanel({
                           kind: draft.kind,
                           caption: draft.caption,
                         });
+                        recent.touch('image', [image.id]);
                       }, '图片已更新')
                     }
                   >
@@ -2707,6 +2776,7 @@ function ImagesPanel({
                       if (!window.confirm('删除图片会同时清掉引用它的封面/插图，继续？')) return;
                       void run(async () => {
                         await editor.deleteImage(image.id);
+                        recent.forget([image.id]);
                       }, '图片已删除');
                     }}
                   >
