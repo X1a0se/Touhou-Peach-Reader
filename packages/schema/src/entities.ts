@@ -88,6 +88,10 @@ export const articleFileSchema = z.object({
 });
 
 /** —— 系列 —— */
+/** 系列的「未来加入本系列的文章自动填上」策略，四个可独立开关的部分。 */
+export const SERIES_AUTO_FILL_FIELDS = ['cover', 'author', 'translator', 'sourceUrl'] as const;
+export const seriesAutoFillFieldSchema = z.enum(SERIES_AUTO_FILL_FIELDS);
+export type SeriesAutoFillField = z.infer<typeof seriesAutoFillFieldSchema>;
 export const seriesStatusSchema = z.enum(['ongoing', 'completed']);
 export const seriesSchema = z.object({
   id: seriesId,
@@ -99,6 +103,8 @@ export const seriesSchema = z.object({
   translatorIds: z.array(authorId).default([]),
   characterTagIds: z.array(tagId).default([]),
   plotTagIds: z.array(tagId).default([]),
+  /** 新文章进入本系列时按此策略补空字段；空数组表示不自动填 */
+  autoFillFields: z.array(seriesAutoFillFieldSchema).default([]),
   coverImageId: imageId.optional(),
   /** 系列页展示的插图，顺序即展示顺序 */
   illustrationImageIds: z.array(imageId).optional(),
