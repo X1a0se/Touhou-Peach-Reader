@@ -132,6 +132,8 @@ export function triggeredMetaSyncFields(
  *
  * 外层遍历 `before.articleIds`（顺序即系列顺序）、内层遍历 `triggered`（字段声明顺序），
  * 所以返回顺序是「按篇目，再按字段」。本次新加入的篇目不在 `before.articleIds` 里，自然不进清单；
+ * 本次被移出系列的篇目不在 `after.articleIds` 里，同样跳过 —— 那篇已经不属于本系列，
+ * 勾了也会被 `applySeriesMetaSync` 的成员守卫挡掉，列出来只会让提示条数对不上。
  * 悬空 id 与「文章已是该值」都跳过。`before` 为 null（新建系列）没有可问的对象，返回空数组。
  */
 export function computeMetaSyncCandidates(
@@ -142,8 +144,10 @@ export function computeMetaSyncCandidates(
 ): MetaSyncCandidate[] {
   if (!before) return [];
 
+  const remaining = new Set(after.articleIds);
   const candidates: MetaSyncCandidate[] = [];
   for (const articleId of before.articleIds) {
+    if (!remaining.has(articleId)) continue;
     const article = snapshot.maps.articles.get(articleId);
     if (!article) continue;
     const articleValues = valuesOfArticle(article);

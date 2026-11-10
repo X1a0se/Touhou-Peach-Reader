@@ -117,6 +117,20 @@ describe('meta-sync: 候选', () => {
     ]);
   });
 
+  it('本次被移出系列的篇目不进清单', () => {
+    const f = setup();
+    const before: MetaSyncBefore = { articleIds: [f.entry1Id, f.entry2Id], ...EMPTY_VALUES };
+    const after: MetaSyncBefore = {
+      articleIds: [f.entry1Id],
+      ...EMPTY_VALUES,
+      coverImageId: f.newCoverId,
+    };
+
+    expect(computeMetaSyncCandidates(f.snapshot, before, after, ['cover'])).toEqual([
+      { articleId: f.entry1Id, field: 'cover', kind: 'replace' },
+    ]);
+  });
+
   it('悬空的文章 id 跳过，新建系列（before 为 null）无候选', () => {
     const f = setup();
     const before: MetaSyncBefore = {
