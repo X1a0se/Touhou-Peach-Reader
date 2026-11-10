@@ -2298,6 +2298,18 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 
 ---
 
+## Goal 27 追加记录：系列元数据向下同步
+
+- **策略字段**：`Series.autoFillFields` 取 `cover` / `author` / `translator` / `sourceUrl` 四选（`SERIES_AUTO_FILL_FIELDS` + `seriesAutoFillFieldSchema`），决定文章新进入系列时哪些字段从系列补空。zod 上 `.default([])`，是加法变更，不升 `manifest.schemaVersion`：旧包缺这个键按空数组处理，导出照常写出。
+- **SQLite v3 → v4**：`series.auto_fill_fields TEXT` 存 JSON 数组，NULL 与 `'[]'` 同义；`SQL_SCHEMA_VERSION = 4`。迁移照 v2 → v3 的写法：先用 `columnNames()` 探测列，再 `ALTER TABLE series ADD COLUMN auto_fill_fields TEXT`，与版本号写入同一个 batch。读时 `parseAutoFillFields` 在 try/catch 里做 `Array.isArray`、只留已知值、去重，坏 JSON 与未知值一律当空数组；插入、冲突更新（`auto_fill_fields=excluded.auto_fill_fields`）与三处读取都覆盖到。
+- **继承填空**：`fillFromSeries(article, series)` 只在「文章新进入系列」时生效——`saveArticle` 用 `existing.seriesId !== targetSeriesId` 判断，`saveSeries` 判断该 id 不在保存前的 `articleIds` 里；只补空字段（`isFieldEmpty` / `copyField`），不覆盖已有值，和目录双向同步在同一个 `applyEdit` 闭包里完成。
+- **显式清单同步**：`Editor.applySeriesMetaSync(seriesId, items: SeriesMetaSyncItem[])` 返回改动条数；跳过系列或文章不存在、文章不在目录、系列该字段为空、文章值已一致；清单为空直接返回 0，不进 `applyEdit`；整批只开一次 `applyEdit`、只取一次 `now()`。
+- **界面**：`SeriesForm` 提交时用 `triggeredMetaSyncFields(before, after)` 算被改动的字段，`computeMetaSyncCandidates` 求候选、`groupMetaSyncCandidates` 按补全 / 替换分组；有候选才弹 `SeriesMetaSyncDialog`——补全组默认展开、全部勾选，替换组默认收起、全部不勾，组头与单篇都能取消，每组另有全选 / 全不选；确认后先 `saveSeries` 再 `applySeriesMetaSync`。两次写库不在一个事务里，同步失败只报「系列已保存，但同步文章失败」，不回滚。弹窗里的「未来自动填上」复选框是权威值，落库用的是弹窗改过的那份。本次新加入的篇目走继承、不进候选；新建系列不弹窗，从文章表单进系列也不弹窗；候选为空直接保存。
+- **测试与验证**：`corepack pnpm test` 全绿，全仓 363 例——platform 11、schema 31、core 230、apps/desktop 91（本次改动前分别是 schema 28、core 222、desktop 80）。新增 schema 3 例（缺省空数组 / 丢弃未知键 / 未知名报错）、core 的 `series-meta-sync.test.ts` 7 例与补到 v1/v2/v3 → v4 的迁移用例、desktop 的 `meta-sync.test.ts` 11 例。`corepack pnpm typecheck`、`corepack pnpm check:boundaries`、`corepack pnpm check:no-tauri`，以及串起这四步的 `corepack pnpm check` 均通过。桌面端仍没有 jsdom / `@testing-library`，界面部分只有 typecheck 与手工验收，没有组件测试。
+- **取舍**：不加 provenance——记录「这个值是同步来的」要在编辑表单、导入、导出、合并、标签合并每条路径上维护，成本是现在的三到四倍；不做反向同步（文章改回系列），避免同一次编辑在多处互相打架；不在标签与插图上做，标签是引用、插图是多选，语义与这四个标量字段不同。
+
+---
+
 ## 附：文档自检
 
 | 检查项 | 结论 |
@@ -2309,6 +2321,6 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–26 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复、公开发布、数据库重命名、导出直写、Goal 25 与 Goal 26 已追加） |
+| Goal 1–27 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复、公开发布、数据库重命名、导出直写、Goal 25、Goal 26 与 Goal 27 已追加） |
 
 
