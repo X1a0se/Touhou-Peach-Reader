@@ -128,6 +128,22 @@ export function triggeredMetaSyncFields(
 }
 
 /**
+ * 弹窗里「未来加入本系列的文章自动填上」的初值：现有策略 ∪ 本次触发字段。
+ *
+ * 只取现有策略不够 —— 给一个从没设过策略的系列补上作者时，四个框会全空，
+ * 用户不主动勾，之后新加入的篇目就不继承，而且界面上没有任何提示（设计 §5 明写要预勾触发字段）。
+ * 反过来只取触发字段也不对：已经存下的其它策略不该因为这次只改了作者就被丢掉。
+ * 顺序按 `SERIES_AUTO_FILL_FIELDS` 声明序，与表单里的复选框、弹窗里的分组一致。
+ */
+export function mergeAutoFillFields(
+  current: readonly SeriesAutoFillField[],
+  triggered: readonly SeriesAutoFillField[],
+): SeriesAutoFillField[] {
+  const chosen = new Set<SeriesAutoFillField>([...current, ...triggered]);
+  return SERIES_AUTO_FILL_FIELDS.filter((field) => chosen.has(field));
+}
+
+/**
  * 逐篇、逐字段算出待确认的改动。
  *
  * 外层遍历 `before.articleIds`（顺序即系列顺序）、内层遍历 `triggered`（字段声明顺序），

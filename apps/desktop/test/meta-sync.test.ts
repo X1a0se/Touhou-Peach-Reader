@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeMetaSyncCandidates,
   groupMetaSyncCandidates,
+  mergeAutoFillFields,
   metaSyncKey,
   triggeredMetaSyncFields,
   valuesOfArticle,
@@ -172,6 +173,23 @@ describe('meta-sync: 分组', () => {
       ['fill', 'cover', '（未填写）', '新封面', [f.entry2Id]],
       ['replace', 'cover', '旧封面', '新封面', [f.entry1Id]],
     ]);
+  });
+});
+
+describe('meta-sync: 策略初值', () => {
+  it('已存策略 ∪ 本次触发字段，按字段声明顺序', () => {
+    // 从没设过策略的系列改作者 → 作者必须被预勾，否则新成员不继承且无提示
+    expect(mergeAutoFillFields([], ['author'])).toEqual(['author']);
+    // 已存 translator，本次改 cover/sourceUrl → 三个都在，translator 不被丢掉
+    expect(mergeAutoFillFields(['translator'], ['cover', 'sourceUrl'])).toEqual([
+      'cover',
+      'translator',
+      'sourceUrl',
+    ]);
+    // 空 + 空 = 空
+    expect(mergeAutoFillFields([], [])).toEqual([]);
+    // 重复不产生重复项
+    expect(mergeAutoFillFields(['author'], ['author'])).toEqual(['author']);
   });
 });
 

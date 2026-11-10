@@ -42,6 +42,7 @@ import { IMAGE_ACCEPT, validateImageFile } from '../editor/images.js';
 import {
   computeMetaSyncCandidates,
   groupMetaSyncCandidates,
+  mergeAutoFillFields,
   type MetaSyncBefore,
   type MetaSyncGroup,
   triggeredMetaSyncFields,
@@ -1787,6 +1788,15 @@ function SeriesForm({
     return { id, created: !existed };
   };
 
+  /** 弹窗给出结论（同步这些 / 一个都不同步）→ 带着它覆盖后的策略真正保存。 */
+  const finishPending = (items: SeriesMetaSyncItem[]): void => {
+    if (!pending) return;
+    const draft = { ...pending.draft, autoFillFields: pending.autoFillFields };
+    setPending(null);
+    setBusy(true);
+    void onSubmit(draft, items).finally(() => setBusy(false));
+  };
+
   return (
     <form
       className="flex flex-col gap-4 rounded-xl border border-border bg-surface/60 p-4"
@@ -1823,12 +1833,16 @@ function SeriesForm({
           void onSubmit(draft, []).finally(() => setBusy(false));
           return;
         }
+        // 弹窗里的「未来自动填上」初值 = 已存策略 ∪ 本次触发字段（设计 §5）
+        const nextAutoFillFields = mergeAutoFillFields(autoFillFields, triggered);
         setPending({
-          draft,
-          autoFillFields,
+          draft: { ...draft, autoFillFields: nextAutoFillFields },
+          autoFillFields: nextAutoFillFields,
           groups: groupMetaSyncCandidates(snapshot, candidates, before, after),
           newMemberCount: articleIds.filter((id) => !before.articleIds.includes(id)).length,
-          titles: new Map(articleIds.map((id) => [id, snapshot.maps.articles.get(id)?.title ?? id])),
+          titles: new Map(
+            articleIds.map((id) => [id, snapshot.maps.articles.get(id)?.title ?? id]),
+          ),
         });
       }}
     >
@@ -1951,7 +1965,7 @@ function SeriesForm({
       <IllustrationUpload value={illustrationImageIds} onChange={setIllustrationImageIds} />
 
       <div className="flex items-center gap-2">
-        <button type="submit" className={primaryClass} disabled={busy}>
+        <button type="submit" className={primaryClass} disabled={busy || pending !== null}>
           {busy ? '保存中…' : '保存'}
         </button>
         <button type="button" className={buttonClass} onClick={onCancel}>
@@ -1977,18 +1991,8 @@ function SeriesForm({
           articleTitles={pending.titles}
           autoFillFields={pending.autoFillFields}
           onAutoFillFieldsChange={(next) => setPending({ ...pending, autoFillFields: next })}
-          onConfirm={(items) => {
-            const draft = { ...pending.draft, autoFillFields: pending.autoFillFields };
-            setPending(null);
-            setBusy(true);
-            void onSubmit(draft, items).finally(() => setBusy(false));
-          }}
-          onSkip={() => {
-            const draft = { ...pending.draft, autoFillFields: pending.autoFillFields };
-            setPending(null);
-            setBusy(true);
-            void onSubmit(draft, []).finally(() => setBusy(false));
-          }}
+          onConfirm={(items) => finishPending(items)}
+          onSkip={() => finishPending([])}
           onCancel={() => setPending(null)}
         />
       ) : null}
