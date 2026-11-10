@@ -4,12 +4,14 @@
  */
 import type { Platform } from '@tpr/platform';
 import {
+  type ArticleFile,
   type Author,
   type CreditsEntry,
   type ImageAsset,
   type ImageKind,
   type Recommendation,
   type Series,
+  type SeriesAutoFillField,
   type Tag,
   type TagCategory,
   authorIdFor,
@@ -51,6 +53,8 @@ export interface SeriesDraft {
   translatorIds: string[];
   characterTagIds: string[];
   plotTagIds: string[];
+  /** 新文章进入本系列时自动补空的字段；不传表示保留原值，传 `[]` 表示清空 */
+  autoFillFields?: SeriesAutoFillField[];
   coverImageId?: string | null;
   illustrationImageIds?: string[];
   sourceUrl?: string | null;
@@ -109,6 +113,61 @@ function requireTitle(title: string, label: string): string {
   return value;
 }
 
+/** 两个 id 数组是否表示同一个集合（顺序不算差异）。 */
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
+/**
+ * 把系列的某个字段写到文章上。系列该字段为空、或文章已是该值时返回 false。
+ * 只负责复制，不判断「该不该填」—— 那由调用方按策略或清单决定。
+ */
+function copyField(article: ArticleFile, series: Series, field: SeriesAutoFillField): boolean {
+  switch (field) {
+    case 'author':
+      if (series.authorIds.length === 0 || sameIds(article.authorIds, series.authorIds)) return false;
+      article.authorIds = [...series.authorIds];
+      return true;
+    case 'translator':
+      if (series.translatorIds.length === 0 || sameIds(article.translatorIds, series.translatorIds)) return false;
+      article.translatorIds = [...series.translatorIds];
+      return true;
+    case 'cover':
+      if (!series.coverImageId || article.coverImageId === series.coverImageId) return false;
+      article.coverImageId = series.coverImageId;
+      return true;
+    case 'sourceUrl':
+      if (!series.sourceUrl?.trim() || article.sourceUrl === series.sourceUrl) return false;
+      article.sourceUrl = series.sourceUrl;
+      return true;
+  }
+}
+
+/** 文章的这个字段是否算「未填写」。 */
+function isFieldEmpty(article: ArticleFile, field: SeriesAutoFillField): boolean {
+  switch (field) {
+    case 'author':
+      return article.authorIds.length === 0;
+    case 'translator':
+      return article.translatorIds.length === 0;
+    case 'cover':
+      return !article.coverImageId;
+    case 'sourceUrl':
+      return !article.sourceUrl?.trim();
+  }
+}
+
+/** 文章新进入系列时按策略补空字段：只填空，不覆盖。返回是否有改动。 */
+function fillFromSeries(article: ArticleFile, series: Series): boolean {
+  let changed = false;
+  for (const field of series.autoFillFields) {
+    if (!isFieldEmpty(article, field)) continue;
+    if (copyField(article, series, field)) changed = true;
+  }
+  if (changed) article.updatedAt = now();
+  return changed;
+}
+
 interface TagRefs {
   characterTagIds: string[];
   plotTagIds: string[];
@@ -160,6 +219,8 @@ export function createEditor(platform: Platform, library: Library): Editor {
 
       await library.applyEdit((db) => {
         const existing = db.articles.find((article) => article.id === id);
+        // 必须在 Object.assign 覆盖 existing 之前抓「保存前状态」
+        const entering = (existing?.seriesId ?? '') !== targetSeriesId;
         const next = {
           id,
           type: targetSeriesId ? ('series-entry' as const) : ('short' as const),
@@ -177,6 +238,10 @@ export function createEditor(platform: Platform, library: Library): Editor {
           createdAt: existing?.createdAt ?? now(),
           updatedAt: now(),
         } satisfies (typeof db.articles)[number];
+        if (entering && targetSeriesId) {
+          const host = db.series.find((series) => series.id === targetSeriesId);
+          if (host) fillFromSeries(next, host);
+        }
         if (existing) {
           Object.assign(existing, next);
           // 清空系列时必须删掉旧 seriesId，否则 Object.assign 会把它留下
@@ -221,6 +286,8 @@ export function createEditor(platform: Platform, library: Library): Editor {
       const id = draft.id ?? newSeriesId();
       await library.applyEdit((db) => {
         const existing = db.series.find((series) => series.id === id);
+        // 保存前的成员清单：只有不在其中的文章才算「新进入系列」
+        const beforeIds = new Set(existing?.articleIds ?? []);
         const articleIds = clean(draft.articleIds);
         const next = {
           id,
@@ -232,6 +299,7 @@ export function createEditor(platform: Platform, library: Library): Editor {
           translatorIds: clean(draft.translatorIds),
           characterTagIds: clean(draft.characterTagIds),
           plotTagIds: clean(draft.plotTagIds),
+          autoFillFields: [...new Set(draft.autoFillFields ?? existing?.autoFillFields ?? [])],
           ...(draft.coverImageId ? { coverImageId: draft.coverImageId } : {}),
           ...(draft.illustrationImageIds !== undefined
             ? { illustrationImageIds: clean(draft.illustrationImageIds) }
@@ -252,6 +320,8 @@ export function createEditor(platform: Platform, library: Library): Editor {
             article.type = 'series-entry';
             article.seriesId = id;
             article.updatedAt = now();
+            // 只有保存前不在目录里的文章才算新进入，老成员绝不被自动改
+            if (!beforeIds.has(article.id)) fillFromSeries(article, next);
           } else if (article.seriesId === id) {
             article.type = 'short';
             delete article.seriesId;
