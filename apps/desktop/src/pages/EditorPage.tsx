@@ -1,4 +1,4 @@
-import type { DBSnapshot, Editor } from '@tpr/core';
+import type { DBSnapshot, Editor, SeriesMetaSyncItem } from '@tpr/core';
 import {
   articleSeriesPosition,
   DOCUMENT_ACCEPT,
@@ -14,6 +14,7 @@ import type {
   ImageKind,
   Recommendation,
   Series,
+  SeriesAutoFillField,
   Tag,
   TagCategory,
 } from '@tpr/schema';
@@ -27,6 +28,7 @@ import { DraftList } from '../components/DraftList.js';
 import { ImageFilePicker } from '../components/ImageFilePicker.js';
 import { ListSearchInput } from '../components/ListSearchInput.js';
 import { R18Field } from '../components/R18Field.js';
+import { SeriesAutoFillFieldPicker, SeriesMetaSyncDialog } from '../components/SeriesMetaSyncDialog.js';
 import { SeriesPicker } from '../components/SeriesPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
 import { useServices } from '../context.js';
@@ -37,6 +39,13 @@ import { editDraftId, findDraftForTarget, type DraftStore } from '../editor/draf
 import { formatBytes, prepareImageUpload, uploadNotice } from '../editor/image-upload.js';
 import { filterByQuery, joinSearchParts, matchesQuery } from '../editor/filter.js';
 import { IMAGE_ACCEPT, validateImageFile } from '../editor/images.js';
+import {
+  computeMetaSyncCandidates,
+  groupMetaSyncCandidates,
+  type MetaSyncBefore,
+  type MetaSyncGroup,
+  triggeredMetaSyncFields,
+} from '../editor/meta-sync.js';
 import {
   EDITOR_KIND_LABEL,
   EDITOR_KINDS,
@@ -1422,6 +1431,7 @@ export interface SeriesDraftPayload {
   coverImageId: string;
   illustrationImageIds: string[];
   sourceUrl: string;
+  autoFillFields: SeriesAutoFillField[];
 }
 
 const EMPTY_SERIES_PAYLOAD: SeriesDraftPayload = {
@@ -1436,6 +1446,7 @@ const EMPTY_SERIES_PAYLOAD: SeriesDraftPayload = {
   coverImageId: '',
   illustrationImageIds: [],
   sourceUrl: '',
+  autoFillFields: [],
 };
 
 function SeriesPanel({
@@ -1570,15 +1581,28 @@ function SeriesPanel({
           onCancel={closeForm}
           onDraftSaved={box.refresh}
           isDraftDiscarded={box.wasDiscarded}
-          onSubmit={async (draft) => {
+          onSubmit={async (draft, items) => {
+            let seriesId = '';
             const ok = await run(async () => {
-              await editor.saveSeries(draft);
+              seriesId = await editor.saveSeries(draft);
               // 保存成功才算「用过」：作者/译者/标签/图片提到各列表最前
               recent.touchUsage(seriesUsage(draft));
             }, '系列已保存');
             if (!ok) return;
             if (box.draftId) box.discard(box.draftId);
             closeForm();
+            if (items.length === 0) return;
+            let synced = 0;
+            await run(
+              async () => {
+                try {
+                  synced = await editor.applySeriesMetaSync(seriesId, items);
+                } catch (cause) {
+                  throw new Error(`系列已保存，但同步文章失败：${errorText(cause)}`);
+                }
+              },
+              () => `系列已保存，同步了 ${synced} 处`,
+            );
           }}
           onDelete={
             editing
@@ -1605,6 +1629,15 @@ function SeriesPanel({
   );
 }
 
+/** 保存被「是否同步到文章」的弹窗挡住时的暂存：等用户确认、跳过或取消。 */
+type PendingSync = {
+  draft: Parameters<Editor['saveSeries']>[0];
+  autoFillFields: SeriesAutoFillField[];
+  groups: MetaSyncGroup[];
+  newMemberCount: number;
+  titles: ReadonlyMap<string, string>;
+};
+
 function SeriesForm({
   snapshot,
   initial,
@@ -1624,7 +1657,7 @@ function SeriesForm({
   draftId?: string | null;
   draftStore?: DraftStore | null;
   onOpenArticle?: ((id: string) => void) | undefined;
-  onSubmit(draft: Parameters<Editor['saveSeries']>[0]): Promise<void>;
+  onSubmit(draft: Parameters<Editor['saveSeries']>[0], items: SeriesMetaSyncItem[]): Promise<void>;
   onCancel(): void;
   onDelete?: (() => Promise<void>) | undefined;
   onDraftSaved?: (() => void) | undefined;
@@ -1672,6 +1705,10 @@ function SeriesForm({
     draft?.illustrationImageIds ?? initial?.illustrationImageIds ?? [],
   );
   const [sourceUrl, setSourceUrl] = useState(draft?.sourceUrl ?? initial?.sourceUrl ?? '');
+  const [autoFillFields, setAutoFillFields] = useState<SeriesAutoFillField[]>(
+    draft?.autoFillFields ?? initial?.autoFillFields ?? [],
+  );
+  const [pending, setPending] = useState<PendingSync | null>(null);
   const [busy, setBusy] = useState(false);
 
   const draftPayload = useMemo<SeriesDraftPayload>(
@@ -1687,6 +1724,7 @@ function SeriesForm({
       coverImageId,
       illustrationImageIds,
       sourceUrl,
+      autoFillFields,
     }),
     [
       title,
@@ -1700,9 +1738,10 @@ function SeriesForm({
       coverImageId,
       illustrationImageIds,
       sourceUrl,
+      autoFillFields,
     ],
   );
-  const baselinePayload = useMemo<SeriesDraftPayload | null>(() => {
+  const baselinePayload = useMemo<SeriesDraftPayload>(() => {
     if (!initial) return EMPTY_SERIES_PAYLOAD;
     return {
       title: initial.title,
@@ -1716,6 +1755,7 @@ function SeriesForm({
       coverImageId: initial.coverImageId ?? '',
       illustrationImageIds: initial.illustrationImageIds ?? [],
       sourceUrl: initial.sourceUrl ?? '',
+      autoFillFields: initial.autoFillFields,
     };
   }, [initial]);
   const { error: draftError } = useDraftAutosave({
@@ -1752,8 +1792,8 @@ function SeriesForm({
       className="flex flex-col gap-4 rounded-xl border border-border bg-surface/60 p-4"
       onSubmit={(event) => {
         event.preventDefault();
-        setBusy(true);
-        void onSubmit({
+        if (pending) return;
+        const draft = {
           ...(initial ? { id: initial.id } : {}),
           title,
           summary,
@@ -1766,7 +1806,30 @@ function SeriesForm({
           ...(coverImageId ? { coverImageId } : {}),
           illustrationImageIds,
           ...(sourceUrl.trim() ? { sourceUrl: sourceUrl.trim() } : {}),
-        }).finally(() => setBusy(false));
+          autoFillFields,
+        };
+        const before: MetaSyncBefore = baselinePayload;
+        const after: MetaSyncBefore = {
+          articleIds,
+          authorIds,
+          translatorIds,
+          coverImageId,
+          sourceUrl,
+        };
+        const triggered = triggeredMetaSyncFields(before, after);
+        const candidates = computeMetaSyncCandidates(snapshot, before, after, triggered);
+        if (candidates.length === 0) {
+          setBusy(true);
+          void onSubmit(draft, []).finally(() => setBusy(false));
+          return;
+        }
+        setPending({
+          draft,
+          autoFillFields,
+          groups: groupMetaSyncCandidates(snapshot, candidates, before, after),
+          newMemberCount: articleIds.filter((id) => !before.articleIds.includes(id)).length,
+          titles: new Map(articleIds.map((id) => [id, snapshot.maps.articles.get(id)?.title ?? id])),
+        });
       }}
     >
       {draftError ? (
@@ -1864,6 +1927,18 @@ function SeriesForm({
         </Field>
       </div>
 
+      <div className="flex flex-col gap-1.5 rounded-lg border border-border px-3 py-2">
+        <span className={labelClass}>未来加入本系列的文章自动填上</span>
+        <SeriesAutoFillFieldPicker
+          idPrefix="series-form"
+          value={autoFillFields}
+          onChange={setAutoFillFields}
+        />
+        <p className="text-xs text-muted-foreground">
+          只填空字段，不会覆盖文章里已有的值。改动系列字段并保存时会问你现有文章怎么处理。
+        </p>
+      </div>
+
       <PickerRow
         title="系列插图（可多选）"
         options={imageOptions.map((image) => ({
@@ -1892,6 +1967,31 @@ function SeriesForm({
           </button>
         ) : null}
       </div>
+
+      {pending ? (
+        <SeriesMetaSyncDialog
+          seriesTitle={title.trim() || '未命名系列'}
+          memberCount={pending.draft.articleIds.length}
+          newMemberCount={pending.newMemberCount}
+          groups={pending.groups}
+          articleTitles={pending.titles}
+          autoFillFields={pending.autoFillFields}
+          onAutoFillFieldsChange={(next) => setPending({ ...pending, autoFillFields: next })}
+          onConfirm={(items) => {
+            const draft = { ...pending.draft, autoFillFields: pending.autoFillFields };
+            setPending(null);
+            setBusy(true);
+            void onSubmit(draft, items).finally(() => setBusy(false));
+          }}
+          onSkip={() => {
+            const draft = { ...pending.draft, autoFillFields: pending.autoFillFields };
+            setPending(null);
+            setBusy(true);
+            void onSubmit(draft, []).finally(() => setBusy(false));
+          }}
+          onCancel={() => setPending(null)}
+        />
+      ) : null}
     </form>
   );
 }
