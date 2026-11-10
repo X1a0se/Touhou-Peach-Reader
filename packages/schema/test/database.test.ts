@@ -67,3 +67,27 @@ describe('getJsonSchemas', () => {
     expect(JSON.stringify(schemas)).toContain('series-entry');
   });
 });
+
+describe('series.autoFillFields', () => {
+  it('缺省解析为空数组', () => {
+    const db = makeDatabase();
+    const series = { ...db.series[0]! } as Record<string, unknown>;
+    delete series.autoFillFields;
+    const parsed = parseRawDatabase({ ...db, series: [series] });
+    expect(parsed.series[0]?.autoFillFields).toEqual([]);
+  });
+
+  it('保留已知值、丢弃未知键', () => {
+    const db = makeDatabase();
+    const series = { ...db.series[0]!, autoFillFields: ['author', 'cover'], 未知键: 1 };
+    const parsed = parseRawDatabase({ ...db, series: [series] });
+    expect(parsed.series[0]?.autoFillFields).toEqual(['author', 'cover']);
+    expect(parsed.series[0]).not.toHaveProperty('未知键');
+  });
+
+  it('不认识的字段名报错', () => {
+    const db = makeDatabase();
+    const series = { ...db.series[0]!, autoFillFields: ['tag'] };
+    expect(() => parseRawDatabase({ ...db, series: [series] })).toThrowError();
+  });
+});

@@ -9,6 +9,7 @@ import { databasePathOf, readImageBlob, readSqliteFromFile } from '../src/db/sql
 import { ioFor, workspacePath, writeActive } from '../src/db/workspace.js';
 import { serializeDatabase, writeDatabaseDir } from '../src/db/write.js';
 import { canonicalDatabase } from '../src/db/sql/codec.js';
+import { SQL_SCHEMA_VERSION } from '../src/db/sql/schema.js';
 
 const IMAGE_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 
@@ -128,7 +129,7 @@ describe('migrate: 旧 JSON 文件库 -> database.sqlite', () => {
     expect(await platform.fs.exists(platform.paths.join(dir, LAYOUT.legacyDir))).toBe(false);
   });
 
-  it('migrate-sql-v1-v3: 给旧 SQLite 补齐 updated_at 列且保留原有数据', async () => {
+  it('migrate-sql-v1-v4: 给旧 SQLite 补齐 updated_at 列且保留原有数据', async () => {
     const db = makeDatabase();
     const platform = createMemoryPlatform({ dataDir: '/app' });
     const dir = await seedLegacy(platform, db);
@@ -157,14 +158,14 @@ describe('migrate: 旧 JSON 文件库 -> database.sqlite', () => {
       expect(names.filter((name) => name === 'updated_at')).toHaveLength(1);
     }
     const upgradedRows = await platform.sql.query(dbPath, 'PRAGMA user_version');
-    expect(Number(upgradedRows[0]?.user_version)).toBe(3);
+    expect(Number(upgradedRows[0]?.user_version)).toBe(SQL_SCHEMA_VERSION);
     expect(canonicalDatabase(await readSqliteFromFile(platform, dbPath))).toBe(canonicalBefore);
 
     // 幂等：再次打开不会重复加列。
     await expect(ensureLocalDatabase(platform, dir)).resolves.toBeUndefined();
   });
 
-  it('migrate-sql-v2-v3: 给旧 SQLite 补系列插图列与子表', async () => {
+  it('migrate-sql-v2-v4: 给旧 SQLite 补系列插图列与子表', async () => {
     const db = makeDatabase();
     const platform = createMemoryPlatform({ dataDir: '/app' });
     const dir = await seedLegacy(platform, db);
@@ -189,7 +190,7 @@ describe('migrate: 旧 JSON 文件库 -> database.sqlite', () => {
     );
     expect(tables).toHaveLength(1);
     const upgradedRows = await platform.sql.query(dbPath, 'PRAGMA user_version');
-    expect(Number(upgradedRows[0]?.user_version)).toBe(3);
+    expect(Number(upgradedRows[0]?.user_version)).toBe(SQL_SCHEMA_VERSION);
 
     // 幂等：再次打开不会重复加列。
     await expect(ensureLocalDatabase(platform, dir)).resolves.toBeUndefined();
@@ -201,8 +202,33 @@ describe('migrate: 旧 JSON 文件库 -> database.sqlite', () => {
     const dir = await seedLegacy(platform, db);
     await createLibrary(platform).restore();
     const dbPath = databasePathOf(platform, dir);
-    await platform.sql.batch(dbPath, [{ sql: 'PRAGMA user_version = 4' }]);
+    await platform.sql.batch(dbPath, [{ sql: 'PRAGMA user_version = 5' }]);
 
-    await expect(ensureLocalDatabase(platform, dir)).rejects.toThrow(/不支持的本地数据库版本：4/);
+    await expect(ensureLocalDatabase(platform, dir)).rejects.toThrow(/不支持的本地数据库版本：5/);
+  });
+
+  it('migrate-sql-v3-v4: 给旧 SQLite 补 auto_fill_fields 列且读回空数组', async () => {
+    const db = makeDatabase();
+    const platform = createMemoryPlatform({ dataDir: '/app' });
+    const dir = await seedLegacy(platform, db);
+    await createLibrary(platform).restore();
+    const dbPath = databasePathOf(platform, dir);
+
+    await platform.sql.batch(dbPath, [
+      { sql: 'ALTER TABLE series DROP COLUMN auto_fill_fields' },
+      { sql: 'PRAGMA user_version = 3' },
+    ]);
+
+    await ensureLocalDatabase(platform, dir);
+
+    const columns = await platform.sql.query(dbPath, "SELECT name FROM pragma_table_info('series')");
+    expect(columns.map((row) => String(row.name))).toContain('auto_fill_fields');
+    const upgradedRows = await platform.sql.query(dbPath, 'PRAGMA user_version');
+    expect(Number(upgradedRows[0]?.user_version)).toBe(SQL_SCHEMA_VERSION);
+    const actual = await readSqliteFromFile(platform, dbPath);
+    expect(actual.series.every((series) => series.autoFillFields.length === 0)).toBe(true);
+
+    // 幂等：再次打开不会重复加列。
+    await expect(ensureLocalDatabase(platform, dir)).resolves.toBeUndefined();
   });
 });

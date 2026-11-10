@@ -1,6 +1,7 @@
 import { PlatformError, type BlobSource, type Platform, type SqlRow, type SqlStatement } from '@tpr/platform';
 import {
   parseRawDatabase,
+  SERIES_AUTO_FILL_FIELDS,
   type ArticleFile,
   type ArticleType,
   type Author,
@@ -10,6 +11,7 @@ import {
   type Manifest,
   type RawDatabase,
   type Series,
+  type SeriesAutoFillField,
   type Tag,
   type TagCategory,
 } from '@tpr/schema';
@@ -49,6 +51,21 @@ function groupText(rows: readonly { parent: string; value: string }[]): Map<stri
     else out.set(row.parent, [row.value]);
   }
   return out;
+}
+
+/** auto_fill_fields 是 JSON 数组文本；NULL、坏 JSON、未知值一律当空。 */
+function parseAutoFillFields(row: SqlRow): SeriesAutoFillField[] {
+  const text = rowNullableText(row, 'auto_fill_fields');
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    const known = SERIES_AUTO_FILL_FIELDS as readonly string[];
+    return [...new Set(parsed.filter((item): item is SeriesAutoFillField =>
+      typeof item === 'string' && known.includes(item)))];
+  } catch {
+    return [];
+  }
 }
 
 /** 读取 SQLite 元数据（不加载正文和图片 BLOB）。 */
@@ -225,7 +242,7 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
 
   const seriesRows = await platform.sql.query(
     dbPath,
-    'SELECT position, id, title, summary, status, cover_image_id, source_url, created_at, updated_at, illustration_ids_present FROM series ORDER BY position',
+    'SELECT position, id, title, summary, status, cover_image_id, source_url, created_at, updated_at, illustration_ids_present, auto_fill_fields FROM series ORDER BY position',
   );
   const seriesArticleRows = await platform.sql.query(
     dbPath,
@@ -292,6 +309,7 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
       translatorIds: authorsForSeries.translator,
       characterTagIds: tagsForSeries.character,
       plotTagIds: tagsForSeries.plot,
+      autoFillFields: parseAutoFillFields(row),
       ...(coverImageId !== undefined ? { coverImageId } : {}),
       ...(present ? { illustrationImageIds: illustrations ?? [] } : {}),
       ...(url !== undefined ? { sourceUrl: url } : {}),
@@ -577,7 +595,7 @@ export async function writeSqliteDatabase(
 
     for (const [position, series] of db.series.entries()) {
       await addAsync(
-        'INSERT INTO series(position,id,title,summary,status,cover_image_id,source_url,created_at,updated_at,illustration_ids_present) VALUES (?,?,?,?,?,?,?,?,?,?)',
+        'INSERT INTO series(position,id,title,summary,status,cover_image_id,source_url,created_at,updated_at,illustration_ids_present,auto_fill_fields) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         [
           position,
           series.id,
@@ -589,6 +607,8 @@ export async function writeSqliteDatabase(
           series.createdAt,
           series.updatedAt,
           series.illustrationImageIds !== undefined ? 1 : 0,
+          // 早期调用方还没有这个字段（编辑器策略尚未接入），NULL 与 '[]' 同义。
+          JSON.stringify(series.autoFillFields ?? []),
         ],
       );
       for (const [index, id] of series.articleIds.entries()) {
@@ -895,7 +915,7 @@ export async function saveDatabase(
     const before = prevSeries.get(series.id);
     if (before && stableStringify(before) === stableStringify(series)) continue;
     statements.push({
-      sql: 'INSERT INTO series(position,id,title,summary,status,cover_image_id,source_url,created_at,updated_at,illustration_ids_present) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position, title=excluded.title, summary=excluded.summary, status=excluded.status, cover_image_id=excluded.cover_image_id, source_url=excluded.source_url, created_at=excluded.created_at, updated_at=excluded.updated_at, illustration_ids_present=excluded.illustration_ids_present',
+      sql: 'INSERT INTO series(position,id,title,summary,status,cover_image_id,source_url,created_at,updated_at,illustration_ids_present,auto_fill_fields) VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position, title=excluded.title, summary=excluded.summary, status=excluded.status, cover_image_id=excluded.cover_image_id, source_url=excluded.source_url, created_at=excluded.created_at, updated_at=excluded.updated_at, illustration_ids_present=excluded.illustration_ids_present, auto_fill_fields=excluded.auto_fill_fields',
       params: [
         position,
         series.id,
@@ -907,6 +927,7 @@ export async function saveDatabase(
         series.createdAt,
         series.updatedAt,
         series.illustrationImageIds !== undefined ? 1 : 0,
+        JSON.stringify(series.autoFillFields ?? []),
       ],
     });
     addDeleteChildren(statements, 'series_articles', 'series_id', series.id);

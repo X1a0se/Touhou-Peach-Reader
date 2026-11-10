@@ -22,7 +22,8 @@ async function columnNames(platform: Platform, dbPath: string, table: string): P
  * 把本地 SQLite 从旧布局升级到当前布局。
  *
  * 只在文件已存在时工作；缺失文件由 migrateLegacyWorkspace 负责创建。
- * user_version 是唯一权威：新库直接是 3，v1 旧库补 updated_at，v2 旧库补系列插图。
+ * user_version 是唯一权威：新库直接是 4，v1 旧库补 updated_at，v2 旧库补系列插图，v3 旧库补
+ * auto_fill_fields。
  * 所有 ALTER 与版本写入放在同一个 batch（单事务）里，中断后下次仍从旧版本重试，天然幂等。
  */
 export async function migrateSqlSchema(platform: Platform, dbPath: string): Promise<void> {
@@ -55,6 +56,12 @@ export async function migrateSqlSchema(platform: Platform, dbPath: string): Prom
     statements.push({
       sql: 'CREATE INDEX IF NOT EXISTS idx_series_illustrations_series ON series_illustrations(series_id)',
     });
+  }
+  if (version < 4) {
+    const seriesColumns = await columnNames(platform, dbPath, 'series');
+    if (!seriesColumns.has('auto_fill_fields')) {
+      statements.push({ sql: 'ALTER TABLE series ADD COLUMN auto_fill_fields TEXT' });
+    }
   }
   statements.push({ sql: `PRAGMA user_version = ${SQL_SCHEMA_VERSION}` });
   await platform.sql.batch(dbPath, statements);

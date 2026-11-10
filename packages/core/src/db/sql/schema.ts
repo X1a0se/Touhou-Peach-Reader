@@ -1,7 +1,7 @@
 import type { SqlStatement } from '@tpr/platform';
 
 /** SQLite 布局版本；与 .tpr 的 manifest.schemaVersion 相互独立。 */
-export const SQL_SCHEMA_VERSION = 3;
+export const SQL_SCHEMA_VERSION = 4;
 
 /**
  * 本地数据库 DDL。
@@ -130,7 +130,8 @@ export const SQL_SCHEMA_STATEMENTS: readonly SqlStatement[] = [
       source_url TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL,
-      illustration_ids_present INTEGER NOT NULL DEFAULT 0
+      illustration_ids_present INTEGER NOT NULL DEFAULT 0,
+      auto_fill_fields TEXT
     )`,
   },
   {

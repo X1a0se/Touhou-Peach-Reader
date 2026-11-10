@@ -79,6 +79,7 @@ export function makeSeries(over: Partial<Series> = {}): Series {
     translatorIds: [],
     characterTagIds: [],
     plotTagIds: [],
+    autoFillFields: [],
     createdAt: FIXED_TIME,
     updatedAt: FIXED_TIME,
     ...over,
