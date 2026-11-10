@@ -123,3 +123,88 @@ describe('series meta sync: 继承填空', () => {
     expect(saved?.translatorIds).toEqual(entry.translatorIds);
   });
 });
+
+describe('series meta sync: 显式清单同步', () => {
+  it('只改清单里的文章×字段，未列入的不动', async () => {
+    const { db, library, editor, authorId } = await openFixture();
+    const series = db.series[0]!;
+    const target = series.articleIds[0]!;
+    const other = series.articleIds[1]!;
+    await editor.saveSeries({
+      id: series.id,
+      title: series.title,
+      summary: series.summary,
+      status: series.status,
+      articleIds: series.articleIds,
+      authorIds: series.authorIds,
+      translatorIds: [authorId],
+      characterTagIds: [],
+      plotTagIds: [],
+    });
+
+    const changed = await editor.applySeriesMetaSync(series.id, [
+      { articleId: target, field: 'translator' },
+    ]);
+
+    expect(changed).toBe(1);
+    const snapshot = library.snapshot();
+    expect(snapshot?.articles.find((a) => a.id === target)?.translatorIds).toEqual([authorId]);
+    expect(snapshot?.articles.find((a) => a.id === other)?.translatorIds).toEqual([]);
+  });
+
+  it('不在系列内的文章、不存在的文章、系列该字段为空都跳过且不抛错', async () => {
+    const { db, library, editor } = await openFixture();
+    const series = db.series[0]!;
+    // 系列译者留空：这一项要覆盖「系列该字段为空」。
+    await editor.saveSeries({
+      id: series.id,
+      title: series.title,
+      summary: series.summary,
+      status: series.status,
+      articleIds: series.articleIds,
+      authorIds: series.authorIds,
+      translatorIds: [],
+      characterTagIds: [],
+      plotTagIds: [],
+    });
+    const outsider = db.articles.find((article) => article.type === 'short')!;
+
+    const changed = await editor.applySeriesMetaSync(series.id, [
+      { articleId: outsider.id, field: 'translator' },
+      { articleId: 'a_doesnotexist0000', field: 'translator' },
+      { articleId: series.articleIds[0]!, field: 'translator' },
+    ]);
+
+    expect(changed).toBe(0);
+    expect(library.snapshot()?.articles.find((a) => a.id === outsider.id)?.translatorIds).toEqual(
+      [],
+    );
+  });
+
+  it('已一致的项不计入返回值，同一份清单重放返回 0', async () => {
+    const { db, library, editor, authorId } = await openFixture();
+    const series = db.series[0]!;
+    await editor.saveSeries({
+      id: series.id,
+      title: series.title,
+      summary: series.summary,
+      status: series.status,
+      articleIds: series.articleIds,
+      authorIds: series.authorIds,
+      translatorIds: [authorId],
+      characterTagIds: [],
+      plotTagIds: [],
+    });
+    const items = series.articleIds.map((articleId) => ({
+      articleId,
+      field: 'translator' as const,
+    }));
+
+    expect(await editor.applySeriesMetaSync(series.id, items)).toBe(2);
+    expect(await editor.applySeriesMetaSync(series.id, items)).toBe(0);
+    // 空清单必须尽早返回：不白改 manifest.updatedAt、不白加 revision
+    const revision = library.revision;
+    expect(await editor.applySeriesMetaSync(series.id, [])).toBe(0);
+    expect(library.revision).toBe(revision);
+  });
+});

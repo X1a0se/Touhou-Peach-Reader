@@ -60,6 +60,12 @@ export interface SeriesDraft {
   sourceUrl?: string | null;
 }
 
+/** 一次同步操作：把系列的某个字段写到某篇文章上。 */
+export interface SeriesMetaSyncItem {
+  articleId: string;
+  field: SeriesAutoFillField;
+}
+
 export interface AuthorDraft {
   id?: string;
   canonicalName: string;
@@ -89,6 +95,8 @@ export interface Editor {
   deleteArticle(id: string): Promise<void>;
   saveSeries(draft: SeriesDraft): Promise<string>;
   deleteSeries(id: string): Promise<void>;
+  /** 按显式清单把系列当前值写到文章上；返回实际改动条数。 */
+  applySeriesMetaSync(seriesId: string, items: readonly SeriesMetaSyncItem[]): Promise<number>;
   saveAuthor(draft: AuthorDraft): Promise<string>;
   deleteAuthor(id: string): Promise<void>;
   saveTag(draft: TagDraft): Promise<string>;
@@ -344,6 +352,33 @@ export function createEditor(platform: Platform, library: Library): Editor {
         }
         db.featured = db.featured.filter((entry) => !(entry.targetType === 'series' && entry.targetId === id));
       });
+    },
+
+    async applySeriesMetaSync(seriesId, items) {
+      // 空清单直接返回：否则会白改一次 manifest.updatedAt、白加一次 revision、白刷一次界面
+      if (items.length === 0) return 0;
+      let changed = 0;
+      await library.applyEdit((db) => {
+        // 值一律从库里的系列现读，不信任调用方传进来的快照
+        const series = db.series.find((item) => item.id === seriesId);
+        if (!series) return;
+        const touched = new Set<string>();
+        for (const item of items) {
+          if (!series.articleIds.includes(item.articleId)) continue;
+          const article = db.articles.find((entry) => entry.id === item.articleId);
+          if (!article) continue;
+          // copyField 已经覆盖「系列该字段为空」「文章已是该值」两种跳过
+          if (!copyField(article, series, item.field)) continue;
+          changed += 1;
+          touched.add(article.id);
+        }
+        // 同一次编辑共用一个时间戳，避免同一批文章时间参差
+        const stamp = now();
+        for (const article of db.articles) {
+          if (touched.has(article.id)) article.updatedAt = stamp;
+        }
+      });
+      return changed;
     },
 
     async saveAuthor(draft) {
