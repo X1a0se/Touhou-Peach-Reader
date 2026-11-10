@@ -5,8 +5,8 @@
  */
 import type { DBSnapshot } from '@tpr/core';
 import {
-  SERIES_AUTO_FILL_FIELDS,
   type ArticleMeta,
+  SERIES_AUTO_FILL_FIELDS,
   type Series,
   type SeriesAutoFillField,
 } from '@tpr/schema';
@@ -57,9 +57,11 @@ function text(value: string): string {
   return value.trim();
 }
 
-/** 两个 id 数组是否表示同一个集合（顺序不算差异）。 */
+/** 两个 id 数组是否表示同一个集合（顺序不算差异，重复项也不算差异）。 */
 function sameIds(a: readonly string[], b: readonly string[]): boolean {
-  return a.length === b.length && a.every((id) => b.includes(id));
+  const left = new Set(a);
+  const right = new Set(b);
+  return left.size === right.size && [...left].every((id) => right.has(id));
 }
 
 /** 该字段是否为空（空 = 没有值可写）。 */

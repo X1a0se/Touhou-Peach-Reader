@@ -50,8 +50,9 @@ describe('meta-sync: 触发字段', () => {
   it('空→有值、值不同都算触发；清除与只改简介不算', () => {
     const base: MetaSyncBefore = { articleIds: [], ...EMPTY_VALUES };
     expect(triggeredMetaSyncFields(base, { ...base, authorIds: ['p_1'] })).toEqual(['author']);
-    expect(triggeredMetaSyncFields({ ...base, authorIds: ['p_1'] }, { ...base, authorIds: ['p_2'] }))
-      .toEqual(['author']);
+    expect(
+      triggeredMetaSyncFields({ ...base, authorIds: ['p_1'] }, { ...base, authorIds: ['p_2'] }),
+    ).toEqual(['author']);
     expect(triggeredMetaSyncFields({ ...base, authorIds: ['p_1'] }, base)).toEqual([]);
     expect(triggeredMetaSyncFields(base, base)).toEqual([]);
   });
@@ -59,6 +60,11 @@ describe('meta-sync: 触发字段', () => {
   it('同一集合换个顺序不算变化', () => {
     const before: MetaSyncBefore = { articleIds: [], ...EMPTY_VALUES, authorIds: ['p_1', 'p_2'] };
     expect(triggeredMetaSyncFields(before, { ...before, authorIds: ['p_2', 'p_1'] })).toEqual([]);
+  });
+
+  it('同一集合里的重复项也不算变化', () => {
+    const before: MetaSyncBefore = { articleIds: [], ...EMPTY_VALUES, authorIds: ['p_1'] };
+    expect(triggeredMetaSyncFields(before, { ...before, authorIds: ['p_1', 'p_1'] })).toEqual([]);
   });
 
   it('按字段声明顺序返回，与表单里的复选框顺序一致', () => {
@@ -70,7 +76,12 @@ describe('meta-sync: 触发字段', () => {
       translatorIds: ['p_1'],
       authorIds: ['p_2'],
     };
-    expect(triggeredMetaSyncFields(base, after)).toEqual(['cover', 'author', 'translator', 'sourceUrl']);
+    expect(triggeredMetaSyncFields(base, after)).toEqual([
+      'cover',
+      'author',
+      'translator',
+      'sourceUrl',
+    ]);
   });
 });
 
@@ -100,7 +111,10 @@ describe('meta-sync: 候选', () => {
       coverImageId: f.newCoverId,
     };
     const candidates = computeMetaSyncCandidates(f.snapshot, before, after, ['cover']);
-    expect(candidates.some((item) => item.articleId === f.shortId)).toBe(false);
+    expect(candidates).toEqual([
+      { articleId: f.entry1Id, field: 'cover', kind: 'replace' },
+      { articleId: f.entry2Id, field: 'cover', kind: 'fill' },
+    ]);
   });
 
   it('悬空的文章 id 跳过，新建系列（before 为 null）无候选', () => {

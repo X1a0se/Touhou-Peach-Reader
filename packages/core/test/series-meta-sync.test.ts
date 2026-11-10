@@ -152,55 +152,73 @@ describe('series meta sync: 显式清单同步', () => {
     expect(snapshot?.articles.find((a) => a.id === other)?.translatorIds).toEqual([]);
   });
 
-  it('不在系列内的文章、不存在的文章、系列该字段为空都跳过且不抛错', async () => {
+  it('系列该字段为空时整批跳过，文章一个字都不动', async () => {
+    // 夹具里系列的 translatorIds 本来就是空的，文章也都还是「未填」状态。
     const { db, library, editor } = await openFixture();
     const series = db.series[0]!;
-    // 系列译者留空：这一项要覆盖「系列该字段为空」。
-    await editor.saveSeries({
-      id: series.id,
-      title: series.title,
-      summary: series.summary,
-      status: series.status,
-      articleIds: series.articleIds,
-      authorIds: series.authorIds,
-      translatorIds: [],
-      characterTagIds: [],
-      plotTagIds: [],
-    });
+    const member = series.articleIds[0]!;
+    const readArticle = (id: string) => library.snapshot()!.articles.find((a) => a.id === id)!;
+    const before = readArticle(member);
+
+    const changed = await editor.applySeriesMetaSync(series.id, [
+      { articleId: member, field: 'translator' },
+    ]);
+
+    expect(changed).toBe(0);
+    const after = readArticle(member);
+    expect(after.translatorIds).toEqual([]);
+    // 一列都没改：连 updatedAt 也不该被动过
+    expect(after.updatedAt).toBe(before.updatedAt);
+  });
+
+  it('系列外的文章与不存在的 id 被跳过，只同步系列内那篇', async () => {
+    // 系列译者必须非空，否则三项会先在「系列该字段为空」处短路，成员/存在性守卫就测不到。
+    const source = makeDatabase();
+    const series = source.series[0]!;
+    const authorId = source.authors[0]!.id;
+    series.translatorIds = [authorId];
+    const { db, library, editor } = await openDatabase(source);
+    const member = series.articleIds[0]!;
+    const other = series.articleIds[1]!;
     const outsider = db.articles.find((article) => article.type === 'short')!;
 
     const changed = await editor.applySeriesMetaSync(series.id, [
       { articleId: outsider.id, field: 'translator' },
       { articleId: 'a_doesnotexist0000', field: 'translator' },
-      { articleId: series.articleIds[0]!, field: 'translator' },
+      { articleId: member, field: 'translator' },
     ]);
 
-    expect(changed).toBe(0);
-    expect(library.snapshot()?.articles.find((a) => a.id === outsider.id)?.translatorIds).toEqual(
-      [],
-    );
+    expect(changed).toBe(1);
+    const snapshot = library.snapshot()!;
+    const readArticle = (id: string) => snapshot.articles.find((a) => a.id === id)!;
+    expect(readArticle(member).translatorIds).toEqual([authorId]);
+    expect(readArticle(other).translatorIds).toEqual([]);
+    // 系列外的短篇一个字都不许动（连 updatedAt 也不动）
+    expect(readArticle(outsider.id).translatorIds).toEqual([]);
+    expect(readArticle(outsider.id).updatedAt).toBe(outsider.updatedAt);
+    // 悬空 id 不该凭空补出一篇文章
+    expect(snapshot.articles.some((article) => article.id === 'a_doesnotexist0000')).toBe(false);
   });
 
-  it('已一致的项不计入返回值，同一份清单重放返回 0', async () => {
-    const { db, library, editor, authorId } = await openFixture();
-    const series = db.series[0]!;
-    await editor.saveSeries({
-      id: series.id,
-      title: series.title,
-      summary: series.summary,
-      status: series.status,
-      articleIds: series.articleIds,
-      authorIds: series.authorIds,
-      translatorIds: [authorId],
-      characterTagIds: [],
-      plotTagIds: [],
-    });
+  it('同一批被改的文章共用一个 updatedAt；重放返回 0；空清单不进入编辑', async () => {
+    const source = makeDatabase();
+    const series = source.series[0]!;
+    series.translatorIds = [source.authors[0]!.id];
+    const { library, editor } = await openDatabase(source);
+    const readArticle = (id: string) => library.snapshot()!.articles.find((a) => a.id === id)!;
+    const before = new Map(series.articleIds.map((id) => [id, readArticle(id).updatedAt]));
     const items = series.articleIds.map((articleId) => ({
       articleId,
       field: 'translator' as const,
     }));
 
     expect(await editor.applySeriesMetaSync(series.id, items)).toBe(2);
+
+    // 两篇都是这一次编辑改的：必须共用同一个 now() 时间戳，并且确实换了新值
+    const [first, second] = series.articleIds.map((id) => readArticle(id));
+    expect(first!.updatedAt).toBe(second!.updatedAt);
+    expect(first!.updatedAt).not.toBe(before.get(series.articleIds[0]!));
+
     expect(await editor.applySeriesMetaSync(series.id, items)).toBe(0);
     // 空清单必须尽早返回：不白改 manifest.updatedAt、不白加 revision
     const revision = library.revision;
