@@ -656,3 +656,136 @@ describe('editor: 合并标签', () => {
     expect(library.snapshot()?.tags.length).toBe(before);
   });
 });
+
+describe('editor: 清空可选字段（Goal 28）', () => {
+  it('edit-clear-article-cover-source: 传 null 清空封面与原出处，省略则保留', async () => {
+    const { platform, library, editor } = await openDatabase();
+    const imageId = library.snapshot()?.images[0]?.id ?? '';
+    const authorId = library.snapshot()?.authors[0]?.id ?? '';
+    const base = {
+      type: 'short' as const,
+      title: '可清空的短篇',
+      summary: '',
+      authorIds: [authorId],
+      translatorIds: [],
+      characterTagIds: [],
+      plotTagIds: [],
+      illustrationImageIds: [],
+    };
+
+    const id = await editor.saveArticle({
+      ...base,
+      coverImageId: imageId,
+      sourceUrl: 'https://example.com/clear-me',
+    });
+    const created = library.snapshot()?.articles.find((article) => article.id === id);
+    expect(created?.coverImageId).toBe(imageId);
+    expect(created?.sourceUrl).toBe('https://example.com/clear-me');
+
+    await editor.saveArticle({ ...base, id, coverImageId: null, sourceUrl: null });
+    const cleared = library.snapshot()?.articles.find((article) => article.id === id);
+    expect(cleared?.coverImageId).toBeUndefined();
+    expect(cleared?.sourceUrl).toBeUndefined();
+
+    // 省略这两个键仍然表示「保留原值」，不能被当成清空
+    await editor.saveArticle({ ...base, id, title: '改个标题' });
+    const kept = library.snapshot()?.articles.find((article) => article.id === id);
+    expect(kept?.coverImageId).toBeUndefined();
+    expect(kept?.sourceUrl).toBeUndefined();
+
+    // 真的落盘了：重新打开库仍是空
+    const restored = createLibrary(platform);
+    await restored.restore();
+    const saved = restored.snapshot()?.articles.find((article) => article.id === id);
+    expect(saved?.coverImageId).toBeUndefined();
+    expect(saved?.sourceUrl).toBeUndefined();
+  });
+
+  it('edit-clear-series-cover-source: 系列封面与原出处也能清空', async () => {
+    const { platform, library, editor } = await openDatabase();
+    const imageId = library.snapshot()?.images[0]?.id ?? '';
+    const series = library.snapshot()?.series[0];
+    expect(series?.coverImageId).toBe(imageId);
+    if (!series) return;
+    const base = {
+      id: series.id,
+      title: series.title,
+      summary: series.summary,
+      status: series.status,
+      articleIds: series.articleIds,
+      authorIds: series.authorIds,
+      translatorIds: series.translatorIds,
+      characterTagIds: series.characterTagIds,
+      plotTagIds: series.plotTagIds,
+    };
+
+    await editor.saveSeries({ ...base, sourceUrl: 'https://example.com/series-src' });
+    expect(library.snapshot()?.series.find((item) => item.id === series.id)?.sourceUrl).toBe(
+      'https://example.com/series-src',
+    );
+
+    await editor.saveSeries({ ...base, coverImageId: null, sourceUrl: null });
+    const cleared = library.snapshot()?.series.find((item) => item.id === series.id);
+    expect(cleared?.coverImageId).toBeUndefined();
+    expect(cleared?.sourceUrl).toBeUndefined();
+
+    const restored = createLibrary(platform);
+    await restored.restore();
+    const saved = restored.snapshot()?.series.find((item) => item.id === series.id);
+    expect(saved?.coverImageId).toBeUndefined();
+    expect(saved?.sourceUrl).toBeUndefined();
+  });
+
+  it('edit-clear-author-notes-source: 作者备注与原出处能清空', async () => {
+    const { platform, library, editor } = await openDatabase();
+    const authorId = library.snapshot()?.authors[0]?.id ?? '';
+    const canonicalName = library.snapshot()?.authors[0]?.canonicalName ?? '';
+
+    await editor.saveAuthor({
+      id: authorId,
+      canonicalName,
+      aliases: [],
+      notes: '临时备注',
+      sourceUrl: 'https://example.com/author',
+    });
+    const filled = library.snapshot()?.authors.find((author) => author.id === authorId);
+    expect(filled?.notes).toBe('临时备注');
+    expect(filled?.sourceUrl).toBe('https://example.com/author');
+
+    await editor.saveAuthor({ id: authorId, canonicalName, aliases: [], notes: null, sourceUrl: null });
+    const cleared = library.snapshot()?.authors.find((author) => author.id === authorId);
+    expect(cleared?.notes).toBeUndefined();
+    expect(cleared?.sourceUrl).toBeUndefined();
+
+    const restored = createLibrary(platform);
+    await restored.restore();
+    const saved = restored.snapshot()?.authors.find((author) => author.id === authorId);
+    expect(saved?.notes).toBeUndefined();
+    expect(saved?.sourceUrl).toBeUndefined();
+  });
+
+  it('edit-clear-tag-aliases: 标签别名传空数组清空，省略则保留', async () => {
+    const { platform, library, editor } = await openDatabase();
+    const tagId = library.snapshot()?.tags[0]?.id ?? '';
+    const tag = library.snapshot()?.tags[0];
+    if (!tag) return;
+    const base = { id: tagId, category: tag.category, name: tag.name };
+
+    await editor.saveTag({ ...base, aliases: ['黑白', 'Marisa'] });
+    expect(library.snapshot()?.tags.find((item) => item.id === tagId)?.aliases).toEqual([
+      '黑白',
+      'Marisa',
+    ]);
+
+    await editor.saveTag({ ...base, aliases: [] });
+    expect(library.snapshot()?.tags.find((item) => item.id === tagId)?.aliases).toBeUndefined();
+
+    // 省略 aliases 仍然表示「保留原值」——不能把 [] 写回去
+    await editor.saveTag({ ...base, name: tag.name });
+    expect(library.snapshot()?.tags.find((item) => item.id === tagId)?.aliases).toBeUndefined();
+
+    const restored = createLibrary(platform);
+    await restored.restore();
+    expect(restored.snapshot()?.tags.find((item) => item.id === tagId)?.aliases).toBeUndefined();
+  });
+});

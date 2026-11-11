@@ -70,8 +70,10 @@ export interface AuthorDraft {
   id?: string;
   canonicalName: string;
   aliases: string[];
-  notes?: string;
-  sourceUrl?: string;
+  /** 不传表示保留原值，`null` / 空白表示清空 */
+  notes?: string | null;
+  /** 不传表示保留原值，`null` / 空白表示清空 */
+  sourceUrl?: string | null;
 }
 
 export interface TagDraft {
@@ -124,6 +126,24 @@ function requireTitle(title: string, label: string): string {
 /** 两个 id 数组是否表示同一个集合（顺序不算差异）。 */
 function sameIds(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((id) => b.includes(id));
+}
+
+/**
+ * 可选文本字段的清空：`undefined` 表示调用方没表态（保留原值），
+ * `null` 或全空白表示用户要清空。
+ *
+ * 必须在 `Object.assign(existing, next)` 之后调用 —— `next` 里空值是被条件展开
+ * 省掉的，而 `Object.assign` 只会覆盖、不会删键，旧值会原样留下。
+ * 同一手法见 `updateImage` 的 caption 与 `saveArticle` 的 seriesId。
+ */
+function clearTextWhenEmpty<T extends object>(
+  target: T,
+  key: keyof T & string,
+  value: string | null | undefined,
+): void {
+  if (value === undefined) return;
+  if (value !== null && value.trim()) return;
+  delete (target as Record<string, unknown>)[key];
 }
 
 /**
@@ -254,6 +274,9 @@ export function createEditor(platform: Platform, library: Library): Editor {
           Object.assign(existing, next);
           // 清空系列时必须删掉旧 seriesId，否则 Object.assign 会把它留下
           if (!targetSeriesId) delete existing.seriesId;
+          // 同上：清空封面 / 原出处也要删键
+          clearTextWhenEmpty(existing, 'coverImageId', draft.coverImageId);
+          clearTextWhenEmpty(existing, 'sourceUrl', draft.sourceUrl);
         } else {
           db.articles.push(next);
         }
@@ -318,8 +341,14 @@ export function createEditor(platform: Platform, library: Library): Editor {
           createdAt: existing?.createdAt ?? now(),
           updatedAt: now(),
         } satisfies Series;
-        if (existing) Object.assign(existing, next);
-        else db.series.push(next);
+        if (existing) {
+          Object.assign(existing, next);
+          // 清空封面 / 原出处要删键，Object.assign 不会删
+          clearTextWhenEmpty(existing, 'coverImageId', draft.coverImageId);
+          clearTextWhenEmpty(existing, 'sourceUrl', draft.sourceUrl);
+        } else {
+          db.series.push(next);
+        }
 
         // 文章的 seriesId 必须与系列 articleIds 双向一致
         for (const article of db.articles) {
@@ -409,8 +438,14 @@ export function createEditor(platform: Platform, library: Library): Editor {
           ...(draft.sourceUrl?.trim() ? { sourceUrl: draft.sourceUrl.trim() } : {}),
           updatedAt: now(),
         };
-        if (existing) Object.assign(existing, next);
-        else db.authors.push(next);
+        if (existing) {
+          Object.assign(existing, next);
+          // 清空备注 / 原出处要删键，Object.assign 不会删
+          clearTextWhenEmpty(existing, 'notes', draft.notes);
+          clearTextWhenEmpty(existing, 'sourceUrl', draft.sourceUrl);
+        } else {
+          db.authors.push(next);
+        }
       });
       return id;
     },
@@ -445,15 +480,25 @@ export function createEditor(platform: Platform, library: Library): Editor {
       }
       await library.applyEdit((db) => {
         const existing = db.tags.find((tag) => tag.id === id);
+        // `undefined` = 保留原别名；`[]` = 清空；非空 = 覆盖
+        const aliases = draft.aliases === undefined ? undefined : clean(draft.aliases);
         const next: Tag = {
           id,
           category: draft.category,
           name,
-          ...(clean(draft.aliases).length > 0 ? { aliases: clean(draft.aliases) } : {}),
+          ...(aliases && aliases.length > 0 ? { aliases } : {}),
           updatedAt: now(),
         };
-        if (existing) Object.assign(existing, next);
-        else db.tags.push(next);
+        if (existing) {
+          Object.assign(existing, next);
+          // 清空别名要删键，Object.assign 不会删（同 mergeTags 的写法）
+          if (aliases !== undefined) {
+            if (aliases.length > 0) existing.aliases = aliases;
+            else delete existing.aliases;
+          }
+        } else {
+          db.tags.push(next);
+        }
       });
       return id;
     },
