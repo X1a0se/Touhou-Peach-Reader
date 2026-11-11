@@ -43,10 +43,16 @@ import {
   computeMetaSyncCandidates,
   groupMetaSyncCandidates,
   mergeAutoFillFields,
+  META_SYNC_FIELD_LABEL,
   type MetaSyncBefore,
   type MetaSyncGroup,
   triggeredMetaSyncFields,
 } from '../editor/meta-sync.js';
+import {
+  prefillFromSeries,
+  type SeriesPrefillResult,
+  type SeriesPrefillTrace,
+} from '../editor/series-prefill.js';
 import {
   EDITOR_KIND_LABEL,
   EDITOR_KINDS,
@@ -1011,6 +1017,24 @@ const EMPTY_ARTICLE_PAYLOAD: ArticleDraftPayload = {
   sourceUrl: '',
 };
 
+/** 预填结果的一句话说明；没有可说的就返回 null（不显示提示条）。 */
+function describePrefill(host: Series | null, result: SeriesPrefillResult): string | null {
+  const filledText = result.filled.map((field) => META_SYNC_FIELD_LABEL[field]).join('、');
+  const revertedText = result.reverted.map((field) => META_SYNC_FIELD_LABEL[field]).join('、');
+  if (!host) {
+    return revertedText ? `已撤回上一次自动填上的${revertedText}。` : null;
+  }
+  if (filledText) {
+    const tail = revertedText ? `同时撤回了上一次填的${revertedText}。` : '';
+    return `已按《${host.title}》自动填上：${filledText}。只填空字段，可以继续修改。${tail}`;
+  }
+  if (host.autoFillFields.length === 0) {
+    return `《${host.title}》还没开启自动填。在「系列」页勾上「未来加入本系列的文章自动填上」，新文章就会自动带上这些字段。`;
+  }
+  const policyText = host.autoFillFields.map((field) => META_SYNC_FIELD_LABEL[field]).join('、');
+  return `《${host.title}》的自动填策略是${policyText}，但这些字段都已有值，未覆盖。`;
+}
+
 function ArticleForm({
   snapshot,
   initial,
@@ -1063,6 +1087,9 @@ function ArticleForm({
     draft?.illustrationImageIds ?? initial?.illustrationImageIds ?? [],
   );
   const [sourceUrl, setSourceUrl] = useState(draft?.sourceUrl ?? initial?.sourceUrl ?? '');
+  /** 系列预填留下的痕迹：字段 → 当初写进表单的值。只用来判断「这个值是我填的，可以撤回」。 */
+  const [prefillTrace, setPrefillTrace] = useState<SeriesPrefillTrace>({});
+  const [prefillNotice, setPrefillNotice] = useState<string | null>(null);
   const [baselineContent, setBaselineContent] = useState<string | null>(initial ? null : '');
   const [contentLoadFailed, setContentLoadFailed] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1214,6 +1241,28 @@ function ArticleForm({
     ? snapshot.series.find((series) => series.id === seriesId)
     : undefined;
 
+  /**
+   * 选中系列时立刻按该系列的自动填策略预填空字段（Goal 29）。
+   *
+   * 只在表单里生效、不写库：预填后字段非空，core 落库那步的 `fillFromSeries` 自然变成空操作，
+   * 不会二次覆盖。换系列或选回「不属于系列」时，只撤回「当初是我填的、且用户没改过」的值。
+   */
+  const changeSeries = (nextId: string): void => {
+    const host = nextId ? snapshot.series.find((series) => series.id === nextId) ?? null : null;
+    const result = prefillFromSeries(
+      host,
+      { authorIds, translatorIds, coverImageId, sourceUrl },
+      prefillTrace,
+    );
+    setSeriesId(nextId);
+    setAuthorIds(result.values.authorIds);
+    setTranslatorIds(result.values.translatorIds);
+    setCoverImageId(result.values.coverImageId);
+    setSourceUrl(result.values.sourceUrl);
+    setPrefillTrace(result.trace);
+    setPrefillNotice(describePrefill(host, result));
+  };
+
   /** 表单内新建标签：按名称/别名判重，复用则返回现有 id；创建后刷新快照让列表立即可见。 */
   const createTag = async (
     category: TagCategory,
@@ -1332,7 +1381,7 @@ function ArticleForm({
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
           <span className={labelClass}>系列</span>
-          <SeriesPicker series={seriesOptions} value={seriesId} onChange={setSeriesId} />
+          <SeriesPicker series={seriesOptions} value={seriesId} onChange={changeSeries} />
           <span className="text-xs text-muted-foreground">
             {selectedSeries
               ? position && position.series.id === selectedSeries.id
@@ -1340,6 +1389,9 @@ function ArticleForm({
                 : `保存后会加在《${selectedSeries.title}》目录末尾`
               : '不属于系列的文章会保存为短篇'}
           </span>
+          {prefillNotice ? (
+            <span className="text-xs text-muted-foreground">{prefillNotice}</span>
+          ) : null}
         </div>
         <Field label="原出处">
           <input
