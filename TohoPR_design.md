@@ -2310,6 +2310,20 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 
 ---
 
+## Goal 28 追加记录：清空可选字段
+
+- **问题形态**：编辑器里把封面、原出处、作者备注、标签别名清空后保存，库里旧值还在。根因是 `packages/core/src/editor/index.ts` 用条件展开（`...(draft.coverImageId ? { coverImageId } : {})`）把「用户清空」和「调用方没传」混成同一件事——空值被展成「键不存在」，而落盘是 `Object.assign(existing, next)`，它只覆盖、不删键。受影响七处：文章的封面 / 原出处、系列的封面 / 原出处、作者的备注 / 原出处、标签的别名。
+- **语义约定**：`undefined`（键缺席）= 保留原值；`null` 或全空白 = 清空；非空值 = 赋值。与 `SeriesDraft.autoFillFields` 的「不传保留、传 `[]` 清空」是同一套约定。`TagDraft.aliases` 不需要 `null`——`[]` 已经是明确的「清空」。
+- **修法**：新增 `clearTextWhenEmpty(target, key, value)`，在 `Object.assign` **之后**调用，`undefined` 直接返回、`null` 或 `trim()` 为空就 `delete`。同一手法在仓库里已有多处先例：`updateImage` 的 caption、`mergeTags` 的 aliases、`saveArticle` 的 `delete existing.seriesId`。四个落点（`saveArticle` / `saveSeries` / `saveAuthor` / `saveTag`）都改成 if/else 块，`saveTag` 顺带把重复计算的 `clean(draft.aliases)` 提成局部变量。
+- **类型**：`AuthorDraft.notes` / `sourceUrl` 加 `| null`；`ArticleDraft` / `SeriesDraft` 的 coverImageId / sourceUrl 早就是 `string | null`，只是实现从没读过。UI 侧的 `ArticleDraftPayload` / `SeriesDraftPayload` 等保持归一化字符串，localStorage 草稿格式不变，旧草稿照常能读。
+- **界面**：`ArticleForm` 与 `SeriesForm` 的提交从条件展开改成总是传 `coverImageId === '' ? null : coverImageId`、`sourceUrl.trim() === '' ? null : sourceUrl.trim()`。作者与标签表单本来就原样传字符串 / 数组，空串与空数组经过新语义正好是清空，无需改。
+- **交叉行为**：同一次保存里既清空封面、又让文章新进入一个开了封面自动填的系列时，`fillFromSeries` 在 `Object.assign` 之前跑、`clearTextWhenEmpty` 在之后跑，**清空赢**——清空是用户在这一笔里明确做的动作，想继承再存一次。这条写进了代码注释。清空也不触发元数据同步弹窗（`triggeredMetaSyncFields` 把空 after 当没触发），所以 Goal 27 验收第 6 条「清空封面 → 不弹窗」现在才是真的成立，之前是「因为清不掉」才成立的。
+- **不动的东西**：schema 不动（四个字段都是 `.optional()`，删键完全合法）；SQL 版本不动（`store.ts` 的读路径用 `rowNullableText` → `undefined` → 条件展开省略键，写路径 `addDeleteChildren` + `stableStringify` 比较会因键消失而判定「有变化」，正常重写）；`meta-sync.ts` 不动。
+- **测试与验证**：`packages/core/test/edit.test.ts` 新增 `describe('editor: 清空可选字段（Goal 28）')` 4 例——文章封面 / 原出处、系列封面 / 原出处、作者备注 / 原出处、标签别名，每例都验「传 `null`（或 `[]`）清空 → 再省略该键保存仍是空」，文章与系列两例还额外 `createLibrary(platform)` + `restore()` 断言真的落盘。全仓 371 例（platform 11、schema 31、core 234、desktop 95），`corepack pnpm typecheck`、`check:boundaries`、`check:no-tauri` 全过。手工验收在 headless Edge 经 CDP 真点一遍：清空系列封面 / 原出处、清空文章封面 / 原出处、清空作者备注 / 原出处、清空标签别名都即时生效且不弹同步窗；反向确认「只改标题就保存」封面与原出处仍在。
+- **取舍**：不改 `Object.assign` 的整体写法（换成显式字段赋值是更大的重构，本次只补删键）；不给 `TagDraft.aliases` 加 `null`（`[]` 已经够表达）；不顺手做「清空后回收孤立图片」（`deleteImage` 的级联已有，清空引用只是少一个使用者）。
+
+---
+
 ## 附：文档自检
 
 | 检查项 | 结论 |
@@ -2321,6 +2335,6 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–27 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复、公开发布、数据库重命名、导出直写、Goal 25、Goal 26 与 Goal 27 已追加） |
+| Goal 1–28 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复、公开发布、数据库重命名、导出直写、Goal 25、Goal 26、Goal 27 与 Goal 28 已追加） |
 
 
