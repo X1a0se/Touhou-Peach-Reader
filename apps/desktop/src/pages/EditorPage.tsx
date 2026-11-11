@@ -1248,9 +1248,10 @@ function ArticleForm({
           characterTagIds,
           plotTagIds,
           ...(seriesId ? { seriesId } : {}),
-          ...(coverImageId ? { coverImageId } : {}),
+          // 空值传 null 表示「清空」；省略则表示「保留原值」（Goal 28）
+          coverImageId: coverImageId === '' ? null : coverImageId,
           illustrationImageIds,
-          ...(sourceUrl.trim() ? { sourceUrl: sourceUrl.trim() } : {}),
+          sourceUrl: sourceUrl.trim() === '' ? null : sourceUrl.trim(),
         }).finally(() => setBusy(false));
       }}
     >
@@ -1813,9 +1814,10 @@ function SeriesForm({
           translatorIds,
           characterTagIds,
           plotTagIds,
-          ...(coverImageId ? { coverImageId } : {}),
+          // 空值传 null 表示「清空」；省略则表示「保留原值」（Goal 28）
+          coverImageId: coverImageId === '' ? null : coverImageId,
           illustrationImageIds,
-          ...(sourceUrl.trim() ? { sourceUrl: sourceUrl.trim() } : {}),
+          sourceUrl: sourceUrl.trim() === '' ? null : sourceUrl.trim(),
           autoFillFields,
         };
         const before: MetaSyncBefore = baselinePayload;
