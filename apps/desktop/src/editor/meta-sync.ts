@@ -64,8 +64,8 @@ function sameIds(a: readonly string[], b: readonly string[]): boolean {
   return left.size === right.size && [...left].every((id) => right.has(id));
 }
 
-/** 该字段是否为空（空 = 没有值可写）。 */
-function isEmptyField(values: MetaSyncValues, field: SeriesAutoFillField): boolean {
+/** 该字段是否为空（空 = 没有值可写）。系列预填也用它判断「这边有没有值可给」。 */
+export function isEmptyField(values: MetaSyncValues, field: SeriesAutoFillField): boolean {
   switch (field) {
     case 'cover':
       return text(values.coverImageId) === '';
