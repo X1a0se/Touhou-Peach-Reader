@@ -22,6 +22,33 @@ pub struct SqlStatement {
     params: Vec<serde_json::Value>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlFileSource {
+    file: String,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct SqlBulkStatement {
+    sql: String,
+    #[serde(default)]
+    params: Vec<serde_json::Value>,
+    #[serde(default)]
+    source: Option<SqlFileSource>,
+}
+
+#[derive(Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SqlBulkResult {
+    statements: u64,
+    text_count: u64,
+    text_bytes: u64,
+    blob_count: u64,
+    blob_bytes: u64,
+}
+
 #[derive(Serialize)]
 #[serde(untagged)]
 enum SqlCell {
@@ -161,6 +188,80 @@ pub async fn sql_batch(
     .map_err(|e| format!("EIO: {e}"))?
 }
 
+/// 批量写入的大导入路径：上万条语句只走一次 IPC、一个事务、一份预编译缓存。
+///
+/// 语句可以带 source 字段，由 Rust 直接从磁盘读取文件绑定最后一个占位符（文本或 BLOB），
+/// 正文与图片字节因此不必穿过 JS 内存与 JSON 序列化。返回的字节量供调用方做写回校验。
+#[tauri::command]
+pub async fn sql_bulk_write(
+    app: AppHandle,
+    path: String,
+    statements: Vec<SqlBulkStatement>,
+) -> Result<SqlBulkResult, String> {
+    let path = resolve_for_write(&app, &path)?;
+    let mut prepared_sources: Vec<Option<(PathBuf, bool)>> = Vec::with_capacity(statements.len());
+    for statement in &statements {
+        match &statement.source {
+            None => prepared_sources.push(None),
+            Some(source) => {
+                let resolved = resolve(&app, &source.file)?;
+                let is_text = match source.kind.as_deref() {
+                    None | Some("blob") => false,
+                    Some("text") => true,
+                    Some(other) => {
+                        return Err(format!("EINVAL: 不支持的文件来源类型：{other}"));
+                    }
+                };
+                prepared_sources.push(Some((resolved, is_text)));
+            }
+        }
+    }
+
+    tauri::async_runtime::spawn_blocking(move || bulk_write_blocking(path, statements, prepared_sources))
+        .await
+        .map_err(|e| format!("EIO: {e}"))?
+}
+
+/// 一个事务、一份预编译缓存地把整批语句写完。
+/// 拆成独立函数是为了能直接测：事务、参数绑定、文件来源与计数都不需要 AppHandle。
+fn bulk_write_blocking(
+    path: PathBuf,
+    statements: Vec<SqlBulkStatement>,
+    prepared_sources: Vec<Option<(PathBuf, bool)>>,
+) -> Result<SqlBulkResult, String> {
+    let mut connection = open_connection(&path, true)?;
+    let transaction = connection.transaction().map_err(sql_err)?;
+    let mut result = SqlBulkResult::default();
+    for (statement, source) in statements.into_iter().zip(prepared_sources) {
+        let mut values = bind_params(&statement.params)?;
+        match source {
+            None => {}
+            Some((file, is_text)) => {
+                let bytes = std::fs::read(&file)
+                    .map_err(|error| format!("EIO: 读取 {} 失败：{error}", file.display()))?;
+                let length = bytes.len() as u64;
+                if is_text {
+                    let text = String::from_utf8(bytes).map_err(|error| {
+                        format!("EIO: {} 不是合法 UTF-8：{error}", file.display())
+                    })?;
+                    values.push(rusqlite::types::Value::Text(text));
+                    result.text_count += 1;
+                    result.text_bytes += length;
+                } else {
+                    values.push(rusqlite::types::Value::Blob(bytes));
+                    result.blob_count += 1;
+                    result.blob_bytes += length;
+                }
+            }
+        }
+        let mut handle = transaction.prepare_cached(&statement.sql).map_err(sql_err)?;
+        handle.execute(params_from_iter(values)).map_err(sql_err)?;
+        result.statements += 1;
+    }
+    transaction.commit().map_err(sql_err)?;
+    Ok(result)
+}
+
 /// 读取单张图片的 BLOB；没有匹配行时返回空字节，TS 侧映射为 null。
 #[tauri::command]
 pub async fn sql_read_blob(
@@ -224,12 +325,19 @@ pub async fn sql_write_blob(
     path: String,
     sql: String,
     params: Vec<serde_json::Value>,
-    bytes: Option<Vec<u8>>,
+    base64: Option<String>,
     source_path: Option<String>,
 ) -> Result<(), String> {
     let path = resolve_for_write(&app, &path)?;
-    let source = match (bytes, source_path) {
-        (Some(bytes), _) => Some(bytes),
+    let source = match (base64, source_path) {
+        (Some(base64), _) => {
+            use base64::Engine as _;
+            Some(
+                base64::engine::general_purpose::STANDARD
+                    .decode(base64.as_bytes())
+                    .map_err(|error| format!("EINVAL: 字节内容不是合法 base64：{error}"))?,
+            )
+        }
         (None, Some(source_path)) => {
             let source = resolve(&app, &source_path)?;
             Some(std::fs::read(&source).map_err(|e| format!("EIO: {e}"))?)
@@ -252,7 +360,7 @@ pub async fn sql_write_blob(
                     .map_err(sql_err)?;
             }
             None => {
-                return Err("EINVAL: 缺少 BLOB 来源（bytes 或 sourcePath）".to_string());
+                return Err("EINVAL: 缺少 BLOB 来源（base64 或 sourcePath）".to_string());
             }
         }
         drop(prepared);
@@ -408,5 +516,169 @@ mod blob_tests {
             .query_row(["blob-row"], |row| optional_blob_bytes(row))
             .unwrap();
         assert_eq!(blob_row, Some(vec![1, 2]));
+    }
+}
+
+#[cfg(test)]
+mod bulk_write_tests {
+    use super::{bulk_write_blocking, SqlBulkStatement, SqlFileSource};
+    use rusqlite::Connection;
+    use std::path::{Path, PathBuf};
+
+    /// 临时目录放在 crates 自己的 target 下，避免写到系统 TEMP 之外的位置。
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test-tmp")
+            .join(format!("tpr-sqlbulk-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn with_source(
+        sql: &str,
+        params: Vec<serde_json::Value>,
+        source: Option<SqlFileSource>,
+    ) -> SqlBulkStatement {
+        SqlBulkStatement {
+            sql: sql.to_string(),
+            params,
+            source,
+        }
+    }
+
+    /// 模拟命令里的路径解析：文件来源在这里已经变成真实路径加文本标记。
+    fn prepared(statements: &[SqlBulkStatement]) -> Vec<Option<(PathBuf, bool)>> {
+        statements
+            .iter()
+            .map(|statement| {
+                statement.source.as_ref().map(|source| {
+                    let is_text = matches!(source.kind.as_deref(), Some("text"));
+                    (PathBuf::from(&source.file), is_text)
+                })
+            })
+            .collect()
+    }
+
+    fn count_tables(path: &Path) -> i64 {
+        let connection = Connection::open(path).unwrap();
+        connection
+            .query_row("SELECT COUNT(*) FROM sqlite_master", [], |row| row.get(0))
+            .unwrap()
+    }
+
+    #[test]
+    fn writes_text_and_blob_sources_in_one_transaction() {
+        let dir = temp_dir("roundtrip");
+        let md_path = dir.join("a.md");
+        let mut markdown = vec![0xEF, 0xBB, 0xBF];
+        markdown.extend_from_slice("正文".as_bytes());
+        std::fs::write(&md_path, &markdown).unwrap();
+        let image_path = dir.join("b.png");
+        std::fs::write(&image_path, [1u8, 2, 3, 4]).unwrap();
+
+        let statements = vec![
+            with_source(
+                "CREATE TABLE contents(id TEXT PRIMARY KEY, body TEXT)",
+                vec![],
+                None,
+            ),
+            with_source(
+                "CREATE TABLE images(id TEXT PRIMARY KEY, data BLOB)",
+                vec![],
+                None,
+            ),
+            with_source(
+                "INSERT INTO contents(id, body) VALUES ('c1', ?1)",
+                vec![],
+                Some(SqlFileSource {
+                    file: md_path.to_string_lossy().into_owned(),
+                    kind: Some("text".to_string()),
+                }),
+            ),
+            with_source(
+                "INSERT INTO images(id, data) VALUES ('i1', ?1)",
+                vec![],
+                Some(SqlFileSource {
+                    file: image_path.to_string_lossy().into_owned(),
+                    kind: None,
+                }),
+            ),
+        ];
+        let db = dir.join("out.sqlite");
+        let sources = prepared(&statements);
+        let result = bulk_write_blocking(db.clone(), statements, sources).unwrap();
+        assert_eq!(result.statements, 4);
+        assert_eq!(result.text_count, 1);
+        assert_eq!(result.text_bytes, markdown.len() as u64);
+        assert_eq!(result.blob_count, 1);
+        assert_eq!(result.blob_bytes, 4);
+
+        let connection = Connection::open(&db).unwrap();
+        let stored: Vec<u8> = connection
+            .query_row("SELECT CAST(body AS BLOB) FROM contents WHERE id = 'c1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(stored, markdown, "正文应当原样写入（包含 BOM）");
+        let blob: Vec<u8> = connection
+            .query_row("SELECT data FROM images WHERE id = 'i1'", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(blob, vec![1u8, 2, 3, 4]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rolls_back_every_statement_when_one_fails() {
+        let dir = temp_dir("rollback");
+        let statements = vec![
+            with_source("CREATE TABLE items(id INTEGER PRIMARY KEY)", vec![], None),
+            with_source("INSERT INTO items(id) VALUES (1)", vec![], None),
+            with_source("INSERT INTO items(id) VALUES (1)", vec![], None),
+        ];
+        let db = dir.join("out.sqlite");
+        let sources = prepared(&statements);
+        assert!(bulk_write_blocking(db.clone(), statements, sources).is_err());
+        assert_eq!(count_tables(&db), 0, "失败时建表语句也必须回滚");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rejects_missing_file_and_invalid_utf8() {
+        let dir = temp_dir("missing");
+        let absent = dir.join("absent.md");
+        let statements = vec![
+            with_source("CREATE TABLE contents(id TEXT PRIMARY KEY, body TEXT)", vec![], None),
+            with_source(
+                "INSERT INTO contents(id, body) VALUES ('c1', ?1)",
+                vec![],
+                Some(SqlFileSource {
+                    file: absent.to_string_lossy().into_owned(),
+                    kind: Some("text".to_string()),
+                }),
+            ),
+        ];
+        let db = dir.join("out.sqlite");
+        let sources = prepared(&statements);
+        assert!(bulk_write_blocking(db.clone(), statements, sources).is_err());
+        assert_eq!(count_tables(&db), 0);
+
+        let broken = dir.join("broken.md");
+        std::fs::write(&broken, [0xFFu8, 0xFE]).unwrap();
+        let statements = vec![
+            with_source("CREATE TABLE contents(id TEXT PRIMARY KEY, body TEXT)", vec![], None),
+            with_source(
+                "INSERT INTO contents(id, body) VALUES ('c1', ?1)",
+                vec![],
+                Some(SqlFileSource {
+                    file: broken.to_string_lossy().into_owned(),
+                    kind: Some("text".to_string()),
+                }),
+            ),
+        ];
+        let broken_db = dir.join("broken.sqlite");
+        let sources = prepared(&statements);
+        assert!(bulk_write_blocking(broken_db.clone(), statements, sources).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

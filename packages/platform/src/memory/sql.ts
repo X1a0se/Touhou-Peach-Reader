@@ -3,7 +3,16 @@
 import initSqlJs, { type Database, type SqlJsStatic } from 'sql.js';
 import { PlatformError } from '../errors.js';
 import { dirnamePath } from '../paths.js';
-import type { BlobSource, IFileSystem, ISql, SqlRow, SqlValue, SqlStatement } from '../types.js';
+import type {
+  BlobSource,
+  IFileSystem,
+  ISql,
+  SqlBulkResult,
+  SqlBulkStatement,
+  SqlRow,
+  SqlStatement,
+  SqlValue,
+} from '../types.js';
 
 /**
  * 内存/测试 SQL 实现：完整 SQLite 语义由 sql.js WASM 提供。
@@ -85,7 +94,10 @@ export function createMemorySql(fs: IFileSystem): ISql {
     } catch (error) {
       if (!(error instanceof PlatformError) || error.code !== 'ENOENT' || !create) throw error;
     }
-    return { db: bytes ? new engine.Database(bytes) : new engine.Database(), existed: bytes !== null };
+    return {
+      db: bytes ? new engine.Database(bytes) : new engine.Database(),
+      existed: bytes !== null,
+    };
   }
 
   async function persist(path: string, db: Database): Promise<void> {
@@ -209,6 +221,66 @@ export function createMemorySql(fs: IFileSystem): ISql {
           throw error;
         }
         await persist(path, db);
+      } catch (error) {
+        throw sqlError(error);
+      } finally {
+        db?.close();
+      }
+    },
+
+    async bulkWrite(path, statements: SqlBulkStatement[]) {
+      let db: Database | null = null;
+      try {
+        const opened = await open(path, true);
+        db = opened.db;
+        const result: SqlBulkResult = {
+          statements: 0,
+          textCount: 0,
+          textBytes: 0,
+          blobCount: 0,
+          blobBytes: 0,
+        };
+        db.run('BEGIN IMMEDIATE');
+        try {
+          for (const statement of statements) {
+            const params = wrapParams(statement.params);
+            const source = statement.source;
+            if (!source) {
+              if (params) db.run(statement.sql, params);
+              else db.run(statement.sql);
+              result.statements += 1;
+              continue;
+            }
+            const bytes = await fs.readBytes(source.file);
+            if ((source.kind ?? 'blob') === 'text') {
+              // sql.js 读回 TEXT 时会把开头 BOM 当标记吃掉（写进去是 3 个字节，取出来少一个字符），
+              // 这里写入时就按「实际能读回来」的字节数对齐，让计数与读回校验一致；
+              // 桌面端（Rust + rusqlite）会原样保留 BOM，字节数等于文件长度。
+              const text = new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes);
+              const stored = text.startsWith('\ufeff') ? text.slice(1) : text;
+              const withText = [...(params ?? []), stored];
+              db.run(statement.sql, withText);
+              result.textCount += 1;
+              result.textBytes += bytes.byteLength - (text.length - stored.length) * 3;
+            } else {
+              const withBlob = [...(params ?? []), bytes] as unknown[];
+              db.run(statement.sql, withBlob);
+              result.blobCount += 1;
+              result.blobBytes += bytes.byteLength;
+            }
+            result.statements += 1;
+          }
+          db.run('COMMIT');
+        } catch (error) {
+          try {
+            db.run('ROLLBACK');
+          } catch {
+            // 忽略
+          }
+          throw error;
+        }
+        await persist(path, db);
+        return result;
       } catch (error) {
         throw sqlError(error);
       } finally {

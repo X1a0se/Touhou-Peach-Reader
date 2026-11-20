@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
 import { zipSync } from 'fflate';
+import { describe, expect, it } from 'vitest';
 import { PlatformError } from '../src/errors.js';
 import { createMemoryPlatform } from '../src/memory/index.js';
 import { safeEntryPath } from '../src/security.js';
@@ -63,11 +63,15 @@ describe('MemoryWallpapers', () => {
   it('拒绝不支持的扩展名与超限文件', async () => {
     const platform = createMemoryPlatform();
     await platform.fs.writeBytes('/tmp/w.bmp', png);
-    await expect(platform.wallpapers.importFile('/tmp/w.bmp')).rejects.toBeInstanceOf(PlatformError);
+    await expect(platform.wallpapers.importFile('/tmp/w.bmp')).rejects.toBeInstanceOf(
+      PlatformError,
+    );
 
     const huge = new Uint8Array(20 * 1024 * 1024 + 1);
     await platform.fs.writeBytes('/tmp/big.png', huge);
-    await expect(platform.wallpapers.importFile('/tmp/big.png')).rejects.toBeInstanceOf(PlatformError);
+    await expect(platform.wallpapers.importFile('/tmp/big.png')).rejects.toBeInstanceOf(
+      PlatformError,
+    );
   });
 
   it('空文件名返回空 URL', () => {
@@ -128,5 +132,71 @@ describe('FflateZip', () => {
     expect(result.rejected).toHaveLength(1);
     expect(await fs.readText('/dest/ok.txt')).toBe('ok');
     expect(await fs.exists('/evil.txt')).toBe(false);
+  });
+});
+
+describe('MemorySql.bulkWrite', () => {
+  it('一个事务写完文件来源的正文与图片，并给出计数', async () => {
+    const { fs, sql } = createMemoryPlatform();
+    const markdown = new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode('正文')]);
+    await fs.writeBytes('/src/a.md', markdown);
+    await fs.writeBytes('/src/b.png', new Uint8Array([1, 2, 3, 4]));
+
+    const result = await sql.bulkWrite('/db/library.sqlite', [
+      { sql: 'CREATE TABLE contents(id TEXT PRIMARY KEY, body TEXT)' },
+      { sql: 'CREATE TABLE images(id TEXT PRIMARY KEY, data BLOB)' },
+      {
+        sql: 'INSERT INTO contents(id, body) VALUES (?, ?)',
+        params: ['c1'],
+        source: { file: '/src/a.md', kind: 'text' },
+      },
+      {
+        sql: 'INSERT INTO images(id, data) VALUES (?, ?)',
+        params: ['i1'],
+        source: { file: '/src/b.png' },
+      },
+    ]);
+
+    // sql.js 读回 TEXT 会吃掉开头 BOM，因此这一实现统计的是能读回来的字节数
+    expect(result).toEqual({
+      statements: 4,
+      textCount: 1,
+      textBytes: markdown.byteLength - 3,
+      blobCount: 1,
+      blobBytes: 4,
+    });
+    const contents = await sql.query('/db/library.sqlite', 'SELECT body FROM contents');
+    // 计数与读回内容必须一致：导入校验就是按字节数比对的
+    expect(contents[0]?.body).toBe('正文');
+    const image = await sql.readBlob('/db/library.sqlite', 'SELECT data FROM images');
+    expect(Array.from(image ?? [])).toEqual([1, 2, 3, 4]);
+  });
+
+  it('某条语句失败时整批回滚，不留半张表', async () => {
+    const { fs, sql } = createMemoryPlatform();
+    await expect(
+      sql.bulkWrite('/db/broken.sqlite', [
+        { sql: 'CREATE TABLE items(id INTEGER PRIMARY KEY)' },
+        { sql: 'INSERT INTO items(id) VALUES (?)', params: [1] },
+        { sql: 'INSERT INTO items(id) VALUES (?)', params: [1] },
+      ]),
+    ).rejects.toBeInstanceOf(PlatformError);
+
+    // 整批失败时不会落盘，连空库都不留
+    expect(await fs.exists('/db/broken.sqlite')).toBe(false);
+  });
+
+  it('来源文件缺失时抛 PlatformError', async () => {
+    const { sql } = createMemoryPlatform();
+    await expect(
+      sql.bulkWrite('/db/missing.sqlite', [
+        { sql: 'CREATE TABLE contents(id TEXT PRIMARY KEY, body TEXT)' },
+        {
+          sql: 'INSERT INTO contents(id, body) VALUES (?, ?)',
+          params: ['c1'],
+          source: { file: '/src/absent.md', kind: 'text' },
+        },
+      ]),
+    ).rejects.toBeInstanceOf(PlatformError);
   });
 });

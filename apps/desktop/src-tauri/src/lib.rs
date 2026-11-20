@@ -52,6 +52,7 @@ pub fn run() {
             commands::fs::stage_import,
             commands::sql::sql_query,
             commands::sql::sql_batch,
+            commands::sql::sql_bulk_write,
             commands::sql::sql_read_blob,
             commands::sql::sql_read_blob_to_file,
             commands::sql::sql_write_blob,

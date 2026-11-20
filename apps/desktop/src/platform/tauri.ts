@@ -1,24 +1,26 @@
 import { Channel, convertFileSrc, invoke } from '@tauri-apps/api/core';
 import { appDataDir } from '@tauri-apps/api/path';
 import { openUrl } from '@tauri-apps/plugin-opener';
-import { PlatformError, mapNativeError } from '@tpr/platform';
 import type {
   BlobSource,
   DirEntry,
   FileStat,
   IFileSystem,
+  INetwork,
   ISql,
   IWallpaperStore,
   IZip,
-  INetwork,
   Platform,
   RejectedEntry,
+  SqlBulkResult,
+  SqlBulkStatement,
   SqlRow,
   SqlStatement,
   SqlValue,
   ZipCreateResult,
   ZipExtractResult,
 } from '@tpr/platform';
+import { mapNativeError, PlatformError } from '@tpr/platform';
 
 /**
  * Tauri 平台实现 —— 仓库里唯一允许 import @tauri-apps/* 的文件（design §3.2）。
@@ -41,14 +43,17 @@ class TauriFileSystem implements IFileSystem {
     return call('fs_read_text', { path });
   }
   async readBytes(path: string): Promise<Uint8Array> {
-    const data = await call<number[]>('fs_read_bytes', { path });
-    return Uint8Array.from(data);
+    const raw = await call<unknown>('fs_read_bytes', { path });
+    const bytes = bytesOf(raw);
+    if (bytes === null) throw new PlatformError('EIO', '文件读取返回了不支持的数据类型');
+    return bytes;
   }
   async writeText(path: string, text: string): Promise<void> {
     return call('fs_write_text', { path, text });
   }
   async writeBytes(path: string, bytes: Uint8Array): Promise<void> {
-    return call('fs_write_bytes', { path, bytes: Array.from(bytes) });
+    // base64 而不是 number[]：大型 .tpr（几十 MB）的序列化开销断崖式下降
+    return call('fs_write_bytes', { path, base64: base64Of(bytes) });
   }
   async exists(path: string): Promise<boolean> {
     return call('fs_exists', { path });
@@ -73,10 +78,24 @@ class TauriFileSystem implements IFileSystem {
   }
 }
 
+/** 把一个字节数组编码成 base64（分块，避免超长参数列表爆栈）。 */
+function base64Of(bytes: Uint8Array): string {
+  const CHUNK = 0x8000;
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += CHUNK) {
+    binary += String.fromCharCode.apply(
+      null,
+      bytes.subarray(offset, offset + CHUNK) as unknown as number[],
+    );
+  }
+  return btoa(binary);
+}
+
 function bytesOf(value: unknown): Uint8Array | null {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
   if (value instanceof Uint8Array) return value;
-  if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+  if (ArrayBuffer.isView(value))
+    return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   if (Array.isArray(value) && value.every((item) => typeof item === 'number')) {
     return Uint8Array.from(value as number[]);
   }
@@ -123,9 +142,20 @@ class TauriSql implements ISql {
     source: BlobSource,
   ): Promise<void> {
     if (source instanceof Uint8Array) {
-      return call('sql_write_blob', { path, sql, params, bytes: Array.from(source) });
+      return call('sql_write_blob', { path, sql, params, base64: base64Of(source) });
     }
     return call('sql_write_blob', { path, sql, params, sourcePath: source.file });
+  }
+
+  async bulkWrite(path: string, statements: SqlBulkStatement[]): Promise<SqlBulkResult> {
+    return call<SqlBulkResult>('sql_bulk_write', {
+      path,
+      statements: statements.map((statement) => ({
+        sql: statement.sql,
+        params: statement.params ?? [],
+        ...(statement.source ? { source: statement.source } : {}),
+      })),
+    });
   }
 }
 
@@ -155,11 +185,23 @@ class TauriZip implements IZip {
     }
   }
 
-  async createFromDir(dirPath: string, zipPath: string, opts?: { order?: string[] }): Promise<ZipCreateResult> {
-    return call('zip_create_from_dir', { dirPath, zipPath, order: opts?.order ?? ['manifest.json'] });
+  async createFromDir(
+    dirPath: string,
+    zipPath: string,
+    opts?: { order?: string[] },
+  ): Promise<ZipCreateResult> {
+    return call('zip_create_from_dir', {
+      dirPath,
+      zipPath,
+      order: opts?.order ?? ['manifest.json'],
+    });
   }
 
-  async createFromDirTo(dirPath: string, targetPath: string, opts?: { order?: string[] }): Promise<ZipCreateResult> {
+  async createFromDirTo(
+    dirPath: string,
+    targetPath: string,
+    opts?: { order?: string[] },
+  ): Promise<ZipCreateResult> {
     return call('zip_create_from_dir_to', {
       dirPath,
       targetPath,
@@ -263,8 +305,7 @@ export async function createTauriPlatform(): Promise<Platform> {
         const databaseId = tools.basename(databaseDir);
         const safe = /^[A-Za-z0-9_-]{1,128}$/;
         if (!safe.test(databaseId) || !safe.test(imageId)) return null;
-        const useHttp =
-          typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
+        const useHttp = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
         return `${useHttp ? 'http://peach.localhost' : 'peach://localhost'}/image/${databaseId}/${imageId}`;
       },
     },

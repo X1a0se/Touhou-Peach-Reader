@@ -87,11 +87,16 @@ pub async fn fs_read_text(app: AppHandle, path: String) -> Result<String, String
 }
 
 #[tauri::command]
-pub async fn fs_read_bytes(app: AppHandle, path: String) -> Result<Vec<u8>, String> {
+pub async fn fs_read_bytes(
+    app: AppHandle,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
     let path = resolve(&app, &path)?;
-    tauri::async_runtime::spawn_blocking(move || fs::read(&path).map_err(io_err))
+    let bytes = tauri::async_runtime::spawn_blocking(move || fs::read(&path).map_err(io_err))
         .await
-        .map_err(|e| format!("EIO: {e}"))?
+        .map_err(|e| format!("EIO: {e}"))??;
+    // 直接回二进制响应：几十 MB 的文件不必先变成 JSON 数字数组再在 JS 里转回 Uint8Array。
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]
@@ -103,8 +108,17 @@ pub async fn fs_write_text(app: AppHandle, path: String, text: String) -> Result
 }
 
 #[tauri::command]
-pub async fn fs_write_bytes(app: AppHandle, path: String, bytes: Vec<u8>) -> Result<(), String> {
+pub async fn fs_write_bytes(app: AppHandle, path: String, base64: String) -> Result<(), String> {
     let path = resolve_for_write(&app, &path)?;
+    // 字节走 base64 而不是 JSON 数字数组：44MB 的包实测从 ~2s 的序列化降到毫秒级。
+    let bytes = tauri::async_runtime::spawn_blocking(move || {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .decode(base64.as_bytes())
+            .map_err(|error| format!("EINVAL: 字节内容不是合法 base64：{error}"))
+    })
+    .await
+    .map_err(|e| format!("EIO: {e}"))??;
     tauri::async_runtime::spawn_blocking(move || write_atomic(&path, &bytes))
         .await
         .map_err(|e| format!("EIO: {e}"))?

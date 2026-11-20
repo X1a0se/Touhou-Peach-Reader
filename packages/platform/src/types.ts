@@ -68,6 +68,26 @@ export type SqlRow = Record<string, SqlValue>;
 /** 图片等 BLOB 的来源：已在 JS 里的字节，或允许平台直接从文件读取。 */
 export type BlobSource = Uint8Array | { file: string };
 
+/** 批量写入时由平台直接从磁盘读取的最后一个占位符：BLOB 字节或 UTF-8 文本。 */
+export type SqlFileSource = { file: string; kind?: 'blob' | 'text' };
+
+export interface SqlBulkStatement extends SqlStatement {
+  /** 给了 source 就用文件内容绑定最后一个占位符（不经过 JS 内存）。 */
+  source?: SqlFileSource;
+}
+
+/** 批量写入的结果：让调用方不必重新读库就能核对写入量。 */
+export interface SqlBulkResult {
+  /** 实际执行的语句数 */
+  statements: number;
+  /** 从文件读入的文本语句数与总字节数 */
+  textCount: number;
+  textBytes: number;
+  /** 从文件读入的 BLOB 语句数与总字节数 */
+  blobCount: number;
+  blobBytes: number;
+}
+
 /**
  * 通用 SQL 接口（本地数据库使用）。
  *
@@ -86,20 +106,42 @@ export interface ISql {
     targetPath: string,
   ): Promise<boolean>;
   writeBlob(path: string, sql: string, params: SqlValue[], source: BlobSource): Promise<void>;
+  /**
+   * 批量写入（大导入用）：所有语句在**同一个事务**里执行，语句可带文件来源，
+   * 平台直接从磁盘读文本/BLOB 绑定，不必让字节穿过 JS。桌面端实现还会复用
+   * 预编译语句缓存，让上万条插入只剩一次 IPC 与一次提交。
+   */
+  bulkWrite(path: string, statements: SqlBulkStatement[]): Promise<SqlBulkResult>;
 }
 
 export interface IZip {
   /** 解压整个包到 destDir；zip-slip、符号链接、超限条目进 rejected，不中断整体 */
-  extractAll(zipPath: string, destDir: string, opts?: { limits?: Partial<ZipLimits> }): Promise<ZipExtractResult>;
+  extractAll(
+    zipPath: string,
+    destDir: string,
+    opts?: { limits?: Partial<ZipLimits> },
+  ): Promise<ZipExtractResult>;
   /** 直接吃字节（浏览器/测试用） */
-  extractBytes(bytes: Uint8Array, destDir: string, opts?: { limits?: Partial<ZipLimits> }): Promise<ZipExtractResult>;
+  extractBytes(
+    bytes: Uint8Array,
+    destDir: string,
+    opts?: { limits?: Partial<ZipLimits> },
+  ): Promise<ZipExtractResult>;
   /** 把目录打成 zip；order 里的条目最后写入（manifest.json 用） */
-  createFromDir(dirPath: string, zipPath: string, opts?: { order?: string[] }): Promise<ZipCreateResult>;
+  createFromDir(
+    dirPath: string,
+    zipPath: string,
+    opts?: { order?: string[] },
+  ): Promise<ZipCreateResult>;
   /**
    * 把目录直接写成目标 zip（桌面端用于导出：ZIP 字节不回传 JS）。
    * 语义与 createFromDir 相同，只是命名强调目标由调用方选定。
    */
-  createFromDirTo(dirPath: string, targetPath: string, opts?: { order?: string[] }): Promise<ZipCreateResult>;
+  createFromDirTo(
+    dirPath: string,
+    targetPath: string,
+    opts?: { order?: string[] },
+  ): Promise<ZipCreateResult>;
 }
 
 export interface IAppPaths {
