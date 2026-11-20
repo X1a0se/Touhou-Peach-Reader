@@ -28,6 +28,7 @@ import { DraftList } from '../components/DraftList.js';
 import { ImageFilePicker } from '../components/ImageFilePicker.js';
 import { ListSearchInput } from '../components/ListSearchInput.js';
 import { R18Field } from '../components/R18Field.js';
+import { ScrollToBottomButton } from '../components/ScrollToBottomButton.js';
 import { SeriesAutoFillFieldPicker, SeriesMetaSyncDialog } from '../components/SeriesMetaSyncDialog.js';
 import { SeriesPicker } from '../components/SeriesPicker.js';
 import { TagPicker } from '../components/TagPicker.js';
@@ -1096,6 +1097,8 @@ function ArticleForm({
   const [importBusy, setImportBusy] = useState(false);
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const documentInputRef = useRef<HTMLInputElement | null>(null);
+  /** 底部操作行：正文很长时它被挡在视口下方，「直达底部」据此判断要不要出现。 */
+  const actionRowRef = useRef<HTMLDivElement | null>(null);
 
   const draftPayload = useMemo<ArticleDraftPayload | null>(
     () =>
@@ -1447,7 +1450,7 @@ function ArticleForm({
       </div>
       <IllustrationUpload value={illustrationImageIds} onChange={setIllustrationImageIds} />
 
-      <div className="flex items-center gap-2">
+      <div ref={actionRowRef} className="flex items-center gap-2">
         <button type="submit" className={primaryClass} disabled={busy}>
           {busy ? '保存中…' : '保存'}
         </button>
@@ -1469,6 +1472,7 @@ function ArticleForm({
           </button>
         ) : null}
       </div>
+      <ScrollToBottomButton targetRef={actionRowRef} />
     </form>
   );
 }
@@ -1764,6 +1768,8 @@ function SeriesForm({
   );
   const [pending, setPending] = useState<PendingSync | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 底部操作行：和文章表单一样，「直达底部」看它有没有整个进视口。 */
+  const actionRowRef = useRef<HTMLDivElement | null>(null);
 
   const draftPayload = useMemo<SeriesDraftPayload>(
     () => ({
@@ -2018,7 +2024,7 @@ function SeriesForm({
       />
       <IllustrationUpload value={illustrationImageIds} onChange={setIllustrationImageIds} />
 
-      <div className="flex items-center gap-2">
+      <div ref={actionRowRef} className="flex items-center gap-2">
         <button type="submit" className={primaryClass} disabled={busy || pending !== null}>
           {busy ? '保存中…' : '保存'}
         </button>
@@ -2050,6 +2056,8 @@ function SeriesForm({
           onCancel={() => setPending(null)}
         />
       ) : null}
+
+      <ScrollToBottomButton targetRef={actionRowRef} />
     </form>
   );
 }
