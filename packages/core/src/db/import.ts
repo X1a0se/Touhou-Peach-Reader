@@ -1,18 +1,18 @@
 import type { Platform, RejectedEntry } from '@tpr/platform';
 import {
   type Issue,
+  migrateDatabase,
   type RawDatabase,
   type ValidateResult,
-  migrateDatabase,
   validateDatabase,
 } from '@tpr/schema';
 import { articleMd } from './layout.js';
 import { computeCounts, normalizeDatabase } from './normalize.js';
 import { readDatabaseDir } from './read.js';
+import { type DBSnapshot, toSnapshot } from './snapshot.js';
+import { databasePathOf, type MarkdownSource, writeSqliteDatabase } from './sql/store.js';
 import { mergeDuplicateTags } from './tag-merge.js';
-import { toSnapshot, type DBSnapshot } from './snapshot.js';
-import { databasePathOf, writeSqliteDatabase } from './sql/store.js';
-import { DB_LAYOUT, commitWorkspace, ioFor, removeTree } from './workspace.js';
+import { commitWorkspace, DB_LAYOUT, ioFor, removeTree } from './workspace.js';
 
 export interface ImportOutcome {
   snapshot: DBSnapshot;
@@ -21,6 +21,11 @@ export interface ImportOutcome {
   rejected: RejectedEntry[];
   /** 导入时自动合并的同类别同名标签组数 */
   mergedTags: number;
+  /**
+   * 刚写好的数据库（读回校验那一次的结果）。调用方可以直接拿它当初始状态，
+   * 省掉导入后立刻再整库读一遍的开销。
+   */
+  db?: RawDatabase;
 }
 
 export class ImportError extends Error {
@@ -55,7 +60,8 @@ async function runImport(
     const filePaths = new Set(normalized.filePaths ?? []);
     for (const [id] of markdown) filePaths.add(articleMd(id));
     for (const article of normalized.articles) {
-      if (typeof article.content === 'object' && article.content !== null) filePaths.add(article.content.file);
+      if (typeof article.content === 'object' && article.content !== null)
+        filePaths.add(article.content.file);
     }
     // 旧版导出包可能包含“有元数据但没有 BLOB”的图片：导出端当时只记警告，
     // images.json 仍指向不存在的文件。这里在校验前剔除这些条目并补一条导入警告，
@@ -69,7 +75,11 @@ async function runImport(
     const ready: RawDatabase = {
       ...normalized,
       images,
-      manifest: { ...normalized.manifest, counts: computeCounts({ ...normalized, images }), updatedAt: normalized.manifest.updatedAt },
+      manifest: {
+        ...normalized.manifest,
+        counts: computeCounts({ ...normalized, images }),
+        updatedAt: normalized.manifest.updatedAt,
+      },
       filePaths,
     };
 
@@ -85,7 +95,10 @@ async function runImport(
     report.warnings.unshift(...missingImageIssues);
     if (tagMerge.groups.length > 0) {
       const removed = tagMerge.groups.reduce((sum, group) => sum + group.removedIds.length, 0);
-      const names = tagMerge.groups.slice(0, 5).map((group) => group.name).join('、');
+      const names = tagMerge.groups
+        .slice(0, 5)
+        .map((group) => group.name)
+        .join('、');
       report.warnings.unshift({
         code: 'W_IMPORT_TAG_MERGED',
         severity: 'warning',
@@ -97,17 +110,26 @@ async function runImport(
       throw new ImportError(`导入失败：数据库校验未通过（${report.errors.length} 个错误）`, report);
     }
 
+    // 正文不再读进 JS：把文件位置交给平台，写入时 Rust 直接从 staging 读。
+    const sources: Map<string, MarkdownSource> = new Map(markdown);
     for (const article of ready.articles) {
-      if (markdown.has(article.id)) continue;
+      if (sources.has(article.id)) continue;
       if (typeof article.content !== 'object' || article.content === null) continue;
-      markdown.set(article.id, await platform.fs.readText(io.join(staging, article.content.file)));
+      sources.set(article.id, { file: io.join(staging, article.content.file) });
     }
 
     // 所有实体、正文与图片 BLOB 一次性写成 staging/database.sqlite；解压出来的
     // JSON/Markdown/图片只是原料，写完即删，提交后的 workspace 只保留 SQLite 文件。
     const imageSources = new Map<string, { file: string }>();
-    for (const image of ready.images) imageSources.set(image.id, { file: io.join(staging, image.file) });
-    await writeSqliteDatabase(platform, databasePathOf(platform, staging), ready, markdown, imageSources);
+    for (const image of ready.images)
+      imageSources.set(image.id, { file: io.join(staging, image.file) });
+    const db = await writeSqliteDatabase(
+      platform,
+      databasePathOf(platform, staging),
+      ready,
+      sources,
+      imageSources,
+    );
     for (const entry of await platform.fs.listDir(staging)) {
       if (entry.name === 'database.sqlite') continue;
       await platform.fs.remove(entry.path, { recursive: true });
@@ -120,6 +142,7 @@ async function runImport(
       migrations: applied,
       rejected: extracted.rejected,
       mergedTags: tagMerge.groups.length,
+      db,
     };
   } finally {
     await removeTree(platform, staging);
@@ -128,7 +151,10 @@ async function runImport(
 }
 
 /** `/goal` 3 的字节入口：桌面端把字节落成临时 .tpr，仍然走 Rust 流式解压。 */
-export async function importDatabaseFromBytes(platform: Platform, bytes: Uint8Array): Promise<ImportOutcome> {
+export async function importDatabaseFromBytes(
+  platform: Platform,
+  bytes: Uint8Array,
+): Promise<ImportOutcome> {
   const stamp = Date.now();
   const importsRoot = platform.paths.join(platform.paths.dataDir, DB_LAYOUT.importsDir);
   await platform.fs.mkdir(importsRoot);
@@ -138,6 +164,9 @@ export async function importDatabaseFromBytes(platform: Platform, bytes: Uint8Ar
 }
 
 /** 路径入口：拖入/选择的是用户自己的文件，绝不删除。 */
-export async function importDatabaseFromPath(platform: Platform, zipPath: string): Promise<ImportOutcome> {
+export async function importDatabaseFromPath(
+  platform: Platform,
+  zipPath: string,
+): Promise<ImportOutcome> {
   return runImport(platform, zipPath, Date.now(), false);
 }

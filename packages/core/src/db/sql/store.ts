@@ -1,7 +1,14 @@
-import { PlatformError, type BlobSource, type Platform, type SqlRow, type SqlStatement } from '@tpr/platform';
 import {
-  parseRawDatabase,
-  SERIES_AUTO_FILL_FIELDS,
+  type BlobSource,
+  type Platform,
+  PlatformError,
+  type SqlBulkResult,
+  type SqlBulkStatement,
+  type SqlFileSource,
+  type SqlRow,
+  type SqlStatement,
+} from '@tpr/platform';
+import {
   type ArticleFile,
   type ArticleType,
   type Author,
@@ -9,7 +16,9 @@ import {
   type FeaturedEntry,
   type ImageAsset,
   type Manifest,
+  parseRawDatabase,
   type RawDatabase,
+  SERIES_AUTO_FILL_FIELDS,
   type Series,
   type SeriesAutoFillField,
   type Tag,
@@ -61,8 +70,13 @@ function parseAutoFillFields(row: SqlRow): SeriesAutoFillField[] {
     const parsed = JSON.parse(text) as unknown;
     if (!Array.isArray(parsed)) return [];
     const known = SERIES_AUTO_FILL_FIELDS as readonly string[];
-    return [...new Set(parsed.filter((item): item is SeriesAutoFillField =>
-      typeof item === 'string' && known.includes(item)))];
+    return [
+      ...new Set(
+        parsed.filter(
+          (item): item is SeriesAutoFillField => typeof item === 'string' && known.includes(item),
+        ),
+      ),
+    ];
   } catch {
     return [];
   }
@@ -118,7 +132,9 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
     dbPath,
     'SELECT author_id AS parent, alias AS value FROM author_aliases ORDER BY author_id, position',
   );
-  const authorAliases = groupText(authorAliasRows as unknown as { parent: string; value: string }[]);
+  const authorAliases = groupText(
+    authorAliasRows as unknown as { parent: string; value: string }[],
+  );
   const authors: Author[] = authorRows.map((row) => {
     const id = rowText(row, 'id');
     const notes = rowNullableText(row, 'notes');
@@ -209,7 +225,10 @@ export async function readSqliteFromFile(platform: Platform, dbPath: string): Pr
     articleTags.set(parent, entry);
   }
   const articleIllustrations = groupText(
-    articleIllustrationRows.map((row) => ({ parent: rowText(row, 'parent'), value: rowText(row, 'id') })),
+    articleIllustrationRows.map((row) => ({
+      parent: rowText(row, 'parent'),
+      value: rowText(row, 'id'),
+    })),
   );
 
   const articles: ArticleFile[] = articleRows.map((row) => {
@@ -403,13 +422,17 @@ async function imageSourceInfo(
   }
 }
 
+/** 正文来源：已在内存里的文本，或让平台直接从磁盘读的文件。 */
+export type MarkdownSource = string | { file: string };
+
 async function verifySqlite(
   platform: Platform,
   dbPath: string,
   expected: RawDatabase,
-  markdown: Map<string, string>,
+  markdown: Map<string, MarkdownSource>,
   imageSources: Map<string, BlobSource>,
-): Promise<void> {
+  written: SqlBulkResult,
+): Promise<RawDatabase> {
   const actual = await readSqliteFromFile(platform, dbPath);
   if (canonicalDatabase(actual) !== canonicalDatabase(expected)) {
     throw new PlatformError('EIO', 'SQLite 读回校验失败：实体数据与写入输入不一致');
@@ -425,13 +448,18 @@ async function verifySqlite(
     'SELECT COUNT(*) AS n, COALESCE(SUM(length(CAST(markdown AS BLOB))),0) AS bytes FROM article_contents',
   );
   const contentRow = contentStats[0];
-  const expectedContentBytes = [...markdown.values()].reduce(
-    (total, text) => total + new TextEncoder().encode(text).byteLength,
-    0,
-  );
+  const encoder = new TextEncoder();
+  let expectedContents = 0;
+  let expectedContentBytes = written.textBytes;
+  for (const value of markdown.values()) {
+    if (typeof value !== 'string') continue;
+    expectedContents += 1;
+    expectedContentBytes += encoder.encode(value).byteLength;
+  }
+  expectedContents += written.textCount;
   if (
     !contentRow ||
-    rowInt(contentRow, 'n') !== markdown.size ||
+    rowInt(contentRow, 'n') !== expectedContents ||
     rowInt(contentRow, 'bytes') !== expectedContentBytes
   ) {
     throw new PlatformError('EIO', 'SQLite 读回校验失败：正文数量或长度不一致');
@@ -458,6 +486,8 @@ async function verifySqlite(
   ) {
     throw new PlatformError('EIO', 'SQLite 读回校验失败：图片数量或字节数不一致');
   }
+
+  return actual;
 }
 
 /**
@@ -468,28 +498,35 @@ export async function writeSqliteDatabase(
   platform: Platform,
   targetPath: string,
   db: RawDatabase,
-  markdown: Map<string, string>,
+  markdown: Map<string, MarkdownSource>,
   imageSources: Map<string, BlobSource> = new Map(),
-): Promise<void> {
+): Promise<RawDatabase> {
   if (await platform.fs.exists(targetPath)) await platform.fs.remove(targetPath);
   try {
-    await platform.sql.batch(targetPath, [...SQL_SCHEMA_STATEMENTS]);
+    // 建表、灌数据、建索引全部走同一个事务（一次 IPC）：索引放到最后建，
+    // 免得每插一行都去维护 6 个 B-tree —— 上千篇文章时这是实打实的差别。
+    const schema = [...SQL_SCHEMA_STATEMENTS];
+    const tables = schema.filter((statement) => statement.sql.startsWith('CREATE TABLE'));
+    const indexes = schema.filter((statement) => statement.sql.startsWith('CREATE INDEX'));
+    const trailing = schema.filter(
+      (statement) =>
+        !statement.sql.startsWith('CREATE TABLE') && !statement.sql.startsWith('CREATE INDEX'),
+    );
 
-    const pending: SqlStatement[] = [];
-    const flush = async (): Promise<void> => {
-      if (pending.length === 0) return;
-      const chunk = pending.splice(0, pending.length);
-      await platform.sql.batch(targetPath, chunk);
-    };
-    const add = (sql: string, params?: SqlValueLike[]): void => {
-      pending.push(params ? { sql, params } : { sql });
-    };
-    const addAsync = async (sql: string, params?: SqlValueLike[]): Promise<void> => {
-      add(sql, params);
-      if (pending.length >= 200) await flush();
+    const statements: SqlBulkStatement[] = [...tables];
+    // 内存里的图片字节（测试/工具给的内存来源）没有文件可读，批量写完后单独补上。
+    const memoryImages: { params: SqlValueLike[]; bytes: Uint8Array }[] = [];
+    const add = (sql: string, params?: SqlValueLike[], source?: SqlFileSource): void => {
+      statements.push(
+        source
+          ? { sql, source, ...(params ? { params } : {}) }
+          : params
+            ? { sql, params }
+            : { sql },
+      );
     };
 
-    await addAsync(
+    add(
       'INSERT INTO manifest(id,schema_version,database_id,name,version,updated_at,source_url,description,counts_json) VALUES (1,?,?,?,?,?,?,?,?)',
       [
         db.manifest.schemaVersion,
@@ -504,35 +541,49 @@ export async function writeSqliteDatabase(
     );
 
     for (const [position, author] of db.authors.entries()) {
-      await addAsync('INSERT INTO authors(position,id,canonical_name,notes,source_url,updated_at) VALUES (?,?,?,?,?,?)', [
-        position,
-        author.id,
-        author.canonicalName,
-        author.notes ?? null,
-        author.sourceUrl ?? null,
-        author.updatedAt ?? null,
-      ]);
+      add(
+        'INSERT INTO authors(position,id,canonical_name,notes,source_url,updated_at) VALUES (?,?,?,?,?,?)',
+        [
+          position,
+          author.id,
+          author.canonicalName,
+          author.notes ?? null,
+          author.sourceUrl ?? null,
+          author.updatedAt ?? null,
+        ],
+      );
       for (const [index, alias] of author.aliases.entries()) {
-        await addAsync('INSERT INTO author_aliases(author_id,position,alias) VALUES (?,?,?)', [author.id, index, alias]);
+        add('INSERT INTO author_aliases(author_id,position,alias) VALUES (?,?,?)', [
+          author.id,
+          index,
+          alias,
+        ]);
       }
     }
 
     for (const [position, tag] of db.tags.entries()) {
-      await addAsync('INSERT INTO tags(position,id,category,name,aliases_present,updated_at) VALUES (?,?,?,?,?,?)', [
-        position,
-        tag.id,
-        tag.category,
-        tag.name,
-        tag.aliases !== undefined ? 1 : 0,
-        tag.updatedAt ?? null,
-      ]);
+      add(
+        'INSERT INTO tags(position,id,category,name,aliases_present,updated_at) VALUES (?,?,?,?,?,?)',
+        [
+          position,
+          tag.id,
+          tag.category,
+          tag.name,
+          tag.aliases !== undefined ? 1 : 0,
+          tag.updatedAt ?? null,
+        ],
+      );
       for (const [index, alias] of (tag.aliases ?? []).entries()) {
-        await addAsync('INSERT INTO tag_aliases(tag_id,position,alias) VALUES (?,?,?)', [tag.id, index, alias]);
+        add('INSERT INTO tag_aliases(tag_id,position,alias) VALUES (?,?,?)', [
+          tag.id,
+          index,
+          alias,
+        ]);
       }
     }
 
     for (const [position, article] of db.articles.entries()) {
-      await addAsync(
+      add(
         'INSERT INTO articles(position,id,type,title,summary,series_id,cover_image_id,source_url,created_at,updated_at,illustration_ids_present) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         [
           position,
@@ -549,11 +600,16 @@ export async function writeSqliteDatabase(
         ],
       );
       const body = markdown.get(article.id);
-      if (body !== undefined) {
-        await addAsync('INSERT INTO article_contents(article_id,markdown) VALUES (?,?)', [article.id, body]);
+      if (typeof body === 'string') {
+        add('INSERT INTO article_contents(article_id,markdown) VALUES (?,?)', [article.id, body]);
+      } else if (body !== undefined) {
+        add('INSERT INTO article_contents(article_id,markdown) VALUES (?,?)', [article.id], {
+          file: body.file,
+          kind: 'text',
+        });
       }
       for (const [index, id] of article.authorIds.entries()) {
-        await addAsync('INSERT INTO article_authors(article_id,author_id,role,position) VALUES (?,?,?,?)', [
+        add('INSERT INTO article_authors(article_id,author_id,role,position) VALUES (?,?,?,?)', [
           article.id,
           id,
           'author',
@@ -561,7 +617,7 @@ export async function writeSqliteDatabase(
         ]);
       }
       for (const [index, id] of article.translatorIds.entries()) {
-        await addAsync('INSERT INTO article_authors(article_id,author_id,role,position) VALUES (?,?,?,?)', [
+        add('INSERT INTO article_authors(article_id,author_id,role,position) VALUES (?,?,?,?)', [
           article.id,
           id,
           'translator',
@@ -569,7 +625,7 @@ export async function writeSqliteDatabase(
         ]);
       }
       for (const [index, id] of article.characterTagIds.entries()) {
-        await addAsync('INSERT INTO article_tags(article_id,tag_id,category,position) VALUES (?,?,?,?)', [
+        add('INSERT INTO article_tags(article_id,tag_id,category,position) VALUES (?,?,?,?)', [
           article.id,
           id,
           'character',
@@ -577,7 +633,7 @@ export async function writeSqliteDatabase(
         ]);
       }
       for (const [index, id] of article.plotTagIds.entries()) {
-        await addAsync('INSERT INTO article_tags(article_id,tag_id,category,position) VALUES (?,?,?,?)', [
+        add('INSERT INTO article_tags(article_id,tag_id,category,position) VALUES (?,?,?,?)', [
           article.id,
           id,
           'plot',
@@ -585,7 +641,7 @@ export async function writeSqliteDatabase(
         ]);
       }
       for (const [index, id] of (article.illustrationImageIds ?? []).entries()) {
-        await addAsync('INSERT INTO article_illustrations(article_id,image_id,position) VALUES (?,?,?)', [
+        add('INSERT INTO article_illustrations(article_id,image_id,position) VALUES (?,?,?)', [
           article.id,
           id,
           index,
@@ -594,7 +650,7 @@ export async function writeSqliteDatabase(
     }
 
     for (const [position, series] of db.series.entries()) {
-      await addAsync(
+      add(
         'INSERT INTO series(position,id,title,summary,status,cover_image_id,source_url,created_at,updated_at,illustration_ids_present,auto_fill_fields) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
         [
           position,
@@ -612,16 +668,21 @@ export async function writeSqliteDatabase(
         ],
       );
       for (const [index, id] of series.articleIds.entries()) {
-        await addAsync('INSERT INTO series_articles(series_id,article_id,position) VALUES (?,?,?)', [series.id, id, index]);
+        add('INSERT INTO series_articles(series_id,article_id,position) VALUES (?,?,?)', [
+          series.id,
+          id,
+          index,
+        ]);
       }
       for (const [index, id] of (series.illustrationImageIds ?? []).entries()) {
-        await addAsync(
-          'INSERT INTO series_illustrations(series_id,image_id,position) VALUES (?,?,?)',
-          [series.id, id, index],
-        );
+        add('INSERT INTO series_illustrations(series_id,image_id,position) VALUES (?,?,?)', [
+          series.id,
+          id,
+          index,
+        ]);
       }
       for (const [index, id] of series.authorIds.entries()) {
-        await addAsync('INSERT INTO series_authors(series_id,author_id,role,position) VALUES (?,?,?,?)', [
+        add('INSERT INTO series_authors(series_id,author_id,role,position) VALUES (?,?,?,?)', [
           series.id,
           id,
           'author',
@@ -629,7 +690,7 @@ export async function writeSqliteDatabase(
         ]);
       }
       for (const [index, id] of series.translatorIds.entries()) {
-        await addAsync('INSERT INTO series_authors(series_id,author_id,role,position) VALUES (?,?,?,?)', [
+        add('INSERT INTO series_authors(series_id,author_id,role,position) VALUES (?,?,?,?)', [
           series.id,
           id,
           'translator',
@@ -637,7 +698,7 @@ export async function writeSqliteDatabase(
         ]);
       }
       for (const [index, id] of series.characterTagIds.entries()) {
-        await addAsync('INSERT INTO series_tags(series_id,tag_id,category,position) VALUES (?,?,?,?)', [
+        add('INSERT INTO series_tags(series_id,tag_id,category,position) VALUES (?,?,?,?)', [
           series.id,
           id,
           'character',
@@ -645,7 +706,7 @@ export async function writeSqliteDatabase(
         ]);
       }
       for (const [index, id] of series.plotTagIds.entries()) {
-        await addAsync('INSERT INTO series_tags(series_id,tag_id,category,position) VALUES (?,?,?,?)', [
+        add('INSERT INTO series_tags(series_id,tag_id,category,position) VALUES (?,?,?,?)', [
           series.id,
           id,
           'plot',
@@ -655,22 +716,28 @@ export async function writeSqliteDatabase(
     }
 
     for (const [position, entry] of db.featured.entries()) {
-      await addAsync('INSERT INTO featured(position,target_type,target_id,updated_at) VALUES (?,?,?,?)', [
+      add('INSERT INTO featured(position,target_type,target_id,updated_at) VALUES (?,?,?,?)', [
         position,
         entry.targetType,
         entry.targetId,
         entry.updatedAt ?? null,
       ]);
       for (const [index, recommendation] of entry.recommendations.entries()) {
-        await addAsync(
+        add(
           'INSERT INTO featured_recommendations(target_type,target_id,position,author,text) VALUES (?,?,?,?,?)',
-          [entry.targetType, entry.targetId, index, recommendation.author ?? null, recommendation.text],
+          [
+            entry.targetType,
+            entry.targetId,
+            index,
+            recommendation.author ?? null,
+            recommendation.text,
+          ],
         );
       }
     }
 
     for (const [position, entry] of db.credits.entries()) {
-      await addAsync('INSERT INTO credits(position,name,role,link,note) VALUES (?,?,?,?,?)', [
+      add('INSERT INTO credits(position,name,role,link,note) VALUES (?,?,?,?,?)', [
         position,
         entry.name,
         entry.role ?? null,
@@ -687,7 +754,7 @@ export async function writeSqliteDatabase(
         throw new PlatformError('EIO', `图片文件缺失：${image.file}`);
       }
       if (!info) {
-        await addAsync(INSERT_IMAGE_WITHOUT_DATA, [
+        add(INSERT_IMAGE_WITHOUT_DATA, [
           position,
           image.id,
           image.file,
@@ -698,9 +765,23 @@ export async function writeSqliteDatabase(
         ]);
         continue;
       }
-      await flush();
-      await platform.sql.writeBlob(
-        targetPath,
+      if (info.source instanceof Uint8Array) {
+        memoryImages.push({
+          params: [
+            position,
+            image.id,
+            image.file,
+            image.kind,
+            image.caption ?? null,
+            mimeOf(image.file),
+            info.size,
+            image.updatedAt ?? null,
+          ],
+          bytes: info.source,
+        });
+        continue;
+      }
+      add(
         INSERT_IMAGE_WITH_DATA,
         [
           position,
@@ -712,12 +793,18 @@ export async function writeSqliteDatabase(
           info.size,
           image.updatedAt ?? null,
         ],
-        info.source,
+        { file: info.source.file, kind: 'blob' },
       );
     }
 
-    await flush();
-    await verifySqlite(platform, targetPath, db, markdown, imageSources);
+    statements.push(...indexes, ...trailing);
+    const written = await platform.sql.bulkWrite(targetPath, statements);
+    for (const image of memoryImages) {
+      await platform.sql.writeBlob(targetPath, INSERT_IMAGE_WITH_DATA, image.params, image.bytes);
+      written.blobCount += 1;
+      written.blobBytes += image.bytes.byteLength;
+    }
+    return await verifySqlite(platform, targetPath, db, markdown, imageSources, written);
   } catch (error) {
     await platform.fs.remove(targetPath).catch(() => undefined);
     if (error instanceof PlatformError) throw error;
@@ -727,7 +814,10 @@ export async function writeSqliteDatabase(
 
 type SqlValueLike = string | number | null;
 
-function idsChangedOrder<T extends { id: string }>(previous: readonly T[], next: readonly T[]): boolean {
+function idsChangedOrder<T extends { id: string }>(
+  previous: readonly T[],
+  next: readonly T[],
+): boolean {
   const nextIds = new Set(next.map((item) => item.id));
   const prevIds = new Set(previous.map((item) => item.id));
   const before = previous.filter((item) => nextIds.has(item.id)).map((item) => item.id);
@@ -769,7 +859,14 @@ export async function saveDatabase(
     if (before && stableStringify(before) === stableStringify(author)) continue;
     statements.push({
       sql: 'INSERT INTO authors(position,id,canonical_name,notes,source_url,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position, canonical_name=excluded.canonical_name, notes=excluded.notes, source_url=excluded.source_url, updated_at=excluded.updated_at',
-      params: [position, author.id, author.canonicalName, author.notes ?? null, author.sourceUrl ?? null, author.updatedAt ?? null],
+      params: [
+        position,
+        author.id,
+        author.canonicalName,
+        author.notes ?? null,
+        author.sourceUrl ?? null,
+        author.updatedAt ?? null,
+      ],
     });
     addDeleteChildren(statements, 'author_aliases', 'author_id', author.id);
     for (const [index, alias] of author.aliases.entries()) {
@@ -781,7 +878,10 @@ export async function saveDatabase(
   }
   if (idsChangedOrder(previous.authors, next.authors)) {
     for (const [position, author] of next.authors.entries()) {
-      statements.push({ sql: 'UPDATE authors SET position = ? WHERE id = ?', params: [position, author.id] });
+      statements.push({
+        sql: 'UPDATE authors SET position = ? WHERE id = ?',
+        params: [position, author.id],
+      });
     }
   }
 
@@ -797,7 +897,14 @@ export async function saveDatabase(
     if (before && stableStringify(before) === stableStringify(tag)) continue;
     statements.push({
       sql: 'INSERT INTO tags(position,id,category,name,aliases_present,updated_at) VALUES (?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET position=excluded.position, category=excluded.category, name=excluded.name, aliases_present=excluded.aliases_present, updated_at=excluded.updated_at',
-      params: [position, tag.id, tag.category, tag.name, tag.aliases !== undefined ? 1 : 0, tag.updatedAt ?? null],
+      params: [
+        position,
+        tag.id,
+        tag.category,
+        tag.name,
+        tag.aliases !== undefined ? 1 : 0,
+        tag.updatedAt ?? null,
+      ],
     });
     addDeleteChildren(statements, 'tag_aliases', 'tag_id', tag.id);
     for (const [index, alias] of (tag.aliases ?? []).entries()) {
@@ -809,26 +916,41 @@ export async function saveDatabase(
   }
   if (idsChangedOrder(previous.tags, next.tags)) {
     for (const [position, tag] of next.tags.entries()) {
-      statements.push({ sql: 'UPDATE tags SET position = ? WHERE id = ?', params: [position, tag.id] });
+      statements.push({
+        sql: 'UPDATE tags SET position = ? WHERE id = ?',
+        params: [position, tag.id],
+      });
     }
   }
 
   const prevImages = new Map(previous.images.map((item) => [item.id, item]));
   const nextImages = new Map(next.images.map((item) => [item.id, item]));
   for (const old of previous.images) {
-    if (!nextImages.has(old.id)) statements.push({ sql: 'DELETE FROM images WHERE id = ?', params: [old.id] });
+    if (!nextImages.has(old.id))
+      statements.push({ sql: 'DELETE FROM images WHERE id = ?', params: [old.id] });
   }
   for (const [position, image] of next.images.entries()) {
     const before = prevImages.get(image.id);
     if (before && stableStringify(before) === stableStringify(image)) continue;
     statements.push({
       sql: UPSERT_IMAGE,
-      params: [position, image.id, image.file, image.kind, image.caption ?? null, mimeOf(image.file), image.updatedAt ?? null],
+      params: [
+        position,
+        image.id,
+        image.file,
+        image.kind,
+        image.caption ?? null,
+        mimeOf(image.file),
+        image.updatedAt ?? null,
+      ],
     });
   }
   if (idsChangedOrder(previous.images, next.images)) {
     for (const [position, image] of next.images.entries()) {
-      statements.push({ sql: 'UPDATE images SET position = ? WHERE id = ?', params: [position, image.id] });
+      statements.push({
+        sql: 'UPDATE images SET position = ? WHERE id = ?',
+        params: [position, image.id],
+      });
     }
   }
 
@@ -897,7 +1019,10 @@ export async function saveDatabase(
   }
   if (idsChangedOrder(previous.articles, next.articles)) {
     for (const [position, article] of next.articles.entries()) {
-      statements.push({ sql: 'UPDATE articles SET position = ? WHERE id = ?', params: [position, article.id] });
+      statements.push({
+        sql: 'UPDATE articles SET position = ? WHERE id = ?',
+        params: [position, article.id],
+      });
     }
   }
 
@@ -973,7 +1098,10 @@ export async function saveDatabase(
   }
   if (idsChangedOrder(previous.series, next.series)) {
     for (const [position, series] of next.series.entries()) {
-      statements.push({ sql: 'UPDATE series SET position = ? WHERE id = ?', params: [position, series.id] });
+      statements.push({
+        sql: 'UPDATE series SET position = ? WHERE id = ?',
+        params: [position, series.id],
+      });
     }
   }
 
@@ -988,7 +1116,13 @@ export async function saveDatabase(
       for (const [index, recommendation] of entry.recommendations.entries()) {
         statements.push({
           sql: 'INSERT INTO featured_recommendations(target_type,target_id,position,author,text) VALUES (?,?,?,?,?)',
-          params: [entry.targetType, entry.targetId, index, recommendation.author ?? null, recommendation.text],
+          params: [
+            entry.targetType,
+            entry.targetId,
+            index,
+            recommendation.author ?? null,
+            recommendation.text,
+          ],
         });
       }
     }
@@ -1037,7 +1171,15 @@ export async function writeImageBlob(
   await platform.sql.writeBlob(
     dbPathOf(platform, dir),
     INSERT_IMAGE_BLOB,
-    [image.id, image.file, image.kind, image.caption ?? null, mimeOf(image.file), bytes.byteLength, image.updatedAt ?? null],
+    [
+      image.id,
+      image.file,
+      image.kind,
+      image.caption ?? null,
+      mimeOf(image.file),
+      bytes.byteLength,
+      image.updatedAt ?? null,
+    ],
     bytes,
   );
 }
@@ -1069,4 +1211,3 @@ export async function readImageBlobToFile(
     targetPath,
   );
 }
-

@@ -1,20 +1,20 @@
 import type { Platform } from '@tpr/platform';
 import { type RawDatabase, validateDatabase } from '@tpr/schema';
-import { createContentStore, type ContentStore } from './content-store.js';
+import { countWords } from '../text/word-count.js';
+import { type ContentStore, createContentStore } from './content-store.js';
 import {
-  exportDatabase,
-  exportDatabaseToPath,
   type ExportResult,
   type ExportSelection,
   type ExportSummary,
+  exportDatabase,
+  exportDatabaseToPath,
 } from './export.js';
 import type { ImportOutcome } from './import.js';
 import { importDatabaseFromBytes, importDatabaseFromPath } from './import.js';
 import { ensureLocalDatabase } from './migrate.js';
 import { computeCounts } from './normalize.js';
+import { type DBSnapshot, toSnapshot } from './snapshot.js';
 import { databasePathOf, readSqliteFromFile, saveDatabase } from './sql/store.js';
-import { toSnapshot, type DBSnapshot } from './snapshot.js';
-import { countWords } from '../text/word-count.js';
 import { readActive, workspacePath } from './workspace.js';
 
 export interface LoadedDatabase {
@@ -61,11 +61,14 @@ export interface Library {
 export function createLibrary(platform: Platform): Library {
   let loaded: LoadedDatabase | null = null;
   let revision = 0;
-  let writeQueue: Promise<void> = Promise.resolve();
+  const writeQueue: Promise<void> = Promise.resolve();
 
   const wordCountCache = new Map<string, number>();
   let wordCountGeneration = 0;
-  const pendingWordCounts = new Map<string, { resolve: (count: number) => void; reject: (error: unknown) => void }[]>();
+  const pendingWordCounts = new Map<
+    string,
+    { resolve: (count: number) => void; reject: (error: unknown) => void }[]
+  >();
   let wordFlushScheduled = false;
 
   /** 同一微任务里的字数请求合并成一次 IN 查询，避免系列页每行各查一次。 */
@@ -122,10 +125,18 @@ export function createLibrary(platform: Platform): Library {
     wordCountGeneration += 1;
   }
 
-  async function loadFrom(dir: string, databaseId: string): Promise<LoadedDatabase> {
+  /**
+   * 打开一个 workspace。导入刚写完时读回校验已经拿到整库内容，
+   * 传进来就能省掉紧接着的第二次全库读取（几十 MB 时是几十毫秒）。
+   */
+  async function loadFrom(
+    dir: string,
+    databaseId: string,
+    preloaded?: RawDatabase,
+  ): Promise<LoadedDatabase> {
     await ensureLocalDatabase(platform, dir);
     const dbPath = databasePathOf(platform, dir);
-    const db = await readSqliteFromFile(platform, dbPath);
+    const db = preloaded ?? (await readSqliteFromFile(platform, dbPath));
     loaded = {
       databaseId,
       dir,
@@ -179,9 +190,13 @@ export function createLibrary(platform: Platform): Library {
     });
     current.db.manifest.updatedAt = draft.manifest.updatedAt;
     current.db.filePaths = new Set([
-      ...draft.articles.map((article) =>
-        typeof article.content === 'object' && article.content !== null ? article.content.file : '',
-      ).filter((file) => file.length > 0),
+      ...draft.articles
+        .map((article) =>
+          typeof article.content === 'object' && article.content !== null
+            ? article.content.file
+            : '',
+        )
+        .filter((file) => file.length > 0),
       ...draft.images.map((image) => image.file),
     ]);
     revision += 1;
@@ -209,13 +224,21 @@ export function createLibrary(platform: Platform): Library {
 
     async importBytes(bytes: Uint8Array): Promise<ImportOutcome> {
       const outcome = await importDatabaseFromBytes(platform, bytes);
-      await loadFrom(workspacePath(platform, outcome.snapshot.manifest.databaseId), outcome.snapshot.manifest.databaseId);
+      await loadFrom(
+        workspacePath(platform, outcome.snapshot.manifest.databaseId),
+        outcome.snapshot.manifest.databaseId,
+        outcome.db,
+      );
       return outcome;
     },
 
     async importZip(zipPath: string): Promise<ImportOutcome> {
       const outcome = await importDatabaseFromPath(platform, zipPath);
-      await loadFrom(workspacePath(platform, outcome.snapshot.manifest.databaseId), outcome.snapshot.manifest.databaseId);
+      await loadFrom(
+        workspacePath(platform, outcome.snapshot.manifest.databaseId),
+        outcome.snapshot.manifest.databaseId,
+        outcome.db,
+      );
       return outcome;
     },
 

@@ -6,12 +6,12 @@ import {
   featuredEntrySchema,
   imageAssetSchema,
   manifestSchema,
+  type RawDatabase,
   seriesSchema,
   tagSchema,
-  type RawDatabase,
 } from '@tpr/schema';
-import { LAYOUT, seriesJson, articleJson } from './layout.js';
 import type { DbIo } from './layout.js';
+import { articleJson, LAYOUT, seriesJson } from './layout.js';
 
 /** 只依赖 safeParse 的结构类型：core 不直接依赖 zod。 */
 interface SchemaLike<T> {
@@ -23,11 +23,35 @@ export interface ReadOptions {
   onWarning?: (message: string, path: string) => void;
 }
 
+/**
+ * 有界并发地跑异步任务，结果顺序与入参一致（用于保留读取顺序与警告顺序）。
+ * 读包是几百上千次独立的文件调用，串行在桌面端就是几百次 IPC 往返。
+ */
+const READ_CONCURRENCY = 16;
+
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      if (index >= items.length) return;
+      results[index] = await task(items[index] as T);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 async function readJson(io: DbIo, dir: string, relative: string): Promise<unknown | undefined> {
-  const path = io.join(dir, relative);
-  if (!(await io.fs.exists(path))) return undefined;
+  // 不先 exists 再读：文件缺失时 readText 直接抛错，省掉一次 IPC。
   try {
-    return JSON.parse(await io.fs.readText(path)) as unknown;
+    return JSON.parse(await io.fs.readText(io.join(dir, relative))) as unknown;
   } catch {
     return undefined;
   }
@@ -70,17 +94,27 @@ async function readEntityDir<T>(
 ): Promise<T[]> {
   const abs = io.join(dir, subdir);
   if (!(await io.fs.exists(abs))) return [];
-  const out: T[] = [];
-  for (const entry of await io.fs.listDir(abs)) {
-    if (entry.isDirectory || !entry.name.endsWith('.json')) continue;
+  const entries = (await io.fs.listDir(abs)).filter(
+    (entry) => !entry.isDirectory && entry.name.endsWith('.json'),
+  );
+  const loaded = await mapLimit(entries, READ_CONCURRENCY, async (entry) => {
     const relative = relativeOf(entry.name.slice(0, -'.json'.length));
     try {
-      const parsed = schema.safeParse(JSON.parse(await io.fs.readText(io.join(dir, relative))));
-      if (parsed.success) out.push(parsed.data);
-      else opts.onWarning?.(`${relative} 不符合 schema，已跳过`, relative);
+      const value: unknown = JSON.parse(await io.fs.readText(io.join(dir, relative)));
+      return { relative, value, failed: false };
     } catch {
-      opts.onWarning?.(`${relative} 解析失败，已跳过`, relative);
+      return { relative, value: undefined as unknown, failed: true };
     }
+  });
+  const out: T[] = [];
+  for (const item of loaded) {
+    if (item.failed) {
+      opts.onWarning?.(`${item.relative} 解析失败，已跳过`, item.relative);
+      continue;
+    }
+    const parsed = schema.safeParse(item.value);
+    if (parsed.success) out.push(parsed.data);
+    else opts.onWarning?.(`${item.relative} 不符合 schema，已跳过`, item.relative);
   }
   return out;
 }
@@ -88,26 +122,38 @@ async function readEntityDir<T>(
 /** 扫描包内实际存在的文件（相对路径，`/` 分隔），用于校验正文与图片引用。 */
 export async function scanFilePaths(io: DbIo, dir: string): Promise<Set<string>> {
   const paths = new Set<string>();
-  for (const subdir of [LAYOUT.articlesDir, LAYOUT.seriesDir]) {
-    const abs = io.join(dir, subdir);
-    if (!(await io.fs.exists(abs))) continue;
-    for (const entry of await io.fs.listDir(abs)) {
+  type Entry = Awaited<ReturnType<DbIo['fs']['listDir']>>[number];
+  const listIfExists = async (abs: string): Promise<Entry[]> =>
+    (await io.fs.exists(abs)) ? await io.fs.listDir(abs) : [];
+
+  const subdirs = [LAYOUT.articlesDir, LAYOUT.seriesDir];
+  const listings = await Promise.all(subdirs.map((subdir) => listIfExists(io.join(dir, subdir))));
+  for (const [index, entries] of listings.entries()) {
+    const subdir = subdirs[index] as string;
+    for (const entry of entries) {
       if (!entry.isDirectory) paths.add(`${subdir}/${entry.name}`);
     }
   }
-  const imagesAbs = io.join(dir, LAYOUT.imagesDir);
-  if (await io.fs.exists(imagesAbs)) {
-    for (const kindDir of await io.fs.listDir(imagesAbs)) {
-      if (!kindDir.isDirectory) continue;
-      for (const file of await io.fs.listDir(kindDir.path)) {
-        if (!file.isDirectory) paths.add(`${LAYOUT.imagesDir}/${kindDir.name}/${file.name}`);
-      }
+
+  const kindDirs = await listIfExists(io.join(dir, LAYOUT.imagesDir));
+  const kindListings = await Promise.all(
+    kindDirs
+      .filter((kindDir) => kindDir.isDirectory)
+      .map(async (kindDir) => ({ kindDir, files: await io.fs.listDir(kindDir.path) })),
+  );
+  for (const { kindDir, files } of kindListings) {
+    for (const file of files) {
+      if (!file.isDirectory) paths.add(`${LAYOUT.imagesDir}/${kindDir.name}/${file.name}`);
     }
   }
   return paths;
 }
 
-export async function readDatabaseDir(io: DbIo, dir: string, opts: ReadOptions = {}): Promise<RawDatabase> {
+export async function readDatabaseDir(
+  io: DbIo,
+  dir: string,
+  opts: ReadOptions = {},
+): Promise<RawDatabase> {
   const manifestPath = io.join(dir, LAYOUT.manifest);
   if (!(await io.fs.exists(manifestPath))) {
     throw new PlatformError('EIO', `不是有效的数据库目录：缺少 ${LAYOUT.manifest}`);
@@ -126,7 +172,14 @@ export async function readDatabaseDir(io: DbIo, dir: string, opts: ReadOptions =
     readArray(io, dir, LAYOUT.featured, featuredEntrySchema, opts),
     readArray(io, dir, LAYOUT.credits, creditsEntrySchema, opts),
   ]);
-  const articles = await readEntityDir(io, dir, LAYOUT.articlesDir, articleFileSchema, articleJson, opts);
+  const articles = await readEntityDir(
+    io,
+    dir,
+    LAYOUT.articlesDir,
+    articleFileSchema,
+    articleJson,
+    opts,
+  );
   // series 只有"一实体一文件"形态（§7.2 的目录树里没有 series.json）
   const series = await readEntityDir(io, dir, LAYOUT.seriesDir, seriesSchema, seriesJson, opts);
 
