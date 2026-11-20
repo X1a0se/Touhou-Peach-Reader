@@ -2338,6 +2338,22 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 
 ---
 
+## Goal 30 追加记录：文章表单的「直达底部」
+
+- **需求形态**：编辑器右栏的文章表单很长——标题、简介、12 行正文、系列 / 原出处、作者、译者、角色标签、R18、情节标签、封面、插图、插图上传，最后才是「保存 / 取消 / 导出这篇 / 删除」那一行。正文一长，这一行就被推到视口下方，想保存只能一路滚下去。需求是给它一个直达底部的按钮。
+- **界面**：浮动在右下角的 pill 按钮（`fixed right-5 bottom-5 z-40`，`sm:` 断点下挪到 `right-8 bottom-8`），半透明磨砂 `bg-surface/90 + backdrop-blur`、`rounded-full`、`shadow-lg`，右侧一个 ↓；窄屏只留箭头，`aria-label` 与 `title` 都是「直达底部」。只在「保存那一行还没整个进入视口」时出现，进入视口即自行消失——按钮不常驻，避免挡正文与插图预览。点一下 `scrollIntoView({ block: 'end' })`，把操作行贴到视口底边；系统开了「减少动态效果」时用 `behavior: 'auto'` 瞬时到位，否则 `'smooth'`。
+- **判定为什么看底边**：`block: 'end'` 贴的是元素**底边**。若按 `top` 判断，跳完之后操作行的 top 会比视口底高出一整行按钮的高度，按钮立刻又被判成「需要」，于是点了不消失、还悬在刚滚到的位置上。所以 `needsJumpToBottom(targetBottom, viewportHeight, tolerance = 4)` 比的是 `getBoundingClientRect().bottom > viewportHeight + tolerance`，`tolerance` 吃掉亚像素舍入，避免贴边时反复闪。
+- **重算时机**：只挂 `scroll` 会漏掉「没滚动但高度变了」——正文异步载入、导入 .txt / .docx、选择器增删芯片、图片上传完，都会改变操作行的位置。所以同时挂 `window scroll`（`passive`）、`resize` 与 `ResizeObserver(document.body)`，三者都走同一个 `requestAnimationFrame` 合并（`frame !== 0` 就跳过），滚动再密也只算一帧；清理时移除监听、`disconnect`、`cancelAnimationFrame`。`ResizeObserver` 用 `typeof` 守卫，没有它的环境退化为只靠滚动与 resize。
+- **实现位置**：`apps/desktop/src/scroll.ts` 放两个纯函数（`needsJumpToBottom` / `jumpScrollBehavior`，与 `navigation.ts`、`reading/progress.ts` 同级同风格）；`apps/desktop/src/components/ScrollToBottomButton.tsx` 是组件，收一个 `targetRef`；`EditorPage.tsx` 的 `ArticleForm` 给底部操作行加 `ref={actionRowRef}`，并在 `</form>` 前渲染 `<ScrollToBottomButton targetRef={actionRowRef} />`。除这四处（import、ref、ref 绑定、渲染组件）外不改 `ArticleForm` 的任何逻辑。
+- **为什么不用 `@tpr/ui` 的 `Button`**：`Button` 基类带 `rounded-lg`，而本仓库的 `cn()` 没有 `tailwind-merge`，`rounded-full` 与基类同时出现时谁生效取决于生成顺序。这个按钮只有一处、样式特殊，用裸 `<button type="button">` 更稳。
+- **SSR / 无 DOM**：`useState(false)` 起步，`useEffect` 才测量，所以 `renderToStaticMarkup` 下渲染出空字符串、不抛错——和仓库里其余组件的测试方式一致，桌面端仍不需要 jsdom。
+- **不动的东西**：core、schema、SQL、草稿格式全不动（纯展示层，不落盘、不进 localStorage）；阅读端 `ArticlePage` 不加这个按钮（阅读端本来就短，且有系列翻页）；不做「回到顶部」——用户没有这个诉求，且浏览器 / 触屏的回到顶部手势已够用。
+- **测试与验证**：新建 `apps/desktop/test/scroll.test.ts` 5 例——视口外的判定、跳完之后不重现（底边等于 / 略小于视口高度都算到位）、亚像素与自定义容差（`804/800` 不算、`805/800` 算，容差传 0 时 `801/800` 算）、`jumpScrollBehavior` 两个分支、无 DOM 时渲染为空串。`corepack pnpm --filter @tpr/desktop test` 16 文件 110 例全过（原 105 + 本次 5），`typecheck`、`check:boundaries`、`check:no-tauri` 全过。手工验收在 headless Edge 经 CDP 真点一遍：打开 `#/editor` 新建文章，正文够长时右下角出现按钮 → 点击后操作行贴到视口底边、按钮消失 → 滚回顶部后按钮重新出现。
+- **取舍**：不做「滚动到一半时的进度条」（需求只要一个按钮，进度条是另一件事）；不给按钮加键盘快捷键（表单里已有大量输入焦点，抢键位风险大于收益）；按钮不记「用户关掉过」——它只在必要时出现，出现即说明当前确实够不着底部。
+- **追加：系列页也用上**：系列页（编辑器「系列」标签里的 `SeriesForm`）字段比文章表单还多——标题、简介、连载状态、系列目录（可增删排序）、作者、译者、角色标签、情节标签、封面、原出处、自动填充策略、系列插图（多选）、插图上传，保存行同样会被推到视口下方。改动就是把 `ArticleForm` 那三处照搬：`const actionRowRef = useRef<HTMLDivElement | null>(null)`、操作行 `<div ref={actionRowRef} className="flex items-center gap-2">`、`</form>` 前 `<ScrollToBottomButton targetRef={actionRowRef} />`。组件与纯函数一行没改，两个表单各自持有自己的 ref，谁挂载谁测量；两个表单不会同时挂载（`SeriesPanel` 与 `ArticlesPanel` 按标签互斥渲染），所以右下角不会出现两个按钮。
+
+---
+
 ## 附：文档自检
 
 | 检查项 | 结论 |
@@ -2349,6 +2365,6 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 | 与 `/plan` 的差异全部列出并说明 | ✅ §17 |
 | 风险均有对策与触发信号 | ✅ §16（12 条） |
 | 版本号均为实查结果 | ✅ §2（2026-10-19，npm/crates.io） |
-| Goal 1–29 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复、公开发布、数据库重命名、导出直写、Goal 25、Goal 26、Goal 27、Goal 28 与 Goal 29 已追加） |
+| Goal 1–30 的实现均已回填 §18.1 | ✅ 每节含决策、踩坑与验证方式（Goal 21 后续修复、公开发布、数据库重命名、导出直写、Goal 25、Goal 26、Goal 27、Goal 28、Goal 29 与 Goal 30 已追加） |
 
 
