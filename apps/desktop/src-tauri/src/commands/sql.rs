@@ -11,7 +11,10 @@ use rusqlite::{params_from_iter, Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use tauri::http::header::{CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE};
 use tauri::http::StatusCode;
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
+
+use super::zip::EntryProgress;
 
 use super::fs::{resolve, resolve_for_write};
 
@@ -197,6 +200,7 @@ pub async fn sql_bulk_write(
     app: AppHandle,
     path: String,
     statements: Vec<SqlBulkStatement>,
+    on_progress: Channel<EntryProgress>,
 ) -> Result<SqlBulkResult, String> {
     let path = resolve_for_write(&app, &path)?;
     let mut prepared_sources: Vec<Option<(PathBuf, bool)>> = Vec::with_capacity(statements.len());
@@ -217,9 +221,14 @@ pub async fn sql_bulk_write(
         }
     }
 
-    tauri::async_runtime::spawn_blocking(move || bulk_write_blocking(path, statements, prepared_sources))
-        .await
-        .map_err(|e| format!("EIO: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        let report = move |done: u64, total: u64| {
+            let _ = on_progress.send(EntryProgress { done, total });
+        };
+        bulk_write_blocking(path, statements, prepared_sources, Some(&report))
+    })
+    .await
+    .map_err(|e| format!("EIO: {e}"))?
 }
 
 /// 一个事务、一份预编译缓存地把整批语句写完。
@@ -228,11 +237,20 @@ fn bulk_write_blocking(
     path: PathBuf,
     statements: Vec<SqlBulkStatement>,
     prepared_sources: Vec<Option<(PathBuf, bool)>>,
+    on_progress: Option<&dyn Fn(u64, u64)>,
 ) -> Result<SqlBulkResult, String> {
     let mut connection = open_connection(&path, true)?;
     let transaction = connection.transaction().map_err(sql_err)?;
     let mut result = SqlBulkResult::default();
-    for (statement, source) in statements.into_iter().zip(prepared_sources) {
+    let total_statements = statements.len() as u64;
+    // 每 ~1% 回推一次：上万条语句也只产生一百来次 IPC。
+    let step = (total_statements / 100).max(1);
+    for (index, (statement, source)) in statements.into_iter().zip(prepared_sources).enumerate() {
+        if index as u64 % step == 0 {
+            if let Some(callback) = on_progress {
+                callback(index as u64, total_statements);
+            }
+        }
         let mut values = bind_params(&statement.params)?;
         match source {
             None => {}
@@ -259,6 +277,9 @@ fn bulk_write_blocking(
         result.statements += 1;
     }
     transaction.commit().map_err(sql_err)?;
+    if let Some(callback) = on_progress {
+        callback(total_statements, total_statements);
+    }
     Ok(result)
 }
 
@@ -609,7 +630,7 @@ mod bulk_write_tests {
         ];
         let db = dir.join("out.sqlite");
         let sources = prepared(&statements);
-        let result = bulk_write_blocking(db.clone(), statements, sources).unwrap();
+        let result = bulk_write_blocking(db.clone(), statements, sources, None).unwrap();
         assert_eq!(result.statements, 4);
         assert_eq!(result.text_count, 1);
         assert_eq!(result.text_bytes, markdown.len() as u64);
@@ -638,7 +659,7 @@ mod bulk_write_tests {
         ];
         let db = dir.join("out.sqlite");
         let sources = prepared(&statements);
-        assert!(bulk_write_blocking(db.clone(), statements, sources).is_err());
+        assert!(bulk_write_blocking(db.clone(), statements, sources, None).is_err());
         assert_eq!(count_tables(&db), 0, "失败时建表语句也必须回滚");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -660,7 +681,7 @@ mod bulk_write_tests {
         ];
         let db = dir.join("out.sqlite");
         let sources = prepared(&statements);
-        assert!(bulk_write_blocking(db.clone(), statements, sources).is_err());
+        assert!(bulk_write_blocking(db.clone(), statements, sources, None).is_err());
         assert_eq!(count_tables(&db), 0);
 
         let broken = dir.join("broken.md");
@@ -678,7 +699,7 @@ mod bulk_write_tests {
         ];
         let broken_db = dir.join("broken.sqlite");
         let sources = prepared(&statements);
-        assert!(bulk_write_blocking(broken_db.clone(), statements, sources).is_err());
+        assert!(bulk_write_blocking(broken_db.clone(), statements, sources, None).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

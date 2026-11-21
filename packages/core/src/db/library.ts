@@ -13,6 +13,7 @@ import type { ImportOutcome } from './import.js';
 import { importDatabaseFromBytes, importDatabaseFromPath } from './import.js';
 import { ensureLocalDatabase } from './migrate.js';
 import { computeCounts } from './normalize.js';
+import type { ProgressOptions } from '../progress.js';
 import { type DBSnapshot, toSnapshot } from './snapshot.js';
 import { databasePathOf, readSqliteFromFile, saveDatabase } from './sql/store.js';
 import { readActive, workspacePath } from './workspace.js';
@@ -30,11 +31,15 @@ export interface Library {
   snapshot(): DBSnapshot | null;
   /** 从 `active.json` 指向的 workspace 目录重新载入（启动时调用）。 */
   restore(): Promise<DBSnapshot | null>;
-  importBytes(bytes: Uint8Array): Promise<ImportOutcome>;
-  importZip(zipPath: string): Promise<ImportOutcome>;
-  export(selection: ExportSelection): Promise<ExportResult>;
+  importBytes(bytes: Uint8Array, opts?: ProgressOptions): Promise<ImportOutcome>;
+  importZip(zipPath: string, opts?: ProgressOptions): Promise<ImportOutcome>;
+  export(selection: ExportSelection, opts?: ProgressOptions): Promise<ExportResult>;
   /** 桌面端：直接写到用户选定的路径，ZIP 字节不回传 JS。 */
-  exportToPath(selection: ExportSelection, targetPath: string): Promise<ExportSummary>;
+  exportToPath(
+    selection: ExportSelection,
+    targetPath: string,
+    opts?: ProgressOptions,
+  ): Promise<ExportSummary>;
   readContent(articleId: string): Promise<string>;
   /** 批量字数；正文缺失按 0 处理，结果按数据库内容缓存。 */
   wordCounts(articleIds: readonly string[]): Promise<Map<string, number>>;
@@ -222,8 +227,8 @@ export function createLibrary(platform: Platform): Library {
       return toSnapshot(db.db);
     },
 
-    async importBytes(bytes: Uint8Array): Promise<ImportOutcome> {
-      const outcome = await importDatabaseFromBytes(platform, bytes);
+    async importBytes(bytes: Uint8Array, opts?: ProgressOptions): Promise<ImportOutcome> {
+      const outcome = await importDatabaseFromBytes(platform, bytes, opts);
       await loadFrom(
         workspacePath(platform, outcome.snapshot.manifest.databaseId),
         outcome.snapshot.manifest.databaseId,
@@ -232,8 +237,8 @@ export function createLibrary(platform: Platform): Library {
       return outcome;
     },
 
-    async importZip(zipPath: string): Promise<ImportOutcome> {
-      const outcome = await importDatabaseFromPath(platform, zipPath);
+    async importZip(zipPath: string, opts?: ProgressOptions): Promise<ImportOutcome> {
+      const outcome = await importDatabaseFromPath(platform, zipPath, opts);
       await loadFrom(
         workspacePath(platform, outcome.snapshot.manifest.databaseId),
         outcome.snapshot.manifest.databaseId,
@@ -242,22 +247,28 @@ export function createLibrary(platform: Platform): Library {
       return outcome;
     },
 
-    async export(selection: ExportSelection): Promise<ExportResult> {
+    async export(selection: ExportSelection, opts?: ProgressOptions): Promise<ExportResult> {
       if (!loaded) throw new Error('尚未打开数据库，无法导出');
       return exportDatabase(
         platform,
         { dir: loaded.dir, db: loaded.db, contents: loaded.contents },
         selection,
+        opts,
       );
     },
 
-    async exportToPath(selection: ExportSelection, targetPath: string): Promise<ExportSummary> {
+    async exportToPath(
+      selection: ExportSelection,
+      targetPath: string,
+      opts?: ProgressOptions,
+    ): Promise<ExportSummary> {
       if (!loaded) throw new Error('尚未打开数据库，无法导出');
       return exportDatabaseToPath(
         platform,
         { dir: loaded.dir, db: loaded.db, contents: loaded.contents },
         selection,
         targetPath,
+        opts,
       );
     },
 

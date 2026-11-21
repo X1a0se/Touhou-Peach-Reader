@@ -22,3 +22,5 @@ export { EmptyState } from './components/EmptyState.js';
 export type { EmptyStateProps } from './components/EmptyState.js';
 export { StatTile } from './components/StatTile.js';
 export type { StatTileProps } from './components/StatTile.js';
+export { ProgressBar, formatEta } from './components/ProgressBar.js';
+export type { ProgressBarProps } from './components/ProgressBar.js';

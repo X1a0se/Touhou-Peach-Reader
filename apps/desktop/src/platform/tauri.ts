@@ -17,8 +17,11 @@ import type {
   SqlRow,
   SqlStatement,
   SqlValue,
+  ZipCreateOptions,
   ZipCreateResult,
+  ZipExtractOptions,
   ZipExtractResult,
+  SqlBulkOptions,
 } from '@tpr/platform';
 import { mapNativeError, PlatformError } from '@tpr/platform';
 
@@ -28,6 +31,28 @@ import { mapNativeError, PlatformError } from '@tpr/platform';
  * Goal 1 阶段：路径、资源 URL、外链、网络已可用；
  * 文件系统与 ZIP 在 Goal 3 换成 Rust 命令（自研命令统一校验"必须在 app data 目录内"）。
  */
+
+/** 条目级进度：Rust 侧按步长回推 {done,total}。 */
+interface EntryProgressPayload {
+  done: number;
+  total: number;
+}
+
+/**
+ * 把 onProgress 包成 Tauri Channel。
+ *
+ * Rust 侧的参数是必填的 Channel（Tauri 的 Channel 不支持 Option），所以即使调用方
+ * 不需要进度也照样创建一个通道，只是 onmessage 什么都不做——代价可忽略。
+ */
+function entryChannel(
+  onProgress: ((done: number, total: number) => void) | undefined,
+): Channel<EntryProgressPayload> {
+  const channel = new Channel<EntryProgressPayload>();
+  channel.onmessage = ({ done, total }) => {
+    onProgress?.(done, total);
+  };
+  return channel;
+}
 
 /** 自研命令统一返回 `Err("ECODE: ...")`，这里统一转成 PlatformError。 */
 const call = async <T>(command: string, args: Record<string, unknown> = {}): Promise<T> => {
@@ -147,7 +172,11 @@ class TauriSql implements ISql {
     return call('sql_write_blob', { path, sql, params, sourcePath: source.file });
   }
 
-  async bulkWrite(path: string, statements: SqlBulkStatement[]): Promise<SqlBulkResult> {
+  async bulkWrite(
+    path: string,
+    statements: SqlBulkStatement[],
+    opts?: SqlBulkOptions,
+  ): Promise<SqlBulkResult> {
     return call<SqlBulkResult>('sql_bulk_write', {
       path,
       statements: statements.map((statement) => ({
@@ -155,6 +184,7 @@ class TauriSql implements ISql {
         params: statement.params ?? [],
         ...(statement.source ? { source: statement.source } : {}),
       })),
+      onProgress: entryChannel(opts?.onProgress),
     });
   }
 }
@@ -166,20 +196,28 @@ class TauriZip implements IZip {
     private readonly join: (...parts: string[]) => string,
   ) {}
 
-  async extractAll(zipPath: string, destDir: string): Promise<ZipExtractResult> {
+  async extractAll(
+    zipPath: string,
+    destDir: string,
+    opts?: ZipExtractOptions,
+  ): Promise<ZipExtractResult> {
     const result = await call<{ entries: number; bytes: number; rejected: RejectedEntry[] }>(
       'zip_extract_all',
-      { zipPath, destDir },
+      { zipPath, destDir, onProgress: entryChannel(opts?.onProgress) ?? null },
     );
     return result;
   }
 
   /** 字节入口：先落到 app data 下的临时 .tpr，再交给 Rust 流式解压。 */
-  async extractBytes(bytes: Uint8Array, destDir: string): Promise<ZipExtractResult> {
+  async extractBytes(
+    bytes: Uint8Array,
+    destDir: string,
+    opts?: ZipExtractOptions,
+  ): Promise<ZipExtractResult> {
     const tmp = this.join(this.dataDir, 'imports', `incoming-${Date.now()}.tpr`);
     await this.fs.writeBytes(tmp, bytes);
     try {
-      return await this.extractAll(tmp, destDir);
+      return await this.extractAll(tmp, destDir, opts);
     } finally {
       await this.fs.remove(tmp).catch(() => undefined);
     }
@@ -188,24 +226,26 @@ class TauriZip implements IZip {
   async createFromDir(
     dirPath: string,
     zipPath: string,
-    opts?: { order?: string[] },
+    opts?: ZipCreateOptions,
   ): Promise<ZipCreateResult> {
     return call('zip_create_from_dir', {
       dirPath,
       zipPath,
       order: opts?.order ?? ['manifest.json'],
+      onProgress: entryChannel(opts?.onProgress),
     });
   }
 
   async createFromDirTo(
     dirPath: string,
     targetPath: string,
-    opts?: { order?: string[] },
+    opts?: ZipCreateOptions,
   ): Promise<ZipCreateResult> {
     return call('zip_create_from_dir_to', {
       dirPath,
       targetPath,
       order: opts?.order ?? ['manifest.json'],
+      onProgress: entryChannel(opts?.onProgress),
     });
   }
 }

@@ -3,6 +3,8 @@ import { Suspense } from 'react';
 import { NavLink, Outlet, useLocation } from 'react-router';
 import { BackButton } from '../components/BackButton.js';
 import { DatabaseUpdateBanner } from '../components/DatabaseUpdateBanner.js';
+import { ProgressOverlay } from '../components/ProgressOverlay.js';
+import { useLibraryContext } from '../library/LibraryProvider.js';
 import { WallpaperLayer } from '../components/WallpaperLayer.js';
 import { useServices } from '../context.js';
 
@@ -23,6 +25,7 @@ const NAV = [
 
 export function Layout() {
   const services = useServices();
+  const library = useLibraryContext();
   const location = useLocation();
   const slot = location.pathname.startsWith('/article/') ? 'article' : 'home';
 
@@ -84,6 +87,8 @@ export function Layout() {
           <Outlet />
         </Suspense>
       </main>
+
+      <ProgressOverlay progress={library.progress} />
 
       <footer className="relative z-10 mx-auto max-w-6xl px-6 pb-8 text-xs text-muted-foreground">
         数据目录由 <span className="font-mono">$APPDATA/com.touhou.peachreader</span> 决定；正文按需读取。

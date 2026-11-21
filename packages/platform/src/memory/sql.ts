@@ -7,6 +7,7 @@ import type {
   BlobSource,
   IFileSystem,
   ISql,
+  SqlBulkOptions,
   SqlBulkResult,
   SqlBulkStatement,
   SqlRow,
@@ -228,7 +229,7 @@ export function createMemorySql(fs: IFileSystem): ISql {
       }
     },
 
-    async bulkWrite(path, statements: SqlBulkStatement[]) {
+    async bulkWrite(path, statements: SqlBulkStatement[], opts?: SqlBulkOptions) {
       let db: Database | null = null;
       try {
         const opened = await open(path, true);
@@ -241,8 +242,15 @@ export function createMemorySql(fs: IFileSystem): ISql {
           blobBytes: 0,
         };
         db.run('BEGIN IMMEDIATE');
+        const reportEvery = Math.max(1, Math.ceil(statements.length / 100));
         try {
-          for (const statement of statements) {
+          for (const [index, statement] of statements.entries()) {
+            // 每 1% 上报一次即可：逐条回调会把 UI 拖进上万次重渲染。
+            if (index % reportEvery === 0) {
+              opts?.onProgress?.(index, statements.length);
+              // 浏览器预览里 sql.js 是同步执行：让出一次主线程，进度条才画得出来。
+              await new Promise((resolve) => setTimeout(resolve, 0));
+            }
             const params = wrapParams(statement.params);
             const source = statement.source;
             if (!source) {
@@ -271,6 +279,7 @@ export function createMemorySql(fs: IFileSystem): ISql {
             result.statements += 1;
           }
           db.run('COMMIT');
+          opts?.onProgress?.(statements.length, statements.length);
         } catch (error) {
           try {
             db.run('ROLLBACK');

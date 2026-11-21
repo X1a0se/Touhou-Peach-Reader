@@ -21,6 +21,11 @@ interface SchemaLike<T> {
 export interface ReadOptions {
   /** 单个实体读不出来时不是致命错误：跳过它、继续打开整库（design §9.4） */
   onWarning?: (message: string, path: string) => void;
+  /**
+   * 读包进度（Goal 31）：done / total 都是"已读 / 待读"的包内文件数。
+   * total 用 scanFilePaths 扫到的文件总数，读完后一定是满的。
+   */
+  onProgress?: (done: number, total: number) => void;
 }
 
 /**
@@ -101,6 +106,7 @@ async function readEntityDir<T>(
     const relative = relativeOf(entry.name.slice(0, -'.json'.length));
     try {
       const value: unknown = JSON.parse(await io.fs.readText(io.join(dir, relative)));
+      opts.onProgress?.(1, 0);
       return { relative, value, failed: false };
     } catch {
       return { relative, value: undefined as unknown, failed: true };
@@ -158,6 +164,17 @@ export async function readDatabaseDir(
   if (!(await io.fs.exists(manifestPath))) {
     throw new PlatformError('EIO', `不是有效的数据库目录：缺少 ${LAYOUT.manifest}`);
   }
+  // 先扫一遍包内文件，既给校验用，也给进度一个真实的分母（读完后必然满格）
+  const filePaths = await scanFilePaths(io, dir);
+  const totalFiles = Math.max(1, filePaths.size);
+  let readFiles = 0;
+  const tick: ReadOptions = {
+    ...opts,
+    onProgress: (_step, _total) => {
+      readFiles += 1;
+      opts.onProgress?.(readFiles, totalFiles);
+    },
+  };
   let manifest: RawDatabase['manifest'];
   try {
     manifest = manifestSchema.parse(JSON.parse(await io.fs.readText(manifestPath)));
@@ -178,12 +195,12 @@ export async function readDatabaseDir(
     LAYOUT.articlesDir,
     articleFileSchema,
     articleJson,
-    opts,
+    tick,
   );
   // series 只有"一实体一文件"形态（§7.2 的目录树里没有 series.json）
-  const series = await readEntityDir(io, dir, LAYOUT.seriesDir, seriesSchema, seriesJson, opts);
+  const series = await readEntityDir(io, dir, LAYOUT.seriesDir, seriesSchema, seriesJson, tick);
 
-  const filePaths = await scanFilePaths(io, dir);
+  opts.onProgress?.(totalFiles, totalFiles);
   return {
     manifest,
     authors,

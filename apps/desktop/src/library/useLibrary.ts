@@ -1,4 +1,10 @@
-import { suggestExportFileName, type DBSnapshot, type ExportSelection, type Services } from '@tpr/core';
+import {
+  type DBSnapshot,
+  type ExportSelection,
+  type ProgressUpdate,
+  type Services,
+  suggestExportFileName,
+} from '@tpr/core';
 import type { Issue } from '@tpr/schema';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -21,6 +27,8 @@ export interface LibraryState {
   status: LibraryStatus;
   snapshot: DBSnapshot | null;
   busy: boolean;
+  /** 正在进行的导入 / 导出进度（Goal 31）；空闲时为 null */
+  progress: ProgressUpdate | null;
   message: string | null;
   error: string | null;
   warnings: Issue[];
@@ -49,6 +57,7 @@ export function useLibrary(services: Services): LibraryState {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<Issue[]>([]);
+  const [progress, setProgress] = useState<ProgressUpdate | null>(null);
   const imported = useRef(false);
 
   // 启动即恢复上次打开的库：这是"重启应用后数据还在"的验收路径
@@ -79,8 +88,9 @@ export function useLibrary(services: Services): LibraryState {
       setBusy(true);
       setError(null);
       setMessage(null);
+      setProgress(null);
       try {
-        const outcome = await services.library.importBytes(bytes);
+        const outcome = await services.library.importBytes(bytes, { onProgress: setProgress });
         imported.current = true;
         setSnapshot(outcome.snapshot);
         setWarnings([...outcome.report.warnings]);
@@ -92,6 +102,7 @@ export function useLibrary(services: Services): LibraryState {
         setError(message);
         return { ok: false, error: message };
       } finally {
+        setProgress(null);
         setBusy(false);
       }
     },
@@ -104,11 +115,12 @@ export function useLibrary(services: Services): LibraryState {
       setBusy(true);
       setError(null);
       setMessage(null);
+      setProgress(null);
       let staged: string | null = null;
       try {
         // 外部路径（桌面拖入 / 文件对话框）先复制进 app data，Rust 解压只认 app data 内的路径。
         staged = await stageTprFile(path);
-        const outcome = await services.library.importZip(staged);
+        const outcome = await services.library.importZip(staged, { onProgress: setProgress });
         imported.current = true;
         setSnapshot(outcome.snapshot);
         setWarnings([...outcome.report.warnings]);
@@ -120,6 +132,7 @@ export function useLibrary(services: Services): LibraryState {
         if (staged && staged !== path) {
           await services.platform.fs.remove(staged).catch(() => undefined);
         }
+        setProgress(null);
         setBusy(false);
       }
     },
@@ -136,17 +149,20 @@ export function useLibrary(services: Services): LibraryState {
       if (!snapshot) return;
       setBusy(true);
       setError(null);
+      setProgress(null);
       try {
         if (services.platform.kind === 'tauri') {
           // 桌面端：先选目标，再让 Rust 直接把工作目录写成 .tpr；ZIP 不进 JS。
           const target = await pickTprSavePath(suggestExportFileName(snapshot.manifest.name));
           if (!target) return;
-          const result = await services.library.exportToPath(selection, target);
+          const result = await services.library.exportToPath(selection, target, {
+            onProgress: setProgress,
+          });
           setWarnings((prev) => [...prev, ...result.warnings]);
           setMessage(`已导出到 ${target}`);
         } else {
           // 浏览器预览：保留字节下载回退，只适合小库。
-          const result = await services.library.export(selection);
+          const result = await services.library.export(selection, { onProgress: setProgress });
           const saved = await downloadTprFile(result.fileName, result.bytes);
           setWarnings((prev) => [...prev, ...result.warnings]);
           setMessage(`已导出到 ${saved}`);
@@ -154,6 +170,7 @@ export function useLibrary(services: Services): LibraryState {
       } catch (cause) {
         setError(describe(cause));
       } finally {
+        setProgress(null);
         setBusy(false);
       }
     },
@@ -172,6 +189,7 @@ export function useLibrary(services: Services): LibraryState {
     status,
     snapshot,
     busy,
+    progress,
     message,
     error,
     warnings,

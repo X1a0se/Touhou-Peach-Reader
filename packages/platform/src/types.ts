@@ -50,6 +50,27 @@ export interface ZipExtractResult {
   rejected: RejectedEntry[];
 }
 
+/** 条目级进度回调：done / total 都是条目数（目录条目不计）。 */
+export type EntryProgress = (done: number, total: number) => void;
+
+export interface ZipExtractOptions {
+  limits?: Partial<ZipLimits>;
+  /** 每处理完一条就回调一次；total 为本次包的条目总数。 */
+  onProgress?: EntryProgress;
+}
+
+export interface ZipCreateOptions {
+  /** order 里的条目最后写入（manifest.json 用） */
+  order?: string[];
+  /** 每写完一个文件就回调一次；total 为待打包文件数。 */
+  onProgress?: EntryProgress;
+}
+
+export interface SqlBulkOptions {
+  /** 每执行一批语句就回调一次；total 为语句总数。 */
+  onProgress?: EntryProgress;
+}
+
 export interface ZipCreateResult {
   entries: number;
   bytes: number;
@@ -111,7 +132,11 @@ export interface ISql {
    * 平台直接从磁盘读文本/BLOB 绑定，不必让字节穿过 JS。桌面端实现还会复用
    * 预编译语句缓存，让上万条插入只剩一次 IPC 与一次提交。
    */
-  bulkWrite(path: string, statements: SqlBulkStatement[]): Promise<SqlBulkResult>;
+  bulkWrite(
+    path: string,
+    statements: SqlBulkStatement[],
+    opts?: SqlBulkOptions,
+  ): Promise<SqlBulkResult>;
 }
 
 export interface IZip {
@@ -119,19 +144,19 @@ export interface IZip {
   extractAll(
     zipPath: string,
     destDir: string,
-    opts?: { limits?: Partial<ZipLimits> },
+    opts?: ZipExtractOptions,
   ): Promise<ZipExtractResult>;
   /** 直接吃字节（浏览器/测试用） */
   extractBytes(
     bytes: Uint8Array,
     destDir: string,
-    opts?: { limits?: Partial<ZipLimits> },
+    opts?: ZipExtractOptions,
   ): Promise<ZipExtractResult>;
   /** 把目录打成 zip；order 里的条目最后写入（manifest.json 用） */
   createFromDir(
     dirPath: string,
     zipPath: string,
-    opts?: { order?: string[] },
+    opts?: ZipCreateOptions,
   ): Promise<ZipCreateResult>;
   /**
    * 把目录直接写成目标 zip（桌面端用于导出：ZIP 字节不回传 JS）。
@@ -140,7 +165,7 @@ export interface IZip {
   createFromDirTo(
     dirPath: string,
     targetPath: string,
-    opts?: { order?: string[] },
+    opts?: ZipCreateOptions,
   ): Promise<ZipCreateResult>;
 }
 

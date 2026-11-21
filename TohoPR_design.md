@@ -2354,6 +2354,46 @@ Goal 21 后续修复（导出丢失未挂接标签）：
 
 ---
 
+## Goal 31 追加记录：导入 / 合并 / 导出进度条与剩余时间预估
+
+**问题**：导入、合并、导出都是几十秒级的操作（解压上千个条目、写几万条 SQL、压缩上百张图），
+但界面只有一个"处理中…"的按钮文案。用户既不知道卡在哪一步，也不知道还要等多久。
+
+**做法**：把"阶段 + 权重"的进度模型放进 core，让 UI 与平台实现只提供粒度各异的子进度。
+
+1. `packages/core/src/progress.ts` —— 新增 `ProgressRun`：
+   - 构造时给定 `ProgressPhase[]`（`key` / `label` / `weight`），总进度按累计权重合成；
+   - 阶段内可 `set(part)` 或 `progress(done, total)`，**单调不减**（重试条目不会让进度条倒退）；
+   - ETA 用"进度速率"外推：`rate = fraction / elapsed`，`eta = (1 - fraction) / rate`，速率做 EMA 平滑
+     （`RATE_SMOOTHING = 0.3`），进度不足 3% 或耗时不足 400ms 时返回 `null`（宁可不显示，也不给假数字）；
+   - 回调 90ms 节流，`begin` / `finish` 强制推送；`finish()` 一定落到 100% 且 `eta = 0`。
+2. **平台层拿到真实的条目级进度**（这是 ETA 可信的前提）：
+   - `IZip.extractAll/extractBytes/createFromDir/createFromDirTo` 与 `ISql.bulkWrite` 增加可选 `onProgress(done, total)`；
+   - memory 实现（fflate / sql.js）在循环里逐条上报；tauri 实现用 `new Channel<T>()` 把回调送进 Rust；
+   - Rust 侧新增 `EntryProgress { done, total }`：`zip_extract_all` / `zip_create_from_dir(_to)` /
+     `sql_bulk_write` 接收 `Option<Channel<EntryProgress>>`，在 `spawn_blocking` 里按 `max(total/200, 1)`
+     （SQL 按 1%）回推，避免上万次 IPC。
+3. **core 的四条长任务接线**（`import.ts` / `export.ts` / `merge/service.ts` / `db/library.ts`）：
+   - 导入：解压 0.45 · 读取校验 0.15 · 写库 0.30 · 收尾 0.10；
+   - 导出：收集正文 0.25 · 写出图片 0.25 · 序列化 0.15 · 打包 0.35；
+   - 合并预览：解压 0.45 · 读取 0.20 · 图片指纹 0.20 · 比对 0.15；合并应用：正文 0.35 · 图片 0.25 · 保存 0.40。
+   - `readDatabaseDir` 以 `scanFilePaths` 扫到的文件数作分母逐文件上报，读完后必然满格。
+4. **UI**：
+   - `packages/ui` 新增 `ProgressBar`（`role="progressbar"` + `aria-value*`，右侧显示"62% · 预计剩余 12 秒"，
+     宽度 300ms 过渡、不确定进度时脉冲）与 `formatEta`；
+   - `useLibrary` 增加 `progress: ProgressUpdate | null`，导入 / 导出都把 `onProgress` 接到 `setProgress`；
+   - 新增 `ProgressOverlay`（右下角固定卡片，`aria-live="polite"`）挂在 `Layout`，拖入 `.tpr` 触发导入时
+     在任何页面都能看到进度；
+   - 导入页：GitHub 下载改为结构化进度（`received/total/startedAt` 外推 ETA，总大小未知时走不确定进度）；
+   - 合并页：预览与应用各一条进度条，并为浏览器预览补了隐藏 `<input type="file">` 回退（`pnpm dev:web` 才能演示）。
+5. **测试**：`packages/core/test/progress.test.ts` 覆盖阶段权重、单调性、`finish` 只推一次、样本不足不给 ETA、
+   `describeEta` 文案，以及导入 / 导出真实上报（最后一定是 100%）。
+
+**取舍**：ETA 只做速率外推，不猜"剩余条目×单条耗时"——解压与写库的吞吐差异太大，模型越简单越不容易忽长忽短；
+ETA 为 `null` 时 UI 只显示百分比，等样本够了再出现剩余时间。
+
+**验收**：`pnpm dev:web` 里导入大包、合并、导出都能看到进度条随阶段推进，并显示"预计剩余 N 秒"。
+
 ## 附：文档自检
 
 | 检查项 | 结论 |

@@ -7,6 +7,7 @@ import {
   validateDatabase,
 } from '@tpr/schema';
 import { articleMd } from './layout.js';
+import { type ProgressOptions, type ProgressPhase, ProgressRun } from '../progress.js';
 import { computeCounts, normalizeDatabase } from './normalize.js';
 import { readDatabaseDir } from './read.js';
 import { type DBSnapshot, toSnapshot } from './snapshot.js';
@@ -28,6 +29,14 @@ export interface ImportOutcome {
   db?: RawDatabase;
 }
 
+/** 导入各阶段的相对权重：解压与写库是真正的耗时大头。 */
+export const IMPORT_PHASES: readonly ProgressPhase[] = [
+  { key: 'extract', label: '正在解压数据包', weight: 0.45 },
+  { key: 'read', label: '正在读取与校验数据', weight: 0.15 },
+  { key: 'write', label: '正在写入本地数据库', weight: 0.3 },
+  { key: 'commit', label: '正在收尾', weight: 0.1 },
+];
+
 export class ImportError extends Error {
   constructor(
     message: string,
@@ -43,13 +52,20 @@ async function runImport(
   zipPath: string,
   stamp: number,
   cleanupZip: boolean,
+  opts: ProgressOptions = {},
 ): Promise<ImportOutcome> {
   const io = ioFor(platform);
   const staging = platform.paths.join(platform.paths.dataDir, DB_LAYOUT.importsDir, String(stamp));
-  const extracted = await platform.zip.extractAll(zipPath, staging);
-
+  const run = new ProgressRun('import', IMPORT_PHASES, opts.onProgress, 'extract');
   try {
-    const raw = await readDatabaseDir(io, staging);
+    const extracted = await platform.zip.extractAll(zipPath, staging, {
+      onProgress: (done, total) => run.progress(done, total),
+    });
+
+    run.begin('read');
+    const raw = await readDatabaseDir(io, staging, {
+      onProgress: (done, total) => run.progress(done, total),
+    });
     const { db: migrated, applied } = migrateDatabase(raw, raw.manifest.schemaVersion);
     // 注意：migrate 可能改形状，所以先迁移、再归一化正文、最后校验
     const { db: normalizedInput, markdown } = normalizeDatabase(migrated);
@@ -123,18 +139,22 @@ async function runImport(
     const imageSources = new Map<string, { file: string }>();
     for (const image of ready.images)
       imageSources.set(image.id, { file: io.join(staging, image.file) });
+    run.begin('write');
     const db = await writeSqliteDatabase(
       platform,
       databasePathOf(platform, staging),
       ready,
       sources,
       imageSources,
+      { onProgress: (done, total) => run.progress(done, total) },
     );
+    run.begin('commit');
     for (const entry of await platform.fs.listDir(staging)) {
       if (entry.name === 'database.sqlite') continue;
       await platform.fs.remove(entry.path, { recursive: true });
     }
     await commitWorkspace(platform, staging, ready.manifest.databaseId);
+    run.finish();
 
     return {
       snapshot: toSnapshot(ready),
@@ -154,19 +174,21 @@ async function runImport(
 export async function importDatabaseFromBytes(
   platform: Platform,
   bytes: Uint8Array,
+  opts: ProgressOptions = {},
 ): Promise<ImportOutcome> {
   const stamp = Date.now();
   const importsRoot = platform.paths.join(platform.paths.dataDir, DB_LAYOUT.importsDir);
   await platform.fs.mkdir(importsRoot);
   const zipPath = platform.paths.join(importsRoot, `${stamp}.tpr`);
   await platform.fs.writeBytes(zipPath, bytes);
-  return runImport(platform, zipPath, stamp, true);
+  return runImport(platform, zipPath, stamp, true, opts);
 }
 
 /** 路径入口：拖入/选择的是用户自己的文件，绝不删除。 */
 export async function importDatabaseFromPath(
   platform: Platform,
   zipPath: string,
+  opts: ProgressOptions = {},
 ): Promise<ImportOutcome> {
-  return runImport(platform, zipPath, Date.now(), false);
+  return runImport(platform, zipPath, Date.now(), false, opts);
 }

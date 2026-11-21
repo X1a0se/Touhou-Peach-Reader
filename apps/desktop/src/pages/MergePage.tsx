@@ -1,9 +1,10 @@
-import type { CollectionKey, Decision, MergePreview } from '@tpr/core';
-import { Button, EmptyState, Panel, SectionHeading, StatTile } from '@tpr/ui';
-import { useState } from 'react';
+import type { CollectionKey, Decision, MergePreview, ProgressUpdate } from '@tpr/core';
+import { Button, EmptyState, Panel, ProgressBar, SectionHeading, StatTile } from '@tpr/ui';
+import { useRef, useState } from 'react';
 import { useServices } from '../context.js';
 import { useLibraryContext } from '../library/LibraryProvider.js';
-import { pickTprFile, stageTprFile } from '../platform/files.js';
+import { pickTprFile, readFileBytes, stageTprFile } from '../platform/files.js';
+import { isTauri } from '../platform/index.js';
 
 const COLLECTIONS: { key: CollectionKey; label: string }[] = [
   { key: 'authors', label: '作者' },
@@ -23,19 +24,20 @@ export function MergePage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [progress, setProgress] = useState<ProgressUpdate | null>(null);
+  // 浏览器预览没有原生文件对话框：用隐藏的 <input type="file"> 兜底，
+  // 这样 dev:web 也能完整走一遍"选包 → 预览 → 合并"，进度条同样可见。
+  const fileInput = useRef<HTMLInputElement | null>(null);
 
-  const choose = async () => {
-    setError(null);
-    setMessage(null);
-    const path = await pickTprFile();
-    if (!path) return;
+  const prepareFrom = async (path: string) => {
     setBusy(true);
+    setProgress(null);
     let staged: string | null = null;
     try {
       if (preview) await services.merge.discard(preview);
       // 外部路径先复制进 app data；预览只保留解包目录，随后即可删掉暂存的 .tpr。
       staged = await stageTprFile(path);
-      const next = await services.merge.prepare(staged);
+      const next = await services.merge.prepare(staged, { onProgress: setProgress });
       setPreview(next);
       setDecisions({});
     } catch (cause) {
@@ -44,8 +46,16 @@ export function MergePage() {
       if (staged && staged !== path) {
         await services.platform.fs.remove(staged).catch(() => undefined);
       }
+      setProgress(null);
       setBusy(false);
     }
+  };
+
+  const choose = async () => {
+    setError(null);
+    setMessage(null);
+    const path = await pickTprFile();
+    if (path) await prepareFrom(path);
   };
 
   const cancel = async () => {
@@ -58,8 +68,9 @@ export function MergePage() {
     if (!preview) return;
     setBusy(true);
     setError(null);
+    setProgress(null);
     try {
-      const outcome = await services.merge.apply(preview, decisions);
+      const outcome = await services.merge.apply(preview, decisions, { onProgress: setProgress });
       await library.refresh();
       const taken = globalThis.Object.values(decisions).filter((value) => value === 'take-incoming').length;
       setMessage(
@@ -72,6 +83,7 @@ export function MergePage() {
     } catch (cause) {
       setError(describe(cause));
     } finally {
+      setProgress(null);
       setBusy(false);
     }
   };
@@ -98,9 +110,52 @@ export function MergePage() {
       ) : null}
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="primary" onClick={() => void choose()} disabled={busy}>
+        <Button
+          variant="primary"
+          onClick={() => {
+            if (isTauri()) void choose();
+            else fileInput.current?.click();
+          }}
+          disabled={busy}
+        >
           {preview ? '换一个文件' : '选择要合并的 .tpr'}
         </Button>
+        <input
+          ref={fileInput}
+          type="file"
+          accept=".tpr"
+          aria-label="选择要合并的 .tpr"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            event.target.value = '';
+            if (!file) return;
+            void (async () => {
+              setError(null);
+              setMessage(null);
+              setBusy(true);
+              setProgress(null);
+              try {
+                if (preview) await services.merge.discard(preview);
+                // 浏览器预览没有原生路径：先把 .tpr 落进 app data，再走同一套解包流程。
+                const staged = services.platform.paths.join(
+                  services.platform.paths.dataDir,
+                  'imports',
+                  `merge-input-${Date.now()}.tpr`,
+                );
+                await services.platform.fs.writeBytes(staged, await readFileBytes(file));
+                const next = await services.merge.prepare(staged, { onProgress: setProgress });
+                setPreview(next);
+                setDecisions({});
+              } catch (cause) {
+                setError(describe(cause));
+              } finally {
+                setProgress(null);
+                setBusy(false);
+              }
+            })();
+          }}
+        />
         {preview ? (
           <>
             <Button onClick={() => void apply()} disabled={busy}>
@@ -112,6 +167,17 @@ export function MergePage() {
           </>
         ) : null}
       </div>
+
+      {progress ? (
+        <Panel>
+          <ProgressBar
+            value={progress.fraction}
+            etaMs={progress.etaMs}
+            label={progress.label}
+            {...(progress.detail !== undefined ? { detail: progress.detail } : {})}
+          />
+        </Panel>
+      ) : null}
 
       {!preview ? (
         <EmptyState

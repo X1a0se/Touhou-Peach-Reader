@@ -500,6 +500,7 @@ export async function writeSqliteDatabase(
   db: RawDatabase,
   markdown: Map<string, MarkdownSource>,
   imageSources: Map<string, BlobSource> = new Map(),
+  opts: { onProgress?: (done: number, total: number) => void } = {},
 ): Promise<RawDatabase> {
   if (await platform.fs.exists(targetPath)) await platform.fs.remove(targetPath);
   try {
@@ -798,7 +799,11 @@ export async function writeSqliteDatabase(
     }
 
     statements.push(...indexes, ...trailing);
-    const written = await platform.sql.bulkWrite(targetPath, statements);
+    const written = await platform.sql.bulkWrite(
+      targetPath,
+      statements,
+      opts.onProgress ? { onProgress: opts.onProgress } : {},
+    );
     for (const image of memoryImages) {
       await platform.sql.writeBlob(targetPath, INSERT_IMAGE_WITH_DATA, image.params, image.bytes);
       written.blobCount += 1;

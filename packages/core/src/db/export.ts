@@ -3,6 +3,7 @@ import type { Counts, Issue, RawDatabase } from '@tpr/schema';
 import type { ContentStore } from './content-store.js';
 import { MANIFEST_LAST } from './layout.js';
 import { computeCounts } from './normalize.js';
+import { type ProgressOptions, type ProgressPhase, ProgressRun } from '../progress.js';
 import { readImageBlobToFile } from './sql/store.js';
 import { DB_LAYOUT, removeTree } from './workspace.js';
 import { serializeDatabase } from './write.js';
@@ -34,6 +35,14 @@ export interface ExportSummary {
 export interface ExportResult extends ExportSummary {
   bytes: Uint8Array;
 }
+
+/** 导出各阶段权重：打包（写 ZIP）通常最慢，其次是图片 BLOB 落盘。 */
+export const EXPORT_PHASES: readonly ProgressPhase[] = [
+  { key: 'content', label: '正在收集正文', weight: 0.25 },
+  { key: 'images', label: '正在写出图片', weight: 0.25 },
+  { key: 'serialize', label: '正在序列化元数据', weight: 0.15 },
+  { key: 'pack', label: '正在打包 .tpr', weight: 0.35 },
+];
 
 const skipped = (
   message: string,
@@ -191,6 +200,7 @@ interface PreparedExport {
   name: string;
   counts: Counts;
   warnings: Issue[];
+  run: ProgressRun;
 }
 
 /**
@@ -201,17 +211,20 @@ async function prepareExport(
   platform: Platform,
   source: ExportSource,
   selection: ExportSelection,
+  opts: ProgressOptions = {},
 ): Promise<PreparedExport> {
   let { db, warnings } = selectSubset(source.db, selection);
+  const run = new ProgressRun('export', EXPORT_PHASES, opts.onProgress, 'content');
 
   const markdown = new Map<string, string>();
-  for (const article of db.articles) {
+  for (const [index, article] of db.articles.entries()) {
     try {
       markdown.set(article.id, await source.contents.read(article.id));
     } catch {
       warnings.push(skipped(`正文缺失：${article.title}`, 'article', article.id));
       markdown.set(article.id, '');
     }
+    run.progress(index + 1, db.articles.length);
   }
 
   const at = stamp();
@@ -224,8 +237,10 @@ async function prepareExport(
   try {
     // 图片 BLOB 先落盘、再序列化 JSON：若某条图片元数据没有可读的 BLOB，必须把它从
     // 本次导出中剔除，否则 images.json 会引用不存在的文件，导入端报 E_IMAGE_FILE_MISSING。
+    run.begin('images');
     const keptImages: RawDatabase['images'] = [];
-    for (const image of db.images) {
+    for (const [index, image] of db.images.entries()) {
+      run.progress(index + 1, db.images.length);
       // image.file 已是包内相对路径（images/{kind}/{name}）；字节从 SQLite BLOB 直接落盘。
       const to = platform.paths.join(workDir, image.file);
       await platform.fs.mkdir(platform.paths.dirname(to));
@@ -244,12 +259,23 @@ async function prepareExport(
       };
     }
 
-    for (const file of serializeDatabase(db, markdown)) {
+    run.begin('serialize');
+    const files = serializeDatabase(db, markdown);
+    for (const [index, file] of files.entries()) {
       const path = platform.paths.join(workDir, file.path);
       await platform.fs.mkdir(platform.paths.dirname(path));
       await platform.fs.writeText(path, file.text);
+      run.progress(index + 1, files.length);
     }
-    return { dir: workDir, stamp: at, name: db.manifest.name, counts: db.manifest.counts, warnings };
+    run.begin('pack');
+    return {
+      dir: workDir,
+      stamp: at,
+      name: db.manifest.name,
+      counts: db.manifest.counts,
+      warnings,
+      run,
+    };
   } catch (error) {
     await removeTree(platform, workDir);
     throw error;
@@ -276,11 +302,16 @@ export async function exportDatabase(
   platform: Platform,
   source: ExportSource,
   selection: ExportSelection,
+  opts: ProgressOptions = {},
 ): Promise<ExportResult> {
-  const prepared = await prepareExport(platform, source, selection);
+  const prepared = await prepareExport(platform, source, selection, opts);
   const zipPath = `${prepared.dir}.tpr`;
   try {
-    await platform.zip.createFromDir(prepared.dir, zipPath, { order: [...MANIFEST_LAST] });
+    await platform.zip.createFromDir(prepared.dir, zipPath, {
+      order: [...MANIFEST_LAST],
+      onProgress: (done, total) => prepared.run.progress(done, total),
+    });
+    prepared.run.finish();
     const bytes = await platform.fs.readBytes(zipPath);
     return {
       bytes,
@@ -303,13 +334,18 @@ export async function exportDatabaseToPath(
   source: ExportSource,
   selection: ExportSelection,
   targetPath: string,
+  opts: ProgressOptions = {},
 ): Promise<ExportSummary> {
-  const prepared = await prepareExport(platform, source, selection);
+  const prepared = await prepareExport(platform, source, selection, opts);
   try {
     if (isInside(prepared.dir, targetPath, platform.kind === 'tauri')) {
       throw new Error('不能把导出文件写进本次导出的临时目录');
     }
-    await platform.zip.createFromDirTo(prepared.dir, targetPath, { order: [...MANIFEST_LAST] });
+    await platform.zip.createFromDirTo(prepared.dir, targetPath, {
+      order: [...MANIFEST_LAST],
+      onProgress: (done, total) => prepared.run.progress(done, total),
+    });
+    prepared.run.finish();
     return {
       counts: prepared.counts,
       warnings: prepared.warnings,

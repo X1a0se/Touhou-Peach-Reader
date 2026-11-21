@@ -3,9 +3,27 @@
 use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use serde::Serialize;
+use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
+
+/// 条目级进度：done / total 都是"已处理 / 总条目"数。
+///
+/// 解压与打包是导入/导出里最耗时的两段，只靠阶段权重推出来的进度会长时间卡住，
+/// 条目级进度才让剩余时间估算可信。
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EntryProgress {
+    pub done: u64,
+    pub total: u64,
+}
+
+/// 最多回推 200 次：再多条目也只是 200 次 IPC，进度条照样平滑。
+fn report_step(total: u64) -> u64 {
+    (total / 200).max(1)
+}
 
 const MAX_ENTRIES: usize = 100_000;
 const MAX_TOTAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -73,7 +91,11 @@ fn is_symlink<R: Read + ?Sized>(archive_file: &zip::read::ZipFile<'_, R>) -> boo
 }
 
 /// 解压整个包。返回 `{entries, bytes, rejected}`，永不因单条坏条目中断。
-pub fn extract_all(zip_path: &str, dest_dir: &str) -> Result<serde_json::Value, String> {
+pub fn extract_all(
+    zip_path: &str,
+    dest_dir: &str,
+    on_progress: Option<&dyn Fn(u64, u64)>,
+) -> Result<serde_json::Value, String> {
     let file = File::open(zip_path).map_err(|e| format!("ENOENT: {e}"))?;
     let mut archive = ZipArchive::new(file).map_err(|e| format!("E_ZIP: {e}"))?;
     fs::create_dir_all(dest_dir).map_err(|e| format!("EIO: {e}"))?;
@@ -83,7 +105,20 @@ pub fn extract_all(zip_path: &str, dest_dir: &str) -> Result<serde_json::Value, 
     let mut total: u64 = 0;
     let mut buffer = vec![0u8; 64 * 1024];
 
-    for i in 0..archive.len() {
+    let archive_len = archive.len();
+    let total_entries = archive_len as u64;
+    let step = report_step(total_entries);
+    let report = |done: u64| {
+        if let Some(callback) = on_progress {
+            callback(done, total_entries);
+        }
+    };
+    report(0);
+
+    for i in 0..archive_len {
+        if i as u64 % step == 0 {
+            report(i as u64);
+        }
         let mut entry = match archive.by_index(i) {
             Ok(e) => e,
             Err(err) => {
@@ -158,6 +193,8 @@ pub fn extract_all(zip_path: &str, dest_dir: &str) -> Result<serde_json::Value, 
         entries += 1;
     }
 
+    report(total_entries);
+
     Ok(serde_json::json!({
         "entries": entries,
         "bytes": total,
@@ -170,6 +207,7 @@ pub fn create_from_dir(
     dir_path: &str,
     zip_path: &str,
     order: Vec<String>,
+    on_progress: Option<&dyn Fn(u64, u64)>,
 ) -> Result<serde_json::Value, String> {
     let root = Path::new(dir_path);
     let mut files: Vec<(String, PathBuf)> = Vec::new();
@@ -199,15 +237,29 @@ pub fn create_from_dir(
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     let mut bytes: u64 = 0;
 
-    for (name, path) in &files {
+    let total_files = files.len() as u64;
+    let step = report_step(total_files);
+    let report = |done: u64| {
+        if let Some(callback) = on_progress {
+            callback(done, total_files);
+        }
+    };
+    report(0);
+
+    for (index, (name, path)) in files.iter().enumerate() {
         writer
             .start_file(name.as_str(), options)
             .map_err(|e| format!("E_ZIP: {e}"))?;
         let mut input = File::open(path).map_err(|e| format!("EIO: {e}"))?;
         let copied = std::io::copy(&mut input, &mut writer).map_err(|e| format!("EIO: {e}"))?;
         bytes += copied;
+        let done = index as u64 + 1;
+        if done % step == 0 {
+            report(done);
+        }
     }
     writer.finish().map_err(|e| format!("E_ZIP: {e}"))?;
+    report(total_files);
 
     Ok(serde_json::json!({"entries": files.len(), "bytes": bytes}))
 }
@@ -218,6 +270,7 @@ fn create_from_dir_to(
     dir_path: &str,
     target_path: &str,
     order: Vec<String>,
+    on_progress: Option<&dyn Fn(u64, u64)>,
 ) -> Result<serde_json::Value, String> {
     let target = Path::new(target_path);
     let parent = target
@@ -228,7 +281,7 @@ fn create_from_dir_to(
         .ok_or_else(|| "EINVAL: 目标路径没有文件名".to_string())?;
     let partial = parent.join(format!("{}.partial", file_name.to_string_lossy()));
 
-    let result = create_from_dir(dir_path, &partial.to_string_lossy(), order);
+    let result = create_from_dir(dir_path, &partial.to_string_lossy(), order, on_progress);
     match result {
         Ok(value) => {
             if let Err(error) = fs::rename(&partial, target) {
@@ -281,12 +334,16 @@ pub async fn zip_extract_all(
     app: AppHandle,
     zip_path: String,
     dest_dir: String,
+    on_progress: Channel<EntryProgress>,
 ) -> Result<serde_json::Value, String> {
     let root = app_data(&app)?;
     let zip = ensure_within(&root, &zip_path, false)?;
     let dest = ensure_within(&root, &dest_dir, true)?;
     tauri::async_runtime::spawn_blocking(move || {
-        extract_all(&zip.to_string_lossy(), &dest.to_string_lossy())
+        let report = move |done: u64, total: u64| {
+            let _ = on_progress.send(EntryProgress { done, total });
+        };
+        extract_all(&zip.to_string_lossy(), &dest.to_string_lossy(), Some(&report))
     })
     .await
     .map_err(|e| format!("EIO: {e}"))?
@@ -298,15 +355,20 @@ pub async fn zip_create_from_dir(
     dir_path: String,
     zip_path: String,
     order: Option<Vec<String>>,
+    on_progress: Channel<EntryProgress>,
 ) -> Result<serde_json::Value, String> {
     let root = app_data(&app)?;
     let dir = ensure_within(&root, &dir_path, false)?;
     let zip = ensure_within(&root, &zip_path, true)?;
     tauri::async_runtime::spawn_blocking(move || {
+        let report = move |done: u64, total: u64| {
+            let _ = on_progress.send(EntryProgress { done, total });
+        };
         create_from_dir(
             &dir.to_string_lossy(),
             &zip.to_string_lossy(),
             order.unwrap_or_else(|| vec!["manifest.json".to_string()]),
+            Some(&report),
         )
     })
     .await
@@ -320,6 +382,7 @@ pub async fn zip_create_from_dir_to(
     dir_path: String,
     target_path: String,
     order: Option<Vec<String>>,
+    on_progress: Channel<EntryProgress>,
 ) -> Result<serde_json::Value, String> {
     let root = app_data(&app)?;
     let dir = ensure_within(&root, &dir_path, false)?;
@@ -328,10 +391,14 @@ pub async fn zip_create_from_dir_to(
         return Err("EINVAL: 导出目标不能位于打包源目录内".to_string());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        let report = move |done: u64, total: u64| {
+            let _ = on_progress.send(EntryProgress { done, total });
+        };
         create_from_dir_to(
             &dir.to_string_lossy(),
             &target.to_string_lossy(),
             order.unwrap_or_else(|| vec!["manifest.json".to_string()]),
+            Some(&report),
         )
     })
     .await
@@ -373,6 +440,7 @@ mod tests {
             &src.to_string_lossy(),
             &target.to_string_lossy(),
             vec!["manifest.json".to_string()],
+            None,
         )
         .unwrap();
         assert_eq!(result["entries"].as_u64(), Some(2));
@@ -403,6 +471,7 @@ mod tests {
             &src.to_string_lossy(),
             &target.to_string_lossy(),
             vec!["manifest.json".to_string()],
+            None,
         );
         assert!(result.is_err());
         assert!(target.is_dir());
